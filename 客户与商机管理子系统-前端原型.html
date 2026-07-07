@@ -1,0 +1,628 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>客户与商机管理子系统 · 前端高保真原型</title>
+<style>
+  /* ============ Design Tokens ============ */
+  :root{
+    --ink-900:#0E1A2B;        /* 侧栏底色 墨蓝(非纯黑) */
+    --ink-850:#13243A;
+    --ink-800:#1A3050;
+    --ink-700:#26456F;
+    --ink-line:rgba(255,255,255,.08);
+    --canvas:#F5F7FA;         /* 画布 暖浅灰 */
+    --surface:#FFFFFF;
+    --surface-2:#FBFCFD;
+    --border:#E7EAF0;
+    --border-strong:#D6DBE3;
+    --text-1:#1B2330;
+    --text-2:#5B6573;
+    --text-3:#939DAB;
+    --text-onink:#EAF0F8;
+    --text-onink-2:#9FB0C6;
+    --brand:#1F5FD6;
+    --brand-600:#1A50B5;
+    --brand-050:#EEF4FE;
+    --brand-100:#DBE8FD;
+    --success:#1F9D6B;
+    --success-bg:#E6F6EF;
+    --warning:#C9871A;
+    --warning-bg:#FBEED6;
+    --danger:#D6493F;
+    --danger-bg:#FBEAE8;
+    --risk:#C0392B;
+    --info:#6B7686;
+    --info-bg:#EEF1F5;
+    --radius:12px;
+    --radius-sm:9px;
+    --radius-xs:7px;
+    --shadow-sm:0 1px 2px rgba(16,24,40,.05), 0 1px 3px rgba(16,24,40,.05);
+    --shadow-md:0 6px 22px rgba(16,24,40,.09);
+    --shadow-lg:0 18px 48px rgba(16,24,40,.16);
+    --font:"PingFang SC","Microsoft YaHei",-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+    --ease:cubic-bezier(.22,.61,.36,1);
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{
+    font-family:var(--font);
+    background:var(--canvas);
+    color:var(--text-1);
+    font-size:14px;
+    line-height:1.5;
+    -webkit-font-smoothing:antialiased;
+    font-feature-settings:"tnum" 1;
+  }
+  ::selection{background:var(--brand-100);color:var(--brand-600)}
+  button{font-family:inherit;cursor:pointer;border:none;background:none}
+  :focus-visible{outline:2.5px solid var(--brand);outline-offset:2px;border-radius:6px}
+
+  /* ============ App Shell ============ */
+  .app{display:grid;grid-template-columns:248px 1fr;height:100vh;overflow:hidden}
+  /* Sidebar */
+  .side{background:linear-gradient(180deg,var(--ink-900),var(--ink-850));color:var(--text-onink);display:flex;flex-direction:column;position:relative}
+  .side::before{content:"";position:absolute;inset:0 0 auto 0;height:3px;background:linear-gradient(90deg,var(--brand),#3FA9F5)}
+  .brand{display:flex;align-items:center;gap:11px;padding:20px 22px 18px}
+  .brand .logo{width:34px;height:34px;border-radius:9px;background:linear-gradient(135deg,var(--brand),#3FA9F5);display:grid;place-items:center;box-shadow:0 4px 14px rgba(31,95,214,.45)}
+  .brand .logo svg{width:19px;height:19px}
+  .brand b{font-size:15px;font-weight:600;letter-spacing:.3px}
+  .brand small{display:block;font-size:11px;color:var(--text-onink-2);font-weight:400;letter-spacing:2px;margin-top:1px}
+  .nav{flex:1;overflow-y:auto;padding:8px 12px}
+  .nav::-webkit-scrollbar{width:6px}.nav::-webkit-scrollbar-thumb{background:var(--ink-700);border-radius:6px}
+  .grp{font-size:11px;color:var(--text-onink-2);letter-spacing:1.5px;padding:16px 12px 7px}
+  .nav a{display:flex;align-items:center;gap:11px;padding:9px 12px;border-radius:9px;color:var(--text-onink-2);font-size:13.5px;text-decoration:none;position:relative;transition:background .18s var(--ease),color .18s var(--ease);margin-bottom:2px}
+  .nav a svg{width:17px;height:17px;flex:none;opacity:.85}
+  .nav a:hover{background:var(--ink-800);color:var(--text-onink)}
+  .nav a.active{background:var(--brand-600);color:#fff;box-shadow:0 6px 16px rgba(31,95,214,.35)}
+  .nav a.active svg{opacity:1}
+  .nav a .dot{margin-left:auto;width:6px;height:6px;border-radius:50%;background:var(--warning)}
+  .me{display:flex;align-items:center;gap:10px;padding:13px 18px;border-top:1px solid var(--ink-line);margin-top:6px}
+  .me .av{width:32px;height:32px;border-radius:50%;background:linear-gradient(135deg,#3FA9F5,#1F5FD6);display:grid;place-items:center;font-size:13px;color:#fff;font-weight:600}
+  .me div{line-height:1.25}
+  .me b{font-size:13px;color:var(--text-onink);font-weight:600}
+  .me span{font-size:11px;color:var(--text-onink-2)}
+  .me .exit{margin-left:auto;color:var(--text-onink-2);font-size:12px}
+
+  /* Main */
+  .main{display:flex;flex-direction:column;overflow:hidden}
+  .top{height:60px;background:var(--surface);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:18px;padding:0 26px;flex:none}
+  .crumb{font-size:13px;color:var(--text-3)}
+  .crumb b{color:var(--text-1);font-weight:600}
+  .search{flex:1;max-width:420px;margin-left:8px;position:relative}
+  .search input{width:100%;height:38px;border:1px solid var(--border);border-radius:10px;background:var(--surface-2);padding:0 14px 0 38px;font-size:13px;color:var(--text-1);transition:border-color .18s,box-shadow .18s}
+  .search input:focus{border-color:var(--brand);box-shadow:0 0 0 3px var(--brand-050);outline:none}
+  .search svg{position:absolute;left:12px;top:10px;width:17px;height:17px;color:var(--text-3)}
+  .top .spacer{flex:1}
+  .iconbtn{width:38px;height:38px;border-radius:10px;display:grid;place-items:center;color:var(--text-2);position:relative;transition:background .18s}
+  .iconbtn:hover{background:var(--canvas)}
+  .iconbtn svg{width:19px;height:19px}
+  .iconbtn .badge{position:absolute;top:7px;right:8px;width:7px;height:7px;border-radius:50%;background:var(--danger);border:2px solid var(--surface)}
+  .portalbtn{display:flex;align-items:center;gap:7px;height:38px;padding:0 15px;border:1px solid var(--border-strong);border-radius:10px;color:var(--brand-600);font-size:13px;font-weight:600;background:var(--brand-050);transition:.18s var(--ease)}
+  .portalbtn:hover{background:var(--brand-100);transform:translateY(-1px)}
+  .portalbtn svg{width:16px;height:16px}
+  .av2{width:36px;height:36px;border-radius:50%;background:linear-gradient(135deg,#3FA9F5,#1F5FD6);display:grid;place-items:center;color:#fff;font-weight:600;font-size:13px}
+
+  .view{overflow-y:auto;padding:26px;flex:1}
+  .view::-webkit-scrollbar{width:9px}.view::-webkit-scrollbar-thumb{background:#D6DBE3;border-radius:8px;border:2px solid var(--canvas)}
+
+  /* ============ Generic UI ============ */
+  .ph{display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:18px;gap:16px;flex-wrap:wrap}
+  .ph h1{font-size:21px;font-weight:650;letter-spacing:.2px}
+  .ph p{font-size:12.5px;color:var(--text-3);margin-top:3px}
+  .ph .acts{display:flex;gap:10px}
+  .btn{height:38px;padding:0 16px;border-radius:10px;font-size:13.5px;font-weight:600;display:inline-flex;align-items:center;gap:7px;transition:.18s var(--ease);white-space:nowrap}
+  .btn svg{width:16px;height:16px}
+  .btn-p{background:var(--brand);color:#fff;box-shadow:0 4px 14px rgba(31,95,214,.32)}
+  .btn-p:hover{background:var(--brand-600);transform:translateY(-1px)}
+  .btn-s{background:var(--surface);color:var(--text-2);border:1px solid var(--border-strong)}
+  .btn-s:hover{background:var(--canvas);border-color:var(--text-3)}
+  .btn-g{background:var(--surface-2);color:var(--text-2);border:1px solid var(--border)}
+
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow-sm)}
+  .card-pad{padding:18px 20px}
+  .card-h{display:flex;align-items:center;justify-content:space-between;padding:15px 20px;border-bottom:1px solid var(--border)}
+  .card-h h3{font-size:15px;font-weight:600}
+
+  /* chips / filters */
+  .chips{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
+  .chip{height:32px;padding:0 14px;border-radius:20px;background:var(--surface);border:1px solid var(--border);font-size:12.5px;color:var(--text-2);transition:.16s var(--ease)}
+  .chip:hover{border-color:var(--brand);color:var(--brand-600)}
+  .chip.on{background:var(--brand);color:#fff;border-color:var(--brand)}
+  .filterbar{display:flex;gap:10px;flex-wrap:wrap;align-items:center;padding:14px 18px;margin-bottom:16px}
+  .field{position:relative}
+  .field select,.field input{height:36px;border:1px solid var(--border);border-radius:9px;background:var(--surface-2);padding:0 32px 0 12px;font-size:13px;color:var(--text-1);font-family:inherit}
+  .field svg{position:absolute;right:10px;top:9px;width:16px;height:16px;color:var(--text-3);pointer-events:none}
+
+  /* table */
+  .tbl-wrap{overflow:hidden;border-radius:var(--radius);border:1px solid var(--border);background:var(--surface)}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  thead th{text-align:left;padding:12px 16px;background:var(--surface-2);color:var(--text-2);font-weight:600;font-size:12px;border-bottom:1px solid var(--border);white-space:nowrap}
+  tbody td{padding:13px 16px;border-bottom:1px solid var(--border);color:var(--text-1);vertical-align:middle}
+  tbody tr{transition:background .14s}
+  tbody tr:hover{background:var(--brand-050)}
+  tbody tr:last-child td{border-bottom:none}
+  .mono{font-variant-numeric:tabular-nums;letter-spacing:.3px}
+  .muted{color:var(--text-3)}
+
+  /* badges */
+  .pill{display:inline-flex;align-items:center;gap:6px;height:24px;padding:0 10px;border-radius:7px;font-size:12px;font-weight:600;white-space:nowrap}
+  .pill .d{width:6px;height:6px;border-radius:50%}
+  .p-success{background:var(--success-bg);color:var(--success)} .p-success .d{background:var(--success)}
+  .p-warning{background:var(--warning-bg);color:var(--warning)} .p-warning .d{background:var(--warning)}
+  .p-danger{background:var(--danger-bg);color:var(--danger)} .p-danger .d{background:var(--danger)}
+  .p-info{background:var(--info-bg);color:var(--info)} .p-info .d{background:var(--info)}
+  .p-brand{background:var(--brand-050);color:var(--brand-600)} .p-brand .d{background:var(--brand)}
+  .credit{display:inline-grid;place-items:center;width:22px;height:22px;border-radius:6px;font-size:12px;font-weight:700}
+  .cA{background:var(--success-bg);color:var(--success)} .cB{background:var(--brand-050);color:var(--brand-600)}
+  .cC{background:var(--warning-bg);color:var(--warning)} .cD{background:var(--danger-bg);color:var(--danger)}
+
+  .row-acts{display:flex;gap:6px;justify-content:flex-end}
+  .link{color:var(--brand-600);font-weight:600;text-decoration:none}
+  .link:hover{text-decoration:underline}
+  .avatar-sm{width:28px;height:28px;border-radius:50%;background:linear-gradient(135deg,#5BA8F0,#1F5FD6);color:#fff;display:grid;place-items:center;font-size:12px;font-weight:600;flex:none}
+
+  /* detail hero */
+  .hero{display:flex;align-items:center;gap:18px;padding:20px 22px;border-radius:var(--radius);background:var(--surface);border:1px solid var(--border);box-shadow:var(--shadow-sm);margin-bottom:18px}
+  .hero .ava{width:54px;height:54px;border-radius:14px;background:linear-gradient(135deg,#3FA9F5,#1F5FD6);display:grid;place-items:center;color:#fff;font-size:22px;font-weight:700;flex:none}
+  .hero .meta h2{font-size:19px;font-weight:650;display:flex;align-items:center;gap:10px}
+  .hero .meta .sub{color:var(--text-3);font-size:12.5px;margin-top:4px;display:flex;gap:14px;flex-wrap:wrap}
+  .hero .acts{margin-left:auto;display:flex;gap:9px}
+  .risk-banner{display:flex;align-items:center;gap:10px;padding:11px 16px;border-radius:10px;background:var(--danger-bg);color:var(--risk);font-size:13px;font-weight:600;margin-bottom:16px}
+
+  .tabs{display:flex;gap:4px;border-bottom:1px solid var(--border);margin-bottom:18px;background:var(--surface);padding:0 8px;border-radius:var(--radius) var(--radius) 0 0}
+  .tab{padding:13px 16px;font-size:13.5px;color:var(--text-2);font-weight:500;border-bottom:2.5px solid transparent;transition:.16s var(--ease)}
+  .tab:hover{color:var(--text-1)}
+  .tab.on{color:var(--brand-600);border-bottom-color:var(--brand);font-weight:600}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .kv{display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px dashed var(--border)}
+  .kv:last-child{border-bottom:none}
+  .kv .k{color:var(--text-3);font-size:12.5px}
+  .kv .v{font-weight:600;font-size:13px;text-align:right}
+
+  /* kanban */
+  .board{display:grid;grid-template-columns:repeat(5,1fr);gap:14px;align-items:start}
+  .col{background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius);padding:12px;min-height:200px}
+  .col-h{display:flex;align-items:center;justify-content:space-between;margin-bottom:11px;padding:0 2px}
+  .col-h b{font-size:13px;font-weight:650}
+  .col-h .n{font-size:11px;color:var(--text-3);background:var(--surface);border:1px solid var(--border);border-radius:20px;padding:1px 8px}
+  .kcard{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:10px;box-shadow:var(--shadow-sm);transition:.18s var(--ease);cursor:grab}
+  .kcard:hover{box-shadow:var(--shadow-md);transform:translateY(-2px);border-color:var(--brand-100)}
+  .kcard h4{font-size:13.5px;font-weight:600;margin-bottom:8px}
+  .kcard .amt{font-size:15px;font-weight:700;color:var(--brand-600);margin-bottom:8px;font-variant-numeric:tabular-nums}
+  .kcard .ft{display:flex;align-items:center;justify-content:space-between;font-size:11.5px;color:var(--text-3)}
+  .kcard .ft .o{display:flex;align-items:center;gap:6px}
+
+  /* quotation */
+  .q-grid{display:grid;grid-template-columns:1.55fr 1fr;gap:18px;align-items:start}
+  .lineitem{width:100%;border-collapse:collapse;font-size:12.5px}
+  .lineitem th{text-align:left;padding:9px 10px;background:var(--surface-2);color:var(--text-2);font-weight:600;border-bottom:1px solid var(--border)}
+  .lineitem td{padding:9px 10px;border-bottom:1px solid var(--border)}
+  .lineitem input{border:1px solid var(--border);border-radius:6px;padding:5px 8px;width:100%;font-family:inherit;font-size:12.5px}
+  .stepper{display:flex;flex-direction:column;gap:0}
+  .step{display:flex;gap:12px;padding-bottom:18px;position:relative}
+  .step:last-child{padding-bottom:0}
+  .step::before{content:"";position:absolute;left:13px;top:26px;bottom:-2px;width:2px;background:var(--border)}
+  .step:last-child::before{display:none}
+  .step .b{width:28px;height:28px;border-radius:50%;background:var(--surface);border:2px solid var(--border);display:grid;place-items:center;font-size:12px;font-weight:700;color:var(--text-3);flex:none;z-index:1}
+  .step.ok .b{background:var(--success);border-color:var(--success);color:#fff}
+  .step.cur .b{background:var(--brand);border-color:var(--brand);color:#fff;box-shadow:0 0 0 4px var(--brand-050)}
+  .step .t b{font-size:13px;font-weight:600}
+  .step .t span{display:block;font-size:12px;color:var(--text-3);margin-top:2px}
+
+  /* ============ Portal (full screen) ============ */
+  .portal{position:fixed;inset:0;background:radial-gradient(120% 120% at 80% -10%,#1F5FD6 0%,#0E1A2B 55%);display:none;align-items:center;justify-content:center;z-index:50;padding:24px}
+  .portal.show{display:flex;animation:fade .3s var(--ease)}
+  @keyframes fade{from{opacity:0}to{opacity:1}}
+  .pwrap{width:100%;max-width:920px;display:grid;grid-template-columns:1.1fr .9fr;background:var(--surface);border-radius:20px;overflow:hidden;box-shadow:var(--shadow-lg);min-height:520px}
+  .pleft{background:linear-gradient(160deg,#15335F,#0E1A2B);color:#fff;padding:42px 40px;display:flex;flex-direction:column;justify-content:space-between;position:relative;overflow:hidden}
+  .pleft::after{content:"";position:absolute;right:-60px;bottom:-60px;width:240px;height:240px;border-radius:50%;background:radial-gradient(circle,rgba(63,169,245,.35),transparent 70%)}
+  .pleft .lg{display:flex;align-items:center;gap:11px;font-size:17px;font-weight:650;position:relative;z-index:1}
+  .pleft .lg .logo{width:36px;height:36px;border-radius:10px;background:linear-gradient(135deg,var(--brand),#3FA9F5);display:grid;place-items:center}
+  .pleft h2{font-size:27px;font-weight:680;line-height:1.4;position:relative;z-index:1;margin-top:40px}
+  .pleft p{color:#AEC2DC;font-size:13.5px;margin-top:14px;line-height:1.7;position:relative;z-index:1;max-width:340px}
+  .pleft .ft{color:#7E93B0;font-size:11.5px;position:relative;z-index:1}
+  .pright{padding:46px 42px;display:flex;flex-direction:column;justify-content:center}
+  .pright h3{font-size:20px;font-weight:650;margin-bottom:4px}
+  .pright .desc{color:var(--text-3);font-size:12.5px;margin-bottom:22px}
+  .fld{margin-bottom:15px}
+  .fld label{display:block;font-size:12.5px;font-weight:600;color:var(--text-2);margin-bottom:7px}
+  .fld input{width:100%;height:44px;border:1px solid var(--border-strong);border-radius:11px;padding:0 14px;font-size:14px;font-family:inherit;transition:.18s}
+  .fld input:focus{border-color:var(--brand);box-shadow:0 0 0 3px var(--brand-050);outline:none}
+  .pwbar{height:5px;border-radius:5px;background:var(--border);margin-top:8px;overflow:hidden}
+  .pwbar i{display:block;height:100%;width:0;background:var(--danger);transition:width .25s,background .25s}
+  .pwtip{font-size:11.5px;color:var(--text-3);margin-top:6px}
+  .cap{display:flex;gap:10px}
+  .cap input{flex:1}
+  .cap button{height:44px;padding:0 14px;border:1px solid var(--border-strong);border-radius:11px;background:var(--surface-2);color:var(--brand-600);font-weight:600;font-size:13px}
+  .pback{position:absolute;top:22px;right:26px;color:#AEC2DC;font-size:13px;display:flex;align-items:center;gap:6px;z-index:2}
+  .pback:hover{color:#fff}
+  .lockmsg{display:none;align-items:center;gap:8px;background:var(--danger-bg);color:var(--danger);font-size:12.5px;font-weight:600;padding:10px 13px;border-radius:10px;margin-bottom:14px}
+  .lockmsg.show{display:flex}
+
+  .hidden{display:none!important}
+  @media(max-width:1100px){.board{grid-template-columns:repeat(3,1fr)}.q-grid{grid-template-columns:1fr}.pwrap{grid-template-columns:1fr}.pleft{display:none}}
+  @media(max-width:760px){.app{grid-template-columns:0 1fr}.side{position:fixed;transform:translateX(-100%)}.board{grid-template-columns:1fr 1fr}.grid2{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+
+<!-- ================= APP SHELL ================= -->
+<div class="app" id="app">
+  <!-- Sidebar -->
+  <aside class="side">
+    <div class="brand">
+      <span class="logo">
+        <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12l9-8 9 8"/><path d="M5 10v10h14V10"/><path d="M9 20v-6h6v6"/></svg>
+      </span>
+      <div><b>商机中枢</b><small>CUSTOMER · OPP</small></div>
+    </div>
+    <nav class="nav" id="nav">
+      <div class="grp">客户管理</div>
+      <a class="active" data-view="customers"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="8" r="3.2"/><path d="M3.5 20a5.5 5.5 0 0 1 11 0"/><path d="M16 6a3 3 0 0 1 0 6"/><path d="M18 20a5 5 0 0 0-3-4.6"/></svg>客户列表</a>
+      <a data-view="credit"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7z"/><path d="M9 12l2 2 4-4"/></svg>信用等级</a>
+      <div class="grp">商机管理</div>
+      <a data-view="board"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="5" height="16" rx="1"/><rect x="10" y="4" width="5" height="11" rx="1"/><rect x="17" y="4" width="5" height="14" rx="1"/></svg>商机看板</a>
+      <a data-view="customers"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h10"/></svg>商机列表</a>
+      <div class="grp">交易管理</div>
+      <a data-view="quotation"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 3h9l4 4v14H6z"/><path d="M14 3v5h5"/><path d="M9 13h7M9 17h7"/></svg>报价管理</a>
+      <a data-view="bid"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 5h16v11H4z"/><path d="M8 20h8M12 16v4"/></svg>投标管理</a>
+      <div class="grp">客户门户</div>
+      <a data-view="portal-admin"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="3.2"/><path d="M5 20a7 7 0 0 1 14 0"/></svg>账号开通</a>
+      <a data-view="portal-admin"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M7 3h10v18H7z"/><path d="M10 8h4M10 12h4"/></svg>备案审核<span class="dot"></span></a>
+      <a data-view="portal-admin"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-4-7.5"/><path d="M21 4v5h-5"/></svg>反馈评价</a>
+      <div class="grp">通用</div>
+      <a data-view="approval"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 5h16v14H4z"/><path d="M8 12l3 3 5-6"/></svg>审批中心<span class="dot"></span></a>
+      <a data-view="customers"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15l-5-5L5 21"/><circle cx="9" cy="9" r="3"/></svg>附件库</a>
+      <a data-view="customers"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/></svg>枚举管理</a>
+    </nav>
+    <div class="me">
+      <span class="av">林</span>
+      <div><b>林晓</b><span>销售总监</span></div>
+      <span class="exit">退出</span>
+    </div>
+  </aside>
+
+  <!-- Main -->
+  <div class="main">
+    <header class="top">
+      <div class="crumb" id="crumb">客户管理 / <b>客户列表</b></div>
+      <div class="search">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>
+        <input placeholder="搜索客户、商机、报价单…" />
+      </div>
+      <div class="spacer"></div>
+      <button class="iconbtn" title="通知"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg><span class="badge"></span></button>
+      <button class="portalbtn" id="toPortal"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="3.2"/><path d="M5 20a7 7 0 0 1 14 0"/></svg>预览客户门户</button>
+      <span class="av2">林</span>
+    </header>
+
+    <main class="view" id="view">
+
+      <!-- ===== View: Customers ===== -->
+      <section data-pane="customers">
+        <div class="ph">
+          <div><h1>客户列表</h1><p>统一管理客户主数据 · 支持查重、合并与信用追踪</p></div>
+          <div class="acts"><button class="btn btn-s"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12M7 10l5 5 5-5"/><path d="M5 21h14"/></svg>导出</button><button class="btn btn-p"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 5v14M5 12h14"/></svg>新增客户</button></div>
+        </div>
+        <div class="chips">
+          <button class="chip on">全部</button><button class="chip">重点客户</button><button class="chip">新客户</button><button class="chip">高价值</button><button class="chip">待跟进</button>
+        </div>
+        <div class="filterbar card">
+          <div class="field"><select><option>客户类型</option><option>业主</option><option>政府</option><option>事业单位</option></select></div>
+          <div class="field"><select><option>所属行业</option><option>金融</option><option>政府</option><option>能源</option></select></div>
+          <div class="field"><select><option>信用等级</option><option>A</option><option>B</option><option>C</option><option>D</option></select></div>
+          <div class="field"><select><option>客户状态</option><option>潜在</option><option>在跟</option><option>成交</option></select></div>
+          <div class="field"><input placeholder="客户名称 / 信用代码" style="width:200px"/></div>
+          <button class="btn btn-p" style="height:36px;padding:0 14px">查询</button>
+          <button class="btn btn-g" style="height:36px;padding:0 14px">重置</button>
+        </div>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>客户编号</th><th>客户名称</th><th>类型</th><th>行业</th><th>信用</th><th>联系人(脱敏)</th><th>状态</th><th>最近跟进</th><th></th></tr></thead>
+            <tbody>
+              <tr><td class="mono muted">KH20260701</td><td><b>某商业银行股份</b></td><td>业主</td><td>金融</td><td><span class="credit cA">A</span></td><td class="mono">138****8021</td><td><span class="pill p-success"><span class="d"></span>成交</span></td><td class="muted">06-30</td><td class="row-acts"><a class="link">详情</a></td></tr>
+              <tr><td class="mono muted">KH20260702</td><td><b>某政务云平台</b></td><td>政府</td><td>政府</td><td><span class="credit cB">B</span></td><td class="mono">139****3356</td><td><span class="pill p-brand"><span class="d"></span>在跟</span></td><td class="muted">07-01</td><td class="row-acts"><a class="link">详情</a></td></tr>
+              <tr><td class="mono muted">KH20260705</td><td><b>某能源集团</b></td><td>业主</td><td>能源</td><td><span class="credit cD">D</span></td><td class="mono">137****9024</td><td><span class="pill p-warning"><span class="d"></span>潜在</span></td><td class="muted">06-28</td><td class="row-acts"><a class="link">详情</a></td></tr>
+              <tr><td class="mono muted">KH20260708</td><td><b>某三甲医院</b></td><td>事业单位</td><td>医疗</td><td><span class="credit cA">A</span></td><td class="mono">135****1180</td><td><span class="pill p-brand"><span class="d"></span>在跟</span></td><td class="muted">07-02</td><td class="row-acts"><a class="link">详情</a></td></tr>
+              <tr><td class="mono muted">KH20260711</td><td><b>某高校信息中心</b></td><td>事业单位</td><td>教育</td><td><span class="credit cC">C</span></td><td class="mono">133****4471</td><td><span class="pill p-danger"><span class="d"></span>流失</span></td><td class="muted">06-20</td><td class="row-acts"><a class="link">详情</a></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- ===== View: Customer Detail ===== -->
+      <section data-pane="detail" class="hidden">
+        <div class="ph"><div><h1>客户详情 · 某能源集团</h1><p>KH20260705 · 统一信用代码 91110000********</p></div>
+          <div class="acts"><button class="btn btn-s">查重</button><button class="btn btn-s">合并</button><button class="btn btn-s">作废</button><button class="btn btn-p">编辑</button></div>
+        </div>
+        <div class="risk-banner"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:18px;height:18px"><path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9 2 18a2 2 0 0 0 1.7 3h16.6a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg> D 级客户 · 强制风险预警，限制特殊合同条款</div>
+        <div class="hero">
+          <span class="ava">能</span>
+          <div class="meta"><h2>某能源集团 <span class="pill p-info"><span class="d"></span>业主</span> <span class="pill p-warning"><span class="d"></span>潜在</span></h2>
+            <div class="sub"><span>行业：能源</span><span>规模：大型</span><span>信用：<span class="credit cD">D</span> D 级</span><span>创建：2026-07-05</span></div>
+          </div>
+          <div class="acts"><button class="btn btn-s">+ 商机</button><button class="btn btn-p">信用调整</button></div>
+        </div>
+        <div class="tabs">
+          <button class="tab on">基本信息</button><button class="tab">干系人</button><button class="tab">商机历史</button><button class="tab">项目历史</button><button class="tab">沟通记录</button><button class="tab">变更日志</button>
+        </div>
+        <div class="grid2">
+          <div class="card card-pad">
+            <h3 style="font-size:14px;margin-bottom:12px;font-weight:600">工商与联系</h3>
+            <div class="kv"><span class="k">统一社会信用代码</span><span class="v mono">91110000********</span></div>
+            <div class="kv"><span class="k">注册地址</span><span class="v">北京市朝阳区xx路 1 号</span></div>
+            <div class="kv"><span class="k">办公地址</span><span class="v">北京市朝阳区xx大厦 18F</span></div>
+            <div class="kv"><span class="k">联系人电话(脱敏)</span><span class="v mono">137****9024</span></div>
+          </div>
+          <div class="card card-pad">
+            <h3 style="font-size:14px;margin-bottom:12px;font-weight:600">财务信息 <span class="pill p-info" style="margin-left:6px"><span class="d"></span>需权限</span></h3>
+            <div class="kv"><span class="k">收款账户(脱敏)</span><span class="v mono">6217****1234</span></div>
+            <div class="kv"><span class="k">开户名</span><span class="v">某能源集团</span></div>
+            <div class="kv"><span class="k">开票抬头</span><span class="v">某能源集团有限</span></div>
+            <div class="kv"><span class="k">税号(脱敏)</span><span class="v mono">9111********001X</span></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ===== View: Board ===== -->
+      <section data-pane="board" class="hidden">
+        <div class="ph"><div><h1>商机看板</h1><p>拖拽卡片调整阶段 · 关键阶段推进触发销售总监审批</p></div>
+          <div class="acts"><button class="btn btn-s"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h18M12 3v18"/></svg>筛选</button><button class="btn btn-p"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 5v14M5 12h14"/></svg>新增商机</button></div>
+        </div>
+        <div class="board">
+          <div class="col"><div class="col-h"><b>初步接触</b><span class="n">2</span></div>
+            <div class="kcard"><h4>政务云等保测评</h4><div class="amt">¥86.0万</div><div class="ft"><span class="o"><span class="avatar-sm">王</span>王磊</span><span>07-05 跟进</span></div></div>
+            <div class="kcard"><h4>高校渗透测试</h4><div class="amt">¥32.5万</div><div class="ft"><span class="o"><span class="avatar-sm">赵</span>赵敏</span><span>07-08 跟进</span></div></div>
+          </div>
+          <div class="col"><div class="col-h"><b>需求沟通</b><span class="n">2</span></div>
+            <div class="kcard"><h4>银行风险评估</h4><div class="amt">¥128万</div><div class="ft"><span class="o"><span class="avatar-sm">林</span>林晓</span><span>07-03 跟进</span></div></div>
+            <div class="kcard"><h4>三甲医院整改</h4><div class="amt">¥54万</div><div class="ft"><span class="o"><span class="avatar-sm">孙</span>孙浩</span><span>07-01 跟进</span></div></div>
+          </div>
+          <div class="col"><div class="col-h"><b>方案制定</b><span class="n">1</span></div>
+            <div class="kcard"><h4>能源集团咨询</h4><div class="amt">¥45万</div><div class="ft"><span class="o"><span class="avatar-sm">李</span>李娜</span><span>07-02 跟进</span></div></div>
+          </div>
+          <div class="col"><div class="col-h"><b>报价</b><span class="n">1</span></div>
+            <div class="kcard"><h4>银行等保三级</h4><div class="amt">¥210万</div><div class="ft"><span class="o"><span class="avatar-sm">林</span>林晓</span><span>待审批</span></div></div>
+          </div>
+          <div class="col"><div class="col-h"><b>投标</b><span class="n">1</span></div>
+            <div class="kcard"><h4>政务云招标</h4><div class="amt">¥96万</div><div class="ft"><span class="o"><span class="avatar-sm">王</span>王磊</span><span>07-10 开标</span></div></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ===== View: Quotation ===== -->
+      <section data-pane="quotation" class="hidden">
+        <div class="ph"><div><h1>报价单编辑</h1><p>BJ20260708 · 关联商机「银行等保三级」 · 有效期至 2026-08-07</p></div>
+          <div class="acts"><button class="btn btn-s">导出 PDF</button><button class="btn btn-s">保存草稿</button><button class="btn btn-p">提交审批</button></div>
+        </div>
+        <div class="q-grid">
+          <div>
+            <div class="card">
+              <div class="card-h"><h3>报价明细</h3><button class="btn btn-g" style="height:32px;padding:0 12px">+ 行</button></div>
+              <div style="padding:6px 14px 14px">
+                <table class="lineitem">
+                  <thead><tr><th>服务项目</th><th>数量</th><th>单价(万)</th><th>折扣</th><th>金额(万)</th></tr></thead>
+                  <tbody>
+                    <tr><td>等保三级测评</td><td><input value="1"/></td><td><input value="120"/></td><td><input value="0.95"/></td><td class="mono">114.0</td></tr>
+                    <tr><td>差距分析咨询</td><td><input value="1"/></td><td><input value="48"/></td><td><input value="1"/></td><td class="mono">48.0</td></tr>
+                    <tr><td>整改协助</td><td><input value="1"/></td><td><input value="40"/></td><td><input value="0.9"/></td><td class="mono">36.0</td></tr>
+                    <tr style="font-weight:700"><td colspan="4" style="text-align:right">合计</td><td class="mono" style="color:var(--brand-600)">198.0</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            <div class="card card-pad" style="margin-top:16px">
+              <h3 style="font-size:14px;margin-bottom:10px;font-weight:600">付款条款 <span class="pill p-info" style="margin-left:6px"><span class="d"></span>默认 2 段</span></h3>
+              <div class="kv"><span class="k">① 合同签订后 10 工作日</span><span class="v">50%</span></div>
+              <div class="kv"><span class="k">② 验收合格后</span><span class="v">50%</span></div>
+            </div>
+          </div>
+          <div>
+            <div class="card card-pad">
+              <h3 style="font-size:14px;margin-bottom:14px;font-weight:600">审批流</h3>
+              <div class="stepper">
+                <div class="step ok"><div class="b">✓</div><div class="t"><b>提交</b><span>林晓 · 07-03 09:12</span></div></div>
+                <div class="step cur"><div class="b">2</div><div class="t"><b>销售总监审批</b><span>待 林晓 处理</span></div></div>
+                <div class="step"><div class="b">3</div><div class="t"><b>财务经理审批</b><span>未开始</span></div></div>
+                <div class="step"><div class="b">4</div><div class="t"><b>生效 / 转合同</b><span>未开始</span></div></div>
+              </div>
+              <div class="risk-banner" style="margin:14px 0 0">低于限价 · 需附加分管领导审批节点</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ===== placeholder panes ===== -->
+      <section data-pane="credit" class="hidden"><div class="ph"><div><h1>信用等级管理</h1><p>每日 02:00 自动评分 · 手动调整走销售总监+财务总监二级审批</p></div></div>
+        <div class="card card-pad">信用评分维度：付款及时性 / 合作频次 / 项目规模 / 企业资质 / 风险记录 → 取最小值。等级映射 A≥90 · B 75-89 · C 60-74 · D<60。</div></section>
+      <!-- ===== View: Bid List ===== -->
+      <section data-pane="bid">
+        <div class="ph">
+          <div><h1>投标管理</h1><p>标书购买 → 制作 → 保证金 → 开标 → 中标/落标 · 关键节点自动提醒</p></div>
+          <div class="acts"><button class="btn btn-s"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 8v4l3 2"/><circle cx="12" cy="12" r="9"/></svg>保证金提醒</button><button class="btn btn-p"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 5v14M5 12h14"/></svg>新建投标</button></div>
+        </div>
+        <div class="chips">
+          <button class="chip on">全部</button><button class="chip">投标中</button><button class="chip">已中标</button><button class="chip">已落标</button><button class="chip">保证金待缴</button>
+        </div>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>投标编号</th><th>投标项目</th><th>客户</th><th>金额</th><th>保证金</th><th>开标日期</th><th>状态</th><th></th></tr></thead>
+            <tbody>
+              <tr><td class="mono muted">TB20260710</td><td><b>政务云等保测评招标</b></td><td>某政务云平台</td><td class="mono">¥96万</td><td><span class="pill p-success"><span class="d"></span>已缴</span></td><td class="mono">07-10</td><td><span class="pill p-brand"><span class="d"></span>投标中</span></td><td class="row-acts"><a class="link" data-bid="TB20260710">详情</a></td></tr>
+              <tr><td class="mono muted">TB20260615</td><td><b>银行渗透测试服务</b></td><td>某商业银行股份</td><td class="mono">¥68万</td><td><span class="pill p-success"><span class="d"></span>已缴</span></td><td class="mono">06-20</td><td><span class="pill p-danger"><span class="d"></span>已落标</span></td><td class="row-acts"><a class="link" data-bid="TB20260615">详情</a></td></tr>
+              <tr><td class="mono muted">TB20260528</td><td><b>三甲医院等保三级</b></td><td>某三甲医院</td><td class="mono">¥142万</td><td><span class="pill p-warning"><span class="d"></span>待缴</span></td><td class="mono">07-15</td><td><span class="pill p-brand"><span class="d"></span>投标中</span></td><td class="row-acts"><a class="link" data-bid="TB20260528">详情</a></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- ===== View: Bid Detail ===== -->
+      <section data-pane="bid-detail" class="hidden">
+        <button class="btn btn-g" id="bidBack" style="margin-bottom:14px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:16px;height:16px"><path d="M15 18l-6-6 6-6"/></svg>返回投标列表</button>
+        <div class="ph"><div><h1>投标详情 · 政务云等保测评招标</h1><p>TB20260710 · 关联客户「某政务云平台」 · 关联商机 SJ20260620</p></div>
+          <div class="acts"><button class="btn btn-s">编辑</button><button class="btn btn-s">作废</button><button class="btn btn-p">登记结果</button></div>
+        </div>
+        <div class="hero">
+          <span class="ava">政</span>
+          <div class="meta"><h2>政务云等保测评招标 <span class="pill p-brand"><span class="d"></span>投标中</span></h2>
+            <div class="sub"><span>招标方：某政务云平台</span><span>类型：公开招标</span><span>金额：<b class="mono">¥96万</b></span><span>负责人：王磊</span><span>开标：07-10</span></div>
+          </div>
+          <div class="acts"><button class="btn btn-s">+ 商机</button><button class="btn btn-p">提交审批</button></div>
+        </div>
+        <div class="q-grid">
+          <div>
+            <div class="card card-pad" style="margin-bottom:16px">
+              <h3 style="font-size:14px;margin-bottom:12px;font-weight:600">投标基本信息</h3>
+              <div class="kv"><span class="k">招标编号</span><span class="v mono">ZWY-2026-BID-047</span></div>
+              <div class="kv"><span class="k">投标截止</span><span class="v mono">2026-07-10 09:30</span></div>
+              <div class="kv"><span class="k">开标时间 / 地点</span><span class="v">07-10 10:00 · 政务云交易中心 3 厅</span></div>
+              <div class="kv"><span class="k">投标类型</span><span class="v">公开招标</span></div>
+              <div class="kv"><span class="k">是否联合体</span><span class="v">否</span></div>
+              <div class="kv"><span class="k">关联商机</span><span class="v"><a class="link">SJ20260620</a></span></div>
+            </div>
+            <div class="card card-pad" style="margin-bottom:16px">
+              <h3 style="font-size:14px;margin-bottom:12px;font-weight:600">保证金 <span class="pill p-success" style="margin-left:6px"><span class="d"></span>已缴</span></h3>
+              <div class="kv"><span class="k">保证金金额</span><span class="v mono">¥5.0万</span></div>
+              <div class="kv"><span class="k">缴纳时间</span><span class="v mono">2026-06-28 14:22</span></div>
+              <div class="kv"><span class="k">缴纳凭证</span><span class="v"><a class="link">保证金回单.pdf</a></span></div>
+              <div class="kv"><span class="k">退还状态</span><span class="v">未退还</span></div>
+            </div>
+            <div class="card card-pad">
+              <h3 style="font-size:14px;margin-bottom:12px;font-weight:600">竞争对手与报价 <span class="pill p-info" style="margin-left:6px"><span class="d"></span>脱敏</span></h3>
+              <div class="kv"><span class="k">我方报价</span><span class="v mono">¥96.0万</span></div>
+              <div class="kv"><span class="k">对手 A · 某测评中心</span><span class="v mono">¥92.0万</span></div>
+              <div class="kv"><span class="k">对手 B · 某安全公司</span><span class="v mono">¥101.0万</span></div>
+            </div>
+          </div>
+          <div>
+            <div class="card card-pad" style="margin-bottom:16px">
+              <h3 style="font-size:14px;margin-bottom:14px;font-weight:600">投标进度</h3>
+              <div class="stepper">
+                <div class="step ok"><div class="b">✓</div><div class="t"><b>标书购买</b><span>王磊 · 06-15 完成</span></div></div>
+                <div class="step ok"><div class="b">✓</div><div class="t"><b>标书制作</b><span>王磊 · 06-22 完成</span></div></div>
+                <div class="step ok"><div class="b">✓</div><div class="t"><b>保证金缴纳</b><span>财务 · 06-28 完成</span></div></div>
+                <div class="step cur"><div class="b">4</div><div class="t"><b>开标</b><span>07-10 10:00 待开标</span></div></div>
+                <div class="step"><div class="b">5</div><div class="t"><b>结果登记</b><span>未开始</span></div></div>
+              </div>
+            </div>
+            <div class="card card-pad" style="margin-bottom:16px">
+              <h3 style="font-size:14px;margin-bottom:10px;font-weight:600">标书附件</h3>
+              <div class="kv"><span class="k"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:15px;height:15px;vertical-align:-3px;margin-right:6px"><path d="M14 3v5h5"/><path d="M14 3H6v18h12V8z"/></svg>商务标.pdf</span><span class="v"><a class="link">下载</a></span></div>
+              <div class="kv"><span class="k"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:15px;height:15px;vertical-align:-3px;margin-right:6px"><path d="M14 3v5h5"/><path d="M14 3H6v18h12V8z"/></svg>技术标.pdf</span><span class="v"><a class="link">下载</a></span></div>
+              <div class="kv"><span class="k"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:15px;height:15px;vertical-align:-3px;margin-right:6px"><path d="M14 3v5h5"/><path d="M14 3H6v18h12V8z"/></svg>资质证明.zip</span><span class="v"><a class="link">下载</a></span></div>
+            </div>
+            <div class="card card-pad">
+              <h3 style="font-size:14px;margin-bottom:10px;font-weight:600">中标推送合同 <span class="pill p-info" style="margin-left:6px"><span class="d"></span>T5-B</span></h3>
+              <div class="kv" style="border:none"><span class="k" style="line-height:1.6">待开标登记「中标」后，自动经 MQ 推送合同子系统生成合同草稿，幂等键 BK + 投标编号。</span></div>
+            </div>
+          </div>
+        </div>
+      </section>
+      <section data-pane="approval" class="hidden"><div class="ph"><div><h1>审批中心</h1><p>集中处理阶段推进 / 信用调整 / 报价 / 作废 四类审批</p></div></div>
+        <div class="card card-pad">待办 3 项：银行等保三级报价(销售总监) · 某能源集团信用调整(财务总监) · 政务云商机阶段推进(销售总监)。</div></section>
+      <section data-pane="portal-admin" class="hidden"><div class="ph"><div><h1>客户门户管理</h1><p>账号开通 / 备案审核 / 反馈评价</p></div></div>
+        <div class="card card-pad">开通门户生成专属邀请码（一次有效，7 天过期）；备案提交锁定需管理员解锁；反馈 24h 内响应超时自动升级。</div></section>
+
+    </main>
+  </div>
+</div>
+
+<!-- ================= PORTAL (full screen) ================= -->
+<div class="portal" id="portal">
+  <button class="pback" id="backApp"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:16px;height:16px"><path d="M15 18l-6-6 6-6"/></svg>返回后台</button>
+  <div class="pwrap">
+    <div class="pleft">
+      <div class="lg"><span class="logo"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2"><path d="M3 12l9-8 9 8"/><path d="M5 10v10h14V10"/></svg></span> 客户自助门户</div>
+      <div>
+        <h2>项目进度透明<br/>报告安全直达</h2>
+        <p>登录后查看授权项目的实时进度、在线申请电子测评报告、提交等保备案信息与服务反馈。</p>
+      </div>
+      <div class="ft">安信检测 · 网络安全等级保护测评机构<br/>© 2026 保密声明 · 京ICP备xxxxxxxx号</div>
+    </div>
+    <div class="pright">
+      <h3>客户登录</h3>
+      <div class="desc">支持账号密码 + 站内验证码双因素认证</div>
+      <div class="lockmsg" id="lockmsg"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:16px;height:16px"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg> 账号已锁定，请 15:00 后重试</div>
+      <div class="fld"><label>登录名 / 邀请码</label><input placeholder="请输入登录名或邀请码"/></div>
+      <div class="fld"><label>密码</label><input id="pw" type="password" placeholder="至少 8 位，含大小写+数字+特殊字符" oninput="pwCheck()"/></div>
+      <div class="pwbar"><i id="pwbar"></i></div>
+      <div class="pwtip" id="pwtip">密码强度：—</div>
+      <div class="fld" style="margin-top:14px"><label>站内验证码</label><div class="cap"><input placeholder="6 位验证码"/><button>发送</button></div></div>
+      <button class="btn btn-p" style="width:100%;height:46px;margin-top:18px;justify-content:center">登录门户</button>
+      <div class="desc" style="margin-top:14px;text-align:center">还没有账号？<a class="link" style="margin-left:4px">通过邀请码注册</a></div>
+    </div>
+  </div>
+</div>
+
+<script>
+  // 视图切换（后台）
+  const nav = document.getElementById('nav');
+  const crumbMap = {
+    customers:['客户管理 / ','客户列表'],
+    detail:['客户管理 / ','客户详情'],
+    credit:['客户管理 / ','信用等级'],
+    board:['商机管理 / ','商机看板'],
+    quotation:['交易管理 / ','报价管理'],
+    bid:['交易管理 / ','投标管理'],
+    approval:['通用 / ','审批中心'],
+    'portal-admin':['客户门户 / ','门户管理']
+  };
+  nav.addEventListener('click', e=>{
+    const a = e.target.closest('a'); if(!a) return;
+    e.preventDefault();
+    nav.querySelectorAll('a').forEach(x=>x.classList.remove('active'));
+    a.classList.add('active');
+    const v = a.dataset.view;
+    document.querySelectorAll('[data-pane]').forEach(p=>p.classList.toggle('hidden', p.dataset.pane!==v));
+    const c = crumbMap[v]||['',''];
+    document.getElementById('crumb').innerHTML = c[0]+'<b>'+c[1]+'</b>';
+    document.getElementById('view').scrollTop = 0;
+  });
+  // 客户列表 -> 详情
+  document.querySelectorAll('[data-pane="customers"] .link').forEach(l=>{
+    l.addEventListener('click', ()=>{ nav.querySelectorAll('a').forEach(x=>x.classList.remove('active'));
+      document.querySelectorAll('[data-pane]').forEach(p=>p.classList.toggle('hidden', p.dataset.pane!=='detail'));
+      document.getElementById('crumb').innerHTML='客户管理 / <b>客户详情</b>';
+    });
+  });
+  // 投标列表 -> 详情
+  document.querySelectorAll('[data-pane="bid"] a.link[data-bid]').forEach(l=>{
+    l.addEventListener('click', ()=>{
+      document.querySelectorAll('[data-pane]').forEach(p=>p.classList.toggle('hidden', p.dataset.pane!=='bid-detail'));
+      document.getElementById('crumb').innerHTML='交易管理 / <b>投标详情</b>';
+      document.getElementById('view').scrollTop = 0;
+    });
+  });
+  // 投标详情 -> 返回列表
+  const bidBack = document.getElementById('bidBack');
+  if(bidBack) bidBack.addEventListener('click', ()=>{
+    document.querySelectorAll('[data-pane]').forEach(p=>p.classList.toggle('hidden', p.dataset.pane!=='bid'));
+    document.getElementById('crumb').innerHTML='交易管理 / <b>投标管理</b>';
+    document.getElementById('view').scrollTop = 0;
+  });
+  // 详情 tabs
+  document.querySelectorAll('[data-pane="detail"] .tab').forEach(t=>{
+    t.addEventListener('click', ()=>{ document.querySelectorAll('[data-pane="detail"] .tab').forEach(x=>x.classList.remove('on')); t.classList.add('on'); });
+  });
+  // 门户切换
+  document.getElementById('toPortal').addEventListener('click', ()=>document.getElementById('portal').classList.add('show'));
+  document.getElementById('backApp').addEventListener('click', ()=>document.getElementById('portal').classList.remove('show'));
+  // 密码强度
+  function pwCheck(){
+    const v = document.getElementById('pw').value;
+    const bar = document.getElementById('pwbar'), tip = document.getElementById('pwtip');
+    let s = 0; if(v.length>=8)s++; if(/[A-Z]/.test(v)&&/[a-z]/.test(v))s++; if(/\d/.test(v))s++; if(/[^A-Za-z0-9]/.test(v))s++;
+    const map=[['#D6493F','弱'],['#D6493F','弱'],['#C9871A','中'],['#1F9D6B','强'],['#1F9D6B','强']];
+    bar.style.width = (v.length? (s+1)*20 : 0)+'%'; bar.style.background = map[Math.min(s,4)][0];
+    tip.textContent = '密码强度：'+(v.length? map[Math.min(s,4)][1] : '—');
+  }
+  // 演示：锁定提示（点击登录演示）
+  document.querySelector('#portal .btn-p').addEventListener('click', ()=>{
+    const lm = document.getElementById('lockmsg'); lm.classList.add('show');
+    setTimeout(()=>lm.classList.remove('show'), 2600);
+  });
+</script>
+</body>
+</html>
