@@ -332,10 +332,10 @@ button { cursor: pointer; border: none; outline: none; font-family: inherit; }
 // ==================== DATA STORE（宿主 + TS 模块合并） ====================
 const store = {
   customers: [
-    { id:'KH202606150001', name:'华兴证券股份有限公司', type:'业主', industry:'金融', scale:'大型', credit:'A', status:'成交', addr:'深圳市福田区福华三路88号', uscc:'91440300100008888K', biz:'证券经纪、投资银行、资产管理、研究咨询', needs:'等保测评、渗透测试、代码审计', followDate:'2026-06-14', contactName:'陈志远', contactPhone:'13800136789', portalInvite: null },
-    { id:'KH202606120042', name:'鹏程能源科技有限公司', type:'三方', industry:'能源', scale:'中型', credit:'B', status:'在跟', addr:'广州市天河区珠江新城', uscc:'91440100000012345X', biz:'新能源技术开发、电力系统集成', needs:'风险评估、渗透测试', followDate:'2026-06-13' },
-    { id:'KH202606080157', name:'滨江医疗集团有限公司', type:'政府', industry:'医疗', scale:'大型', credit:'C', status:'潜在', addr:'杭州市西湖区', uscc:'91330000000067890Y', biz:'医疗服务、健康管理', needs:'等保测评', followDate:'2026-06-10' },
-    { id:'KH202606030289', name:'众诚制造有限责任公司', type:'事业单位', industry:'制造', scale:'中型', credit:'D', status:'流失', addr:'东莞市松山湖', uscc:'91441900000098765Z', biz:'智能制造装备', needs:'代码审计', followDate:'2026-05-28' }
+    { id:'KH202606150001', name:'华兴证券股份有限公司', type:'业主', industry:'金融', scale:'大型', status:'成交', addr:'深圳市福田区福华三路88号', uscc:'91440300100008888K', biz:'证券经纪、投资银行、资产管理、研究咨询', needs:'等保测评、渗透测试、代码审计', followDate:'2026-06-14', contactName:'陈志远', contactPhone:'13800136789', portalInvite: null },
+    { id:'KH202606120042', name:'鹏程能源科技有限公司', type:'三方', industry:'能源', scale:'中型', status:'在跟', addr:'广州市天河区珠江新城', uscc:'91440100000012345X', biz:'新能源技术开发、电力系统集成', needs:'风险评估、渗透测试', followDate:'2026-06-13' },
+    { id:'KH202606080157', name:'滨江医疗集团有限公司', type:'政府', industry:'医疗', scale:'大型', status:'潜在', addr:'杭州市西湖区', uscc:'91330000000067890Y', biz:'医疗服务、健康管理', needs:'等保测评', followDate:'2026-06-10' },
+    { id:'KH202606030289', name:'众诚制造有限责任公司', type:'事业单位', industry:'制造', scale:'中型', status:'流失', addr:'东莞市松山湖', uscc:'91441900000098765Z', biz:'智能制造装备', needs:'代码审计', followDate:'2026-05-28' }
   ],
   opportunities: [
     { id:'SJ202606100005', name:'核心交易系统等保测评', customer:'华兴证券', stage:'初步接触', oppStatus:'跟进中', amount:48.5, date:'2026-07-15', owner:'张明远', source:'老客户推荐' },
@@ -409,7 +409,7 @@ const store = {
       approvals:[ {node:1, approver:'销售总监 刘明', result:'通过', comment:'同意，重点客户', time:'2026-07-22 10:30'}, {node:2, approver:'团队负责人 李婷芳', result:'通过', comment:'技术方案可行', time:'2026-07-22 14:00'} ],
       assignee:'王建国', assigneeRole:'实施工程师', assignedBy:'李婷芳', assignedAt:'2026-07-22 15:00',
       progress:[ {date:'2026-07-23 09:10', who:'王建国', text:'已完成现场调研，方案初稿编写中'} ],
-      worklogs:[ {personId:'PMS-U10086', personName:'王建国', workStart:'2026-07-23 09:00', workEnd:'2026-07-23 17:00', unit:'人天', workHours:1.0, rawUnit:'小时', rawHours:8.0, address:'北京市朝阳区某银行数据中心', workContent:'方案设计', pushStatus:'成功'} ] },
+      worklogs:[ {personId:'PMS-U10086', personName:'王建国', workStart:'2026-07-23 09:00', workEnd:'2026-07-23 17:00', unit:'小时', workHours:8.0, rawUnit:'小时', rawHours:8.0, address:'北京市朝阳区某银行数据中心', workContent:'方案设计', pushStatus:'成功'} ] },
     { taskId:'TS202607230002', opportunityId:'SJ202606080012', opportunityName:'风险评估与渗透测试', applicant:'陈浩然', venue:'远程', serviceAddress:'', contactName:'张主管（客户风控部）', contactPhone:'139-0022-3344', description:'客户风控团队希望就风险测评范围做一轮技术交流。', expectStart:'2026-07-24', expectEnd:'2026-07-24', urgency:'普通',
       status:'待审批', rejectReason:'', approvals:[], assignee:'', assigneeRole:'', assignedBy:'', assignedAt:'', progress:[], worklogs:[] },
     { taskId:'TS202607230003', opportunityId:'SJ202606090015', opportunityName:'政府云等保三级测评', applicant:'张伟', venue:'现场', serviceAddress:'政务云测评靶场', contactName:'王经理（客户安全部）', contactPhone:'137-0033-4455', description:'客户要求对政务云等保能力做 POC 演示验证。', expectStart:'2026-07-25', expectEnd:'2026-07-26', urgency:'普通',
@@ -421,8 +421,8 @@ const store = {
       approvals:[ {node:1, approver:'销售总监 刘明', result:'通过', comment:'同意', time:'2026-07-18 09:00'}, {node:2, approver:'团队负责人 李婷芳', result:'通过', comment:'同意', time:'2026-07-18 10:00'} ],
       assignee:'赵晓燕', assigneeRole:'实施工程师', assignedBy:'李婷芳', assignedAt:'2026-07-18 11:00',
       progress:[ {date:'2026-07-20 16:00', who:'赵晓燕', text:'答疑完成，客户确认流程'} ],
-      worklogs:[ {personId:'PMS-U10087', personName:'赵晓燕', workStart:'2026-07-18 14:00', workEnd:'2026-07-18 17:00', unit:'人天', workHours:0.5, rawUnit:'小时', rawHours:4.0, address:'线上会议', workContent:'技术答疑', pushStatus:'成功'},
-                 {personId:'PMS-U10087', personName:'赵晓燕', workStart:'2026-07-20 09:00', workEnd:'2026-07-20 12:00', unit:'人天', workHours:0.5, rawUnit:'小时', rawHours:4.0, address:'线上会议', workContent:'技术答疑', pushStatus:'成功'} ] },
+      worklogs:[ {personId:'PMS-U10087', personName:'赵晓燕', workStart:'2026-07-18 14:00', workEnd:'2026-07-18 17:00', unit:'小时', workHours:4.0, rawUnit:'小时', rawHours:4.0, address:'线上会议', workContent:'技术答疑', pushStatus:'成功'},
+                 {personId:'PMS-U10087', personName:'赵晓燕', workStart:'2026-07-20 09:00', workEnd:'2026-07-20 12:00', unit:'小时', workHours:4.0, rawUnit:'小时', rawHours:4.0, address:'线上会议', workContent:'技术答疑', pushStatus:'成功'} ] },
     { taskId:'TS202607230005', opportunityId:'SJ202606050008', opportunityName:'医院信息平台安全建设', applicant:'张伟', venue:'现场', serviceAddress:'某医院信息中心', contactName:'王经理（客户安全部）', contactPhone:'137-0033-4455', description:'客户要求出具详细渗透测试方案。', expectStart:'2026-07-21', expectEnd:'2026-07-23', urgency:'紧急',
       status:'已驳回', rejectReason:'当前资源紧张，建议下季度安排',
       approvals:[ {node:1, approver:'销售总监 刘明', result:'驳回', comment:'当前资源紧张，建议下季度安排', time:'2026-07-21 15:00'} ],
@@ -432,7 +432,7 @@ const store = {
       approvals:[ {node:1, approver:'销售总监 刘明', result:'通过', comment:'同意', time:'2026-07-23 08:30'}, {node:2, approver:'团队负责人 李婷芳', result:'通过', comment:'同意', time:'2026-07-23 09:00'} ],
       assignee:'赵晓燕', assigneeRole:'实施工程师', assignedBy:'李婷芳', assignedAt:'2026-07-23 09:30',
       progress:[ {date:'2026-07-23 10:00', who:'赵晓燕', text:'密评方案框架搭建中'} ],
-      worklogs:[ {personId:'PMS-U10087', personName:'赵晓燕', workStart:'2026-07-23 09:00', workEnd:'2026-07-23 12:00', unit:'人天', workHours:0.5, rawUnit:'小时', rawHours:4.0, address:'政务云中心', workContent:'方案设计', pushStatus:'待重试'} ] }
+      worklogs:[ {personId:'PMS-U10087', personName:'赵晓燕', workStart:'2026-07-23 09:00', workEnd:'2026-07-23 12:00', unit:'小时', workHours:4.0, rawUnit:'小时', rawHours:4.0, address:'政务云中心', workContent:'方案设计', pushStatus:'待重试'} ] }
   ]
 };
 
@@ -541,10 +541,10 @@ function renderAdminPage() {
 
   let actionBtns = '';
   if (currentPage === 'customer-detail') actionBtns = '<button class="btn btn-primary btn-sm">新增商机</button><button class="btn btn-secondary btn-sm">编辑</button>';
-  else if (currentPage === 'opp-detail') actionBtns = '<button class="btn btn-secondary btn-sm" onclick="openStageModal()">阶段推进</button>';
+  else if (currentPage === 'opp-detail') actionBtns = '<button class="btn btn-secondary btn-sm" onclick="openStageModal()">调整阶段</button>';
 
   let statusBadges = '';
-  if (currentPage === 'customer-detail') statusBadges = '<span class="badge badge-success">成交</span><span class="badge badge-success">A</span>';
+  if (currentPage === 'customer-detail') statusBadges = '<span class="badge badge-success">成交</span>';
   else if (currentPage === 'opp-detail') statusBadges = '<span class="badge badge-info">需求沟通</span>';
 
   if (isDetail) {
@@ -670,7 +670,7 @@ function renderPresaleList(){
       <div class="stat-card"><div class="stat-label">${canSeeAll()?'全部任务':'我的任务'}</div><div class="stat-value">${stat.total}</div></div>
       <div class="stat-card"><div class="stat-label">待审批</div><div class="stat-value">${stat.pending}</div></div>
       <div class="stat-card"><div class="stat-label">执行中</div><div class="stat-value">${stat.executing}</div></div>
-      <div class="stat-card"><div class="stat-label">累计工时(人天)</div><div class="stat-value">${stat.monthHours}</div></div>
+      <div class="stat-card"><div class="stat-label">累计工时(小时)</div><div class="stat-value">${stat.monthHours}</div></div>
     </div>
     <div class="tabs">${tabs.map(t=>`<div class="tab-item ${currentView===t?'active':''}" onclick="navigate('presale-list',{view:'${t}'})">${t}</div>`).join('')}
       <div style="margin-left:auto;display:flex;gap:8px;align-items:center">
@@ -790,7 +790,7 @@ function renderPresaleDetail(){
   if(t.status==='执行中' && t.assignee===me){ execZone += `<div style="display:flex;gap:10px;margin-top:6px"><button class="btn btn-secondary btn-sm" onclick="addProgress('${t.taskId}')">更新进度</button><button class="btn btn-primary btn-sm" onclick="navigate('presale-worklog',{taskId:'${t.taskId}'})">登记工时</button></div>`; }
   else if(t.status==='执行中'){ execZone += `<div class="detail-label">（执行人 ${t.assignee} 可更新进度与登记工时）</div>`; }
   let wlZone = '<div class="card-title">工时记录（推送项目管理系统 K）</div>';
-  if(t.worklogs.length){ wlZone += `<div class="table-wrap"><div class="table-header"><div class="tc" style="flex:1">人员</div><div class="tc" style="flex:1">起止时间</div><div class="tc" style="flex:1">工时(人天)</div><div class="tc" style="flex:1.4">地点</div><div class="tc" style="flex:1">推送</div></div>${t.worklogs.map(w=>`<div class="table-row"><div class="tc" style="flex:1">${w.personName}</div><div class="tc" style="flex:1">${w.workStart.slice(11)}~${w.workEnd.slice(11)}</div><div class="tc" style="flex:1">${w.workHours}</div><div class="tc" style="flex:1.4">${w.address}</div><div class="tc" style="flex:1"><span class="badge ${w.pushStatus==='成功'?'badge-success':(w.pushStatus==='待重试'?'badge-warning':'badge-gray')}">${w.pushStatus}</span></div></div>`).join('')}</div>`; }
+  if(t.worklogs.length){ wlZone += `<div class="table-wrap"><div class="table-header"><div class="tc" style="flex:1">人员</div><div class="tc" style="flex:1">起止时间</div><div class="tc" style="flex:1">工时(小时)</div><div class="tc" style="flex:1.4">地点</div><div class="tc" style="flex:1">推送</div></div>${t.worklogs.map(w=>`<div class="table-row"><div class="tc" style="flex:1">${w.personName}</div><div class="tc" style="flex:1">${w.workStart.slice(11)}~${w.workEnd.slice(11)}</div><div class="tc" style="flex:1">${w.workHours}</div><div class="tc" style="flex:1.4">${w.address}</div><div class="tc" style="flex:1"><span class="badge ${w.pushStatus==='成功'?'badge-success':(w.pushStatus==='待重试'?'badge-warning':'badge-gray')}">${w.pushStatus}</span></div></div>`).join('')}</div>`; }
   else { wlZone += `<div class="detail-label">暂无工时登记</div>`; }
   const tl = [];
   tl.push({dot:'✓',c:'var(--accent)',title:'提交申请',meta:t.applicant+' · 售前技术支持',text:t.description});
@@ -845,7 +845,7 @@ function renderPresaleWorklog(){
   const t = getTask(currentTaskId);
   if(!t) return '<div class="empty">任务不存在</div>';
   return `
-    <div class="banner">提交后写入 t_ts_worklog 并触发数据流 K 推送项目管理系统；选「小时」将按 1 人天=8 小时自动换算为人天（基准单位）推送。</div>
+    <div class="banner">提交后写入 t_ts_worklog 并触发数据流 K 推送项目管理系统；基准单位为小时，选「人天」时按 1 人天=8 小时自动换算后推送。</div>
     <div class="card" style="max-width:720px"><div class="card-body">
       <div class="card-title">工时登记 · ${t.taskId}</div>
       <div class="form-group"><label>实施人员</label><input value="${t.assignee||ROLE_USER['实施工程师']}" readonly></div>
@@ -857,7 +857,7 @@ function renderPresaleWorklog(){
         <div class="form-group"><label>单位</label><select id="w-unit" onchange="updateConversion()"><option value="人天">人天</option><option value="小时">小时</option></select></div>
         <div class="form-group"><label>工时数值</label><input id="w-hours" type="number" step="0.1" value="1" oninput="updateConversion()"></div>
       </div>
-      <div class="form-group"><label>换算（基准人天）</label><div id="w-conv" class="detail-value" style="color:var(--primary)">1.00 人天</div></div>
+      <div class="form-group"><label>换算（基准小时）</label><div id="w-conv" class="detail-value" style="color:var(--primary)">8.00 小时</div></div>
       <div class="form-group"><label>场地类型（取自任务，只读）</label><input value="${t.venue}" readonly></div>
       <div class="form-group"><label>工作地点</label><input id="w-addr" placeholder="客户现场 / 远程会议 等"></div>
       <div class="form-group"><label>工作内容</label><select id="w-type"><option>方案设计</option><option>技术交流</option><option>POC演示</option><option>技术答疑</option><option>其他</option></select></div>
@@ -867,20 +867,20 @@ function renderPresaleWorklog(){
 function updateConversion(){
   const unit = document.getElementById('w-unit').value;
   const h = parseFloat(document.getElementById('w-hours').value||0);
-  const conv = unit==='小时' ? (h/8).toFixed(2)+' 人天' : h.toFixed(2)+' 人天';
+  const conv = unit==='人天' ? (h*8).toFixed(2)+' 小时' : h.toFixed(2)+' 小时';
   document.getElementById('w-conv').textContent = conv;
 }
 function submitWorklog(){
   const t = getTask(currentTaskId); if(!t) return;
   const unit = document.getElementById('w-unit').value;
   const h = parseFloat(document.getElementById('w-hours').value||0);
-  const hoursVal = unit==='小时' ? (h/8) : h;
+  const hoursVal = unit==='人天' ? (h*8) : h;
   const rawUnit = unit, rawHours = h;
   const start = document.getElementById('w-start').value.replace('T',' ');
   const end = document.getElementById('w-end').value.replace('T',' ');
   const addr = document.getElementById('w-addr').value || '—';
   const type = document.getElementById('w-type').value;
-  t.worklogs.push({ personId:'PMS-U10086', personName:t.assignee||ROLE_USER['实施工程师'], workStart:start, workEnd:end, unit:'人天', workHours:hoursVal, rawUnit, rawHours, address:addr, workContent:type, pushStatus:'成功' });
+  t.worklogs.push({ personId:'PMS-U10086', personName:t.assignee||ROLE_USER['实施工程师'], workStart:start, workEnd:end, unit:'小时', workHours:hoursVal, rawUnit, rawHours, address:addr, workContent:type, pushStatus:'成功' });
   if(t.status==='执行中') t.status='已完成';
   showToast('工时已登记并推送项目管理系统（K）');
   navigate('presale-detail',{taskId:t.taskId});
@@ -923,14 +923,13 @@ function renderCustomerList() {
     <div class="stat-cards">
       <div class="stat-card"><div class="stat-label">全部客户</div><div class="stat-value">248</div><span class="stat-trend up">↑ +12%</span></div>
       <div class="stat-card"><div class="stat-label">跟进中</div><div class="stat-value">156</div><span class="stat-trend stable">↑ +8%</span></div>
-      <div class="stat-card"><div class="stat-label">高价值客户</div><div class="stat-value">42</div><span class="stat-trend up">↑ +5%</span></div>
+      <div class="stat-card"><div class="stat-label">成交客户</div><div class="stat-value">42</div><span class="stat-trend up">↑ +5%</span></div>
       <div class="stat-card"><div class="stat-label">待跟进</div><div class="stat-value">23</div></div>
     </div>
     <div class="filter-bar">
       <div class="filter-input"><div style="width:16px;height:16px;background:#94A3B8;border-radius:3px;"></div><input placeholder="搜索客户名称、编号..."></div>
       <div class="filter-select">客户类型<span class="arrow"></span></div>
       <div class="filter-select">行业<span class="arrow"></span></div>
-      <div class="filter-select">信用等级<span class="arrow"></span></div>
       <div class="filter-select">状态<span class="arrow"></span></div>
       <div style="flex:1"></div>
       <button class="btn btn-primary btn-sm">搜索</button>
@@ -941,22 +940,19 @@ function renderCustomerList() {
         <div class="tc" style="flex:1">客户名称</div>
         <div class="tc" style="width:90px">客户类型</div>
         <div class="tc" style="width:100px">行业</div>
-        <div class="tc" style="width:80px">信用等级</div>
         <div class="tc" style="width:80px">状态</div>
         <div class="tc" style="width:120px">最近跟进</div>
         <div class="tc" style="width:110px">操作</div>
       </div>
       ${store.customers.map((c,i) => {
-        const cls = c.credit === 'D' ? 'warn' : (i%2 ? 'alt' : '');
+        const cls = i%2 ? 'alt' : '';
         const statusBadge = { '成交':'badge-success','在跟':'badge-info','潜在':'badge-gray','流失':'badge-danger' };
-        const creditBadge = { 'A':'badge-success','B':'badge-info','C':'badge-warning','D':'badge-danger' };
         return `
         <div class="table-row ${cls}">
           <div class="tc tc-link" style="width:150px" onclick="navigate('customer-detail')">${c.id}</div>
           <div class="tc" style="flex:1;font-weight:600">${c.name}</div>
           <div class="tc" style="width:90px;color:var(--text-secondary)">${c.type}</div>
           <div class="tc" style="width:100px;color:var(--text-secondary)">${c.industry}</div>
-          <div class="tc" style="width:80px"><span class="badge ${creditBadge[c.credit]}">${c.credit}</span></div>
           <div class="tc" style="width:80px"><span class="badge ${statusBadge[c.status]}">${c.status}</span></div>
           <div class="tc" style="width:120px;color:var(--text-muted)">${c.followDate}</div>
           <div class="tc" style="width:110px;gap:12px">
@@ -1153,7 +1149,7 @@ function renderCustomerTabContent(tab) {
   return '';
 }
 
-// ==================== CM-004 生成注册链接 + 同步创建门户账号 ====================
+// ==================== CM-004 预置基础平台外部用户 + 生成 Portal OIDC 邀请 ====================
 let regLinkInterval = null;
 function getPortalAcctStatus(cid){
   const c = store.customers.find(x=>x.id===cid);
@@ -1161,7 +1157,7 @@ function getPortalAcctStatus(cid){
   if(c.portalInvite){
     if(c.portalInvite.status==='已撤销') return '<span class="badge badge-warning">已开通 · 已撤销</span>';
     if(c.portalInvite.status==='已过期') return '<span class="badge badge-warning">已开通 · 已过期</span>';
-    return '<span class="badge badge-info">已开通 · 待激活</span>';
+    return '<span class="badge badge-info">OIDC 已预置 · 待绑定</span>';
   }
   return '<span class="badge badge-gray">未开通</span>';
 }
@@ -1183,7 +1179,7 @@ function regLinkModalInner(c){
       <span style="font-weight:600;font-size:14px">${c.contactName} · ${c.contactPhone}</span>
     </div>
     <div class="field-hint" style="font-size:12px;color:var(--text-muted);line-height:1.6">
-      生成链接将<b>同步在门户子系统创建账号</b>（loginName=${c.contactPhone}，默认口令 <b>11223344</b>，状态 待激活）。门户<b>不支持自助注册</b>，账号仅由本功能开通（CM-004）。
+      生成链接将<b>在基础平台预置外部用户并分配 Portal 角色</b>，同时在 Portal 建立 OIDC sub 与客户映射。客户点击链接后通过<b>统一身份平台 OIDC</b>登录；本流程不生成、传输或保存密码。
     </div>
     <div id="regLinkBody">${renderRegLinkBody(c)}</div>
     <div class="field-error" id="regLinkErr"></div>
@@ -1196,7 +1192,7 @@ function regLinkModalInner(c){
 }
 function renderRegLinkBody(c){
   const invite = c.portalInvite;
-  if(!invite) return `<div style="font-size:13px;color:var(--text-muted)">尚未生成注册链接。点击「生成注册链接」将同步开通门户账号并生成 2 小时有效链接。</div>`;
+  if(!invite) return `<div style="font-size:13px;color:var(--text-muted)">尚未生成注册链接。点击后将预置基础平台外部用户、分配 Portal 角色，并生成 2 小时有效的 OIDC 绑定链接。</div>`;
   const link = `https://portal.secdemo.com/activate?token=${invite.token}`;
   const statusBadge = { '待使用':'badge-info','已使用':'badge-success','已过期':'badge-warning','已撤销':'badge-danger' }[invite.status] || 'badge-gray';
   let remain = '';
@@ -1215,17 +1211,19 @@ function renderRegLinkBody(c){
         <button class="btn btn-secondary btn-sm" onclick="copyRegLink()">复制</button>
       </div>
       <div style="margin-top:8px;font-size:12px;color:var(--text-muted)">有效期至 ${new Date(invite.expireAt).toLocaleString('zh-CN')} ｜ ${remain}</div>
-      <div style="margin-top:6px;font-size:12px;color:var(--text-muted)">门户账号：loginName=${c.contactPhone} ｜ 默认口令 11223344 ｜ 状态 待激活</div>
+      <div style="margin-top:6px;font-size:12px;color:var(--text-muted)">统一身份标识：${c.contactPhone} ｜ 登录方式：基础平台 OIDC ｜ 状态：待绑定</div>
     </div>`;
 }
 function generateRegLink(){
   const c = store.customers[0];
   const err = document.getElementById('regLinkErr');
   err.classList.remove('show');
-  if(!c.contactPhone || !c.contactPhone.trim()){ err.textContent='登记联系人手机号为空，无法开通门户账号（CM-004 前置校验）'; err.classList.add('show'); return; }
+  if(!c.contactPhone || !c.contactPhone.trim()){ err.textContent='登记联系人手机号为空，无法预置基础平台外部用户（CM-004 前置校验）'; err.classList.add('show'); return; }
   const token = 'REG-' + Math.random().toString(36).slice(2,10).toUpperCase();
-  c.portalInvite = { token, status:'待使用', createdAt: Date.now(), expireAt: Date.now()+2*3600*1000 };
-  showToast('门户账号已同步创建（T5 M）：loginName='+c.contactPhone+'，默认口令 11223344');
+  const platformUserId = c.portalIdentity && c.portalIdentity.platformUserId ? c.portalIdentity.platformUserId : 'EXT-' + c.id;
+  c.portalIdentity = { platformUserId, role:'portal_customer', mappingStatus:'待绑定' };
+  c.portalInvite = { token, status:'待使用', platformUserId, createdAt: Date.now(), expireAt: Date.now()+2*3600*1000 };
+  showToast('基础平台外部用户和 Portal 角色已预置，OIDC 绑定链接已生成');
   const box = document.getElementById('regLinkModal');
   if(box) box.innerHTML = regLinkModalInner(c);
   const badge = document.getElementById('portalAcctBadge');
@@ -1283,7 +1281,7 @@ function renderOppDetail() {
   const curStage = Math.max(0, stages.indexOf(o.stage));
   const termColor = { '已签约':'#059669', '失败':'#DC2626' };
   const qb = getOppQbStatus(o.name);
-  const qbBadge = { '已通过':'badge-success','审批中':'badge-info','已失效':'badge-gray','标书制作':'badge-info','开标中':'badge-warning','中标':'badge-success','落标':'badge-danger' };
+  const qbBadge = { '已通过':'badge-success','审批中':'badge-info','已失效':'badge-gray','标书制作':'badge-info','开标中':'badge-warning','中标':'badge-success','落标':'badge-danger','中标·待关联合同':'badge-warning','落标·待补原因':'badge-warning' };
   const linked = store.tasks.filter(t=>t.opportunityId===o.id);
   return `
     ${qb ? `
@@ -1295,11 +1293,11 @@ function renderOppDetail() {
       <div style="font-size:13px;color:var(--text-muted)">该状态由 <b style="color:var(--text-secondary)">报价与投标管理子系统</b> 实时回传（类型：${qb.type}）。当商机处于「报价 / 投标」阶段时，其进展以此回传状态为准，商机阶段据此推进。</div>
       <div style="font-size:12px;color:var(--text-muted);margin-top:6px">最近回传时间：${qb.at || '—'}</div>
       <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
-        ${qb && (qb.status==='开标中'||qb.status==='已通过') ? `<button class="btn btn-primary btn-sm" onclick="simulateWin('${o.id}')">模拟中标回传 → 已签约</button>` : ''}
-        ${qb && qb.status==='开标中' ? `<button class="btn btn-secondary btn-sm" onclick="simulateLose('${o.id}')">模拟落标回传 → 失败</button>` : ''}
+        ${qb && (qb.status==='开标中'||qb.status==='已通过') ? `<button class="btn btn-primary btn-sm" onclick="simulateWin('${o.id}')">模拟中标回传</button>` : ''}
+        ${qb && qb.status==='开标中' ? `<button class="btn btn-secondary btn-sm" onclick="simulateLose('${o.id}')">模拟落标回传</button>` : ''}
       </div>
     </div></div>` : ''}
-    <div class="card"><div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px"><span style="font-size:15px;font-weight:700;color:var(--text-secondary)">商机阶段（7 段漏斗 · 含终态）</span>${o.stage!=='已签约'&&o.stage!=='失败'?'<button class="btn btn-primary btn-sm" onclick="openStageModal()">阶段推进</button>':''}</div><div class="progress-bar-wrap">
+    <div class="card"><div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px"><span style="font-size:15px;font-weight:700;color:var(--text-secondary)">商机阶段（7 段漏斗 · 含终态）</span><button class="btn btn-primary btn-sm" onclick="openStageModal()">调整阶段</button></div><div class="progress-bar-wrap">
       ${stages.map((s,i) => {
         const state = i < curStage ? 'done' : (i === curStage ? 'current' : 'pending');
         const tColor = (state === 'current' && termColor[s]) ? termColor[s] : '';
@@ -1322,8 +1320,8 @@ function renderOppDetail() {
             <div style="display:flex;gap:12px"><span style="color:var(--text-muted);width:70px">预计签单</span><span style="font-weight:600">${o.date.slice(0,4)}年${+o.date.slice(5,7)}月${+o.date.slice(8,10)}日</span></div>
             <div style="display:flex;gap:12px"><span style="color:var(--text-muted);width:70px">商机来源</span><span style="font-weight:600">${o.source}</span></div>
             <div style="display:flex;gap:12px"><span style="color:var(--text-muted);width:70px">商机状态</span><span style="font-weight:600">${o.oppStatus||'跟进中'}</span></div>
-            ${o.stage==='已签约' ? `<div style="display:flex;gap:12px"><span style="color:var(--text-muted);width:70px">关联合同</span><span style="font-weight:600;color:var(--primary)">${o.contractName||o.contractRef||'—'}</span></div>` : ''}
-            ${o.stage==='失败' ? `<div style="display:flex;gap:12px"><span style="color:var(--text-muted);width:70px">失败原因</span><span style="font-weight:600;color:var(--danger)">${o.lostReason||'—'}</span></div>` : ''}
+            ${o.stage==='已签约' ? `<div style="display:flex;gap:12px"><span style="color:var(--text-muted);width:70px">关联合同</span><span style="font-weight:600;color:${o.contractRef?'var(--primary)':'var(--warning)'}">${o.contractName||o.contractRef||'待关联合同'}</span></div>` : ''}
+            ${o.stage==='失败' ? `<div style="display:flex;gap:12px"><span style="color:var(--text-muted);width:70px">失败原因</span><span style="font-weight:600;color:${o.lostReason?'var(--danger)':'var(--warning)'}">${o.lostReason||'待补原因'}</span></div>` : ''}
           </div>
         </div></div>
         <div class="card"><div class="card-body">
@@ -1409,12 +1407,12 @@ function openStageModal(){
   overlay.id = 'stageModal';
   overlay.innerHTML = `
     <div class="modal-box">
-      <div class="modal-head"><span>阶段推进 · ${o.name}</span><span style="cursor:pointer;color:var(--text-muted)" onclick="closeModal('stageModal')">✕</span></div>
+      <div class="modal-head"><span>调整阶段 · ${o.name}</span><span style="cursor:pointer;color:var(--text-muted)" onclick="closeModal('stageModal')">✕</span></div>
       <div class="modal-body">
         <div>
           <div class="form-label">当前阶段</div>
           <div style="font-size:13px;margin-top:6px;font-weight:600">${cur}（${o.oppStatus||'跟进中'}）</div>
-          <div class="field-hint">V2.1：任意阶段可人工编辑/覆盖（含终态），覆盖须销售总监审批；终态进入即关闭。</div>
+          <div class="field-hint">任意阶段可人工调整（含终态和重开），无需审批，提交后立即生效并记录变更日志；终态进入即关闭。</div>
         </div>
         <div>
           <div class="form-label">目标阶段 <span class="req-star">*</span></div>
@@ -1425,7 +1423,7 @@ function openStageModal(){
       </div>
       <div class="modal-foot">
         <button class="btn btn-secondary btn-sm" onclick="closeModal('stageModal')">取消</button>
-        <button class="btn btn-primary btn-sm" onclick="confirmStageAdvance()">提交（触发审批）</button>
+        <button class="btn btn-primary btn-sm" onclick="confirmStageAdvance()">确认变更</button>
       </div>
     </div>`;
   document.body.appendChild(overlay);
@@ -1493,7 +1491,7 @@ function confirmStageAdvance(){
   o.stage = target;
   o.oppStatus = (target==='已签约'||target==='失败') ? '已关闭' : '跟进中';
   closeModal('stageModal');
-  toast(`阶段已推进至「${target}」（审批流已触发）`);
+  toast(`阶段已调整为「${target}」，变更已立即生效`);
   render();
 }
 
@@ -1503,18 +1501,23 @@ function simulateWin(id){
   const cust = findCustomer(o);
   const list = queryContractsMock(cust?cust.id:'');
   const c = list[0] || null;
-  o.stage='已签约'; o.oppStatus='已关闭';
-  o.contractRef = c?c.contractId:'HT-MANUAL-'+Date.now();
-  o.contractName = c?c.contractName:o.contractRef;
+  if(!c){
+    o.stage='已签约'; o.oppStatus='已关闭'; o.contractRef=''; o.contractName='';
+    o.qbStatus = { type: o.qbStatus?o.qbStatus.type:'投标', status:'中标·待关联合同', at: new Date().toLocaleString('zh-CN') };
+    toast('中标回传 → 已进入「已签约」，合同待补充');
+    render();
+    return;
+  }
+  o.stage='已签约'; o.oppStatus='已关闭'; o.contractRef=c.contractId; o.contractName=c.contractName;
   o.qbStatus = { type: o.qbStatus?o.qbStatus.type:'投标', status:'中标', at: new Date().toLocaleString('zh-CN') };
-  toast('报价与投标子系统回传「中标」→ 商机推进至「已签约」');
+  toast('中标回传已关联合同 → 商机推进至「已签约」');
   render();
 }
 function simulateLose(id){
   const o = getOpp(id); if(!o) return;
-  o.stage='失败'; o.oppStatus='已关闭'; o.lostReason='竞争对手';
-  o.qbStatus = { type: o.qbStatus?o.qbStatus.type:'投标', status:'落标', at: new Date().toLocaleString('zh-CN') };
-  toast('报价与投标子系统回传「落标」→ 商机推进至「失败」');
+  o.stage='失败'; o.oppStatus='已关闭'; o.lostReason='';
+  o.qbStatus = { type: o.qbStatus?o.qbStatus.type:'投标', status:'落标·待补原因', at: new Date().toLocaleString('zh-CN') };
+  toast('落标回传 → 已进入「失败」，失败原因待补充');
   render();
 }
 

@@ -1,0 +1,140 @@
+package portalinvitecompensationworker
+
+import (
+	"context"
+	"errors"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/portalinvite"
+)
+
+var errLeaseLost = errors.New("Portal invite compensation lease was lost")
+
+type taskStore interface {
+	claim(context.Context, string, time.Time, time.Duration, int) ([]portalinvite.CompensationTask, error)
+	completeRole(context.Context, portalinvite.CompensationTask, string, time.Time) error
+	completeMapping(context.Context, portalinvite.CompensationTask, string, portalinvite.PortalMapping, time.Time) error
+	failed(context.Context, portalinvite.CompensationTask, string, time.Time, failure) error
+}
+
+type roleAssigner interface {
+	AssignPortalRole(context.Context, portalinvite.CompensationTask) error
+}
+
+type mappingProvisioner interface {
+	ProvisionMapping(context.Context, portalinvite.CompensationTask) (portalinvite.PortalMapping, error)
+}
+
+type Worker struct {
+	store         taskStore
+	roles         roleAssigner
+	mappings      mappingProvisioner
+	workerID      string
+	pollInterval  time.Duration
+	leaseDuration time.Duration
+	batchSize     int
+	now           func() time.Time
+}
+
+func NewWorker(store taskStore, roles roleAssigner, mappings mappingProvisioner, cfg Config) *Worker {
+	return &Worker{
+		store: store, roles: roles, mappings: mappings, workerID: cfg.WorkerID,
+		pollInterval: cfg.PollInterval, leaseDuration: cfg.LeaseDuration,
+		batchSize: cfg.BatchSize, now: func() time.Time { return time.Now().UTC() },
+	}
+}
+
+func (w *Worker) Run(ctx context.Context) error {
+	if w.store == nil || w.roles == nil || w.mappings == nil {
+		return errors.New("Portal invite compensation worker dependencies are incomplete")
+	}
+	ticker := time.NewTicker(w.pollInterval)
+	defer ticker.Stop()
+	for {
+		if _, err := w.RunOnce(ctx); err != nil && !errors.Is(err, context.Canceled) {
+			log.Printf("Portal invite compensation poll failed: %s", safeSummary(err))
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
+func (w *Worker) RunOnce(ctx context.Context) (int, error) {
+	tasks, err := w.store.claim(ctx, w.workerID, w.now(), w.leaseDuration, w.batchSize)
+	if err != nil {
+		return 0, err
+	}
+	var joined error
+	for i := range tasks {
+		if dispatchErr := w.dispatch(ctx, tasks[i]); dispatchErr != nil {
+			joined = errors.Join(joined, dispatchErr)
+		}
+	}
+	return len(tasks), joined
+}
+
+func (w *Worker) dispatch(ctx context.Context, task portalinvite.CompensationTask) error {
+	if invalidTask(task) {
+		return w.fail(ctx, task, failure{code: "INVALID_TASK", summary: "compensation task is invalid"})
+	}
+	switch task.TaskType {
+	case portalinvite.CompensationRole:
+		if err := w.roles.AssignPortalRole(ctx, task); err != nil {
+			return w.fail(ctx, task, failure{code: "PLATFORM_ROLE_ASSIGN_UNAVAILABLE", summary: "platform role assignment is unavailable"})
+		}
+		return w.store.completeRole(ctx, task, w.workerID, w.now())
+	case portalinvite.CompensationMapping:
+		mapping, err := w.mappings.ProvisionMapping(ctx, task)
+		if err != nil {
+			return w.fail(ctx, task, failure{code: "PORTAL_MAPPING_RETRY_FAILED", summary: "Portal mapping retry failed"})
+		}
+		if strings.TrimSpace(mapping.PortalAccountID) == "" {
+			return w.fail(ctx, task, failure{code: "PORTAL_MAPPING_INVALID_RESPONSE", summary: "Portal mapping response is invalid"})
+		}
+		return w.store.completeMapping(ctx, task, w.workerID, mapping, w.now())
+	default:
+		return w.fail(ctx, task, failure{code: "UNKNOWN_TASK_TYPE", summary: "compensation task type is unsupported"})
+	}
+}
+
+func invalidTask(task portalinvite.CompensationTask) bool {
+	return strings.TrimSpace(task.TenantID) == "" || strings.TrimSpace(task.TaskNo) == "" ||
+		task.CustomerID == 0 || task.ContactID == 0 || strings.TrimSpace(task.PlatformUserID) == "" ||
+		strings.TrimSpace(task.AccountNo) == ""
+}
+
+func (w *Worker) fail(ctx context.Context, task portalinvite.CompensationTask, value failure) error {
+	if err := w.store.failed(ctx, task, w.workerID, w.now(), value); err != nil {
+		return errors.Join(errors.New(value.summary), err)
+	}
+	return errors.New(value.summary)
+}
+
+func safeSummary(err error) string {
+	if errors.Is(err, context.Canceled) {
+		return context.Canceled.Error()
+	}
+	if errors.Is(err, errLeaseLost) {
+		return errLeaseLost.Error()
+	}
+	return "Portal invite compensation processing failed"
+}
+
+type failure struct{ code, summary string }
+
+var retryDelays = [...]time.Duration{time.Minute, 5 * time.Minute, 15 * time.Minute, time.Hour, 3 * time.Hour, 6 * time.Hour}
+
+func failurePlan(now time.Time, completedAttempts uint8) (string, *time.Time) {
+	// The initial execution can be followed by at most six retries: failures one
+	// through six wait; the seventh failed attempt is retained as a dead letter.
+	if completedAttempts > 0 && int(completedAttempts) <= len(retryDelays) {
+		next := now.Add(retryDelays[completedAttempts-1])
+		return portalinvite.CompensationRetryWait, &next
+	}
+	return portalinvite.CompensationDeadLetter, nil
+}

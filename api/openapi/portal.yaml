@@ -1,0 +1,357 @@
+openapi: 3.1.0
+info:
+  title: Customer Portal API
+  version: 0.2.0
+  description: Current Portal browser and machine HTTP surface. External file, risk, project and police Providers remain pending.
+servers:
+  - url: '{origin}/customer-portal'
+    description: PORTAL_PATH_PREFIX defaults to /customer-portal.
+    variables:
+      origin: {default: https://portal.example.invalid}
+tags:
+  - {name: Authentication}
+  - {name: Account}
+  - {name: Project}
+  - {name: Report}
+  - {name: Feedback}
+  - {name: Evaluation}
+  - {name: Filing}
+  - {name: Machine integration}
+paths:
+  /healthz:
+    get: {$ref: '#/components/x-operations/portalHealth'}
+  /auth/login:
+    get: {$ref: '#/components/x-operations/portalLogin'}
+  /activate:
+    get: {$ref: '#/components/x-operations/portalActivate'}
+  /auth/callback:
+    get: {$ref: '#/components/x-operations/portalCallback'}
+  /auth/logout:
+    post: {$ref: '#/components/x-operations/portalLogout'}
+  /api/v1/auth/me:
+    get: {$ref: '#/components/x-operations/portalMe'}
+  /api/v1/capabilities:
+    get: {$ref: '#/components/x-operations/portalCapabilities'}
+  /api/v1/account/security:
+    get: {$ref: '#/components/x-operations/accountSecurity'}
+  /api/v1/account/sessions:
+    get: {$ref: '#/components/x-operations/accountSessions'}
+  /api/v1/account/sessions/{id}:
+    delete: {$ref: '#/components/x-operations/revokeAccountSession'}
+  /api/v1/account/security-events/{id}/ack:
+    post: {$ref: '#/components/x-operations/acknowledgeSecurityEvent'}
+  /api/v1/projects:
+    get: {$ref: '#/components/x-operations/listProjects'}
+  /api/v1/projects/{projectID}:
+    get: {$ref: '#/components/x-operations/getProject'}
+  /api/v1/projects/{projectID}/activities:
+    get: {$ref: '#/components/x-operations/listProjectActivities'}
+  /api/v1/projects/{projectID}/conversation:
+    get: {$ref: '#/components/x-operations/getCurrentConversation'}
+    post: {$ref: '#/components/x-operations/createConversation'}
+  /api/v1/project-conversations/{id}:
+    get: {$ref: '#/components/x-operations/getConversation'}
+  /api/v1/project-conversations/{id}/messages:
+    post: {$ref: '#/components/x-operations/sendConversationMessage'}
+  /api/v1/project-conversations/{id}/read:
+    post: {$ref: '#/components/x-operations/readConversation'}
+  /api/v1/projects/{projectID}/evaluation-eligibility:
+    get: {$ref: '#/components/x-operations/evaluationEligibility'}
+  /api/v1/projects/{projectID}/exports:
+    post: {$ref: '#/components/x-operations/createProjectExport'}
+  /api/v1/project-exports/{id}:
+    get: {$ref: '#/components/x-operations/getProjectExport'}
+  /api/v1/project-exports/{id}/download-grants:
+    post: {$ref: '#/components/x-operations/createProjectExportGrant'}
+  /api/v1/project-exports/{id}/downloads:
+    post: {$ref: '#/components/x-operations/downloadProjectExport'}
+  /api/v1/reports:
+    get: {$ref: '#/components/x-operations/listReports'}
+    post: {$ref: '#/components/x-operations/createReport'}
+  /api/v1/reports/{id}:
+    get: {$ref: '#/components/x-operations/getReport'}
+  /api/v1/report-requests:
+    get: {$ref: '#/components/x-operations/listReportRequests'}
+    post: {$ref: '#/components/x-operations/createReportRequest'}
+  /api/v1/report-requests/{id}:
+    get: {$ref: '#/components/x-operations/getReportRequest'}
+  /api/v1/reports/{id}/download-grants:
+    post: {$ref: '#/components/x-operations/createReportGrant'}
+  /api/v1/report-requests/{id}/download-grants:
+    post: {$ref: '#/components/x-operations/createReportRequestGrant'}
+  /api/v1/reports/{id}/downloads:
+    post: {$ref: '#/components/x-operations/downloadReport'}
+  /api/v1/report-requests/{id}/downloads:
+    post: {$ref: '#/components/x-operations/downloadReportRequest'}
+  /api/v1/report-notifications:
+    get: {$ref: '#/components/x-operations/listReportNotifications'}
+  /api/v1/report-notifications/unread-count:
+    get: {$ref: '#/components/x-operations/reportNotificationUnreadCount'}
+  /api/v1/report-notifications/{id}/read:
+    post: {$ref: '#/components/x-operations/readReportNotification'}
+  /api/v1/report-risk-alerts:
+    get: {$ref: '#/components/x-operations/listOwnedReportRiskAlerts'}
+  /api/v1/feedbacks:
+    get: {$ref: '#/components/x-operations/listFeedbacks'}
+    post: {$ref: '#/components/x-operations/createFeedback'}
+  /api/v1/feedbacks/{id}:
+    get: {$ref: '#/components/x-operations/getFeedback'}
+  /api/v1/feedbacks/{id}/messages:
+    post: {$ref: '#/components/x-operations/addFeedbackMessage'}
+  /api/v1/feedbacks/{id}/close:
+    post: {$ref: '#/components/x-operations/closeFeedback'}
+  /api/v1/evaluations:
+    post: {$ref: '#/components/x-operations/createEvaluation'}
+  /api/v1/evaluations/{id}:
+    get: {$ref: '#/components/x-operations/getEvaluation'}
+  /api/v1/filings:
+    get: {$ref: '#/components/x-operations/listFilings'}
+    post: {$ref: '#/components/x-operations/createFiling'}
+  /api/v1/filings/{id}:
+    get: {$ref: '#/components/x-operations/getFiling'}
+  /api/v1/filings/{id}/sections/{code}:
+    put: {$ref: '#/components/x-operations/saveFilingSection'}
+  /api/v1/filings/{id}/matrix/{code}:
+    put: {$ref: '#/components/x-operations/saveFilingMatrix'}
+  /api/v1/filings/{id}/validate:
+    post: {$ref: '#/components/x-operations/validateFiling'}
+  /api/v1/filings/{id}/submit:
+    post: {$ref: '#/components/x-operations/submitFiling'}
+  /api/v1/filings/{id}/material-uploads:
+    post: {$ref: '#/components/x-operations/createFilingMaterialUpload'}
+  /api/v1/filings/{id}/materials/{materialID}/complete:
+    post: {$ref: '#/components/x-operations/completeFilingMaterialUpload'}
+  /api/v1/filings/{id}/exports:
+    post: {$ref: '#/components/x-operations/requestFilingExport'}
+  /internal/accounts/provision:
+    post: {$ref: '#/components/x-operations/provisionPortalAccount'}
+  /internal/accounts/disable:
+    post: {$ref: '#/components/x-operations/disablePortalAccount'}
+  /internal/report-callbacks:
+    post: {$ref: '#/components/x-operations/reportCallback'}
+  /internal/report-risk-alerts:
+    get: {$ref: '#/components/x-operations/listReportRiskAlertsForReview'}
+  /internal/report-risk-alerts/{id}/review:
+    post: {$ref: '#/components/x-operations/reviewReportRiskAlert'}
+  /internal/feedbacks:
+    get: {$ref: '#/components/x-operations/listFeedbacksForOperator'}
+  /internal/feedbacks/{id}/accept:
+    post: {$ref: '#/components/x-operations/acceptFeedback'}
+  /internal/feedbacks/{id}/respond:
+    post: {$ref: '#/components/x-operations/respondFeedback'}
+  /internal/feedbacks/{id}/request-info:
+    post: {$ref: '#/components/x-operations/requestFeedbackInfo'}
+  /internal/feedbacks/{id}/note:
+    post: {$ref: '#/components/x-operations/noteFeedback'}
+  /internal/feedbacks/{id}/resolve:
+    post: {$ref: '#/components/x-operations/resolveFeedback'}
+  /internal/feedbacks/{id}/reject:
+    post: {$ref: '#/components/x-operations/rejectFeedback'}
+  /internal/evaluations/statistics:
+    get: {$ref: '#/components/x-operations/evaluationStatistics'}
+  /internal/evaluations/low-score-notices:
+    get: {$ref: '#/components/x-operations/listEvaluationNotices'}
+  /internal/evaluations/{id}/low-score-notice/read:
+    post: {$ref: '#/components/x-operations/readEvaluationNotice'}
+  /internal/filings/{id}/unlock:
+    post: {$ref: '#/components/x-operations/unlockFiling'}
+  /internal/filing-material-scan-callbacks:
+    post: {$ref: '#/components/x-operations/filingMaterialScanCallback'}
+  /internal/customers/{customerID}/projects:
+    get: {$ref: '#/components/x-operations/listProjectHistoryForCRM'}
+  /internal/project-conversations:
+    get: {$ref: '#/components/x-operations/listConversationsForManager'}
+  /internal/project-conversations/{id}:
+    get: {$ref: '#/components/x-operations/getConversationForManager'}
+  /internal/project-conversations/{id}/messages:
+    post: {$ref: '#/components/x-operations/sendConversationMessageForManager'}
+  /internal/project-conversations/{id}/read:
+    post: {$ref: '#/components/x-operations/readConversationForManager'}
+components:
+  securitySchemes:
+    portalSession: {type: apiKey, in: cookie, name: customer_portal_session, description: OIDC-backed server session; configured name may differ.}
+    machineJWT:
+      type: oauth2
+      description: Platform application JWT with issuer/audience/tenant/scope/time/nonce verification. Account routes additionally require the configured exact CRM OAuth client subject.
+      flows:
+        clientCredentials:
+          tokenUrl: https://platform.example.invalid/oauth2/token
+          scopes:
+            portal.identity_mapping.provision: Provision the local subject/customer mapping.
+            report.callback.write: Apply report status callbacks.
+            portal.report.risk.manage: Review report risk alerts.
+            portal.feedback.manage: Operate customer feedback.
+            portal.evaluation.read: Read evaluation statistics and notices.
+            portal.filing.unlock: Unlock a filing with an audited reason.
+            portal.filing_material.scan.write: Apply material scan results.
+            portal.project_history.read: Read customer-scoped project snapshots.
+            portal.project_message.manage: Operate project conversations.
+  parameters:
+    ID: {name: id, in: path, required: true, schema: {type: string, minLength: 1}}
+    ProjectID: {name: projectID, in: path, required: true, schema: {type: string, minLength: 1}}
+    IdempotencyKey: {name: Idempotency-Key, in: header, required: true, schema: {type: string, minLength: 1, maxLength: 128}}
+    ExpectedVersion:
+      name: expected_version
+      in: query
+      required: false
+      deprecated: true
+      description: Not consumed as a query parameter. Version fields are in request bodies; this component exists only to explicitly prohibit If-Match substitution.
+      schema: {type: integer, format: uint64}
+  schemas:
+    Envelope:
+      type: object
+      required: [code, message, request_id]
+      properties: {code: {type: string}, message: {type: string}, request_id: {type: string}, data: {}, details: {}}
+    RuntimeCapability:
+      type: object
+      additionalProperties: false
+      required: [available, mode]
+      properties:
+        available: {type: boolean}
+        mode: {type: string, enum: [READY, UNAVAILABLE, LOCAL_ONLY]}
+        reason_code: {type: string}
+    PortalCapabilities:
+      type: object
+      additionalProperties: false
+      required: [report_request_submission, project_export, report_download, filing_material_upload, filing_export, filing_police_submission]
+      properties:
+        report_request_submission: {$ref: '#/components/schemas/RuntimeCapability'}
+        project_export: {$ref: '#/components/schemas/RuntimeCapability'}
+        report_download: {$ref: '#/components/schemas/RuntimeCapability'}
+        filing_material_upload: {$ref: '#/components/schemas/RuntimeCapability'}
+        filing_export: {$ref: '#/components/schemas/RuntimeCapability'}
+        filing_police_submission: {$ref: '#/components/schemas/RuntimeCapability'}
+    PortalCapabilitiesEnvelope:
+      type: object
+      required: [code, message, request_id, data]
+      properties:
+        code: {type: string}
+        message: {type: string}
+        request_id: {type: string}
+        data: {$ref: '#/components/schemas/PortalCapabilities'}
+    VersionBody:
+      type: object
+      required: [expected_version]
+      properties: {expected_version: {type: integer, format: uint64, minimum: 1}}
+    CreateReport:
+      type: object
+      required: [project_id, report_type, reason, receive_email]
+      properties: {project_id: {type: string}, report_type: {type: string}, reason: {type: string}, receive_email: {type: string, format: email}}
+    CreateFiling:
+      type: object
+      required: [project_id]
+      properties: {project_id: {type: string}}
+    SaveFilingSection:
+      type: object
+      required: [expected_version, data]
+      properties: {expected_version: {type: integer, format: uint64, minimum: 1}, data: {}}
+    SaveFilingMatrix:
+      type: object
+      required: [expected_filing_version, expected_matrix_version, row_code, column_code, selected]
+      properties:
+        expected_filing_version: {type: integer, format: uint64, minimum: 1}
+        expected_matrix_version: {type: integer, format: uint64}
+        row_code: {type: string}
+        column_code: {type: string}
+        selected: {type: boolean}
+  responses:
+    OK: {description: Successful JSON envelope, content: {application/json: {schema: {$ref: '#/components/schemas/Envelope'}}}}
+    Created: {description: Created JSON envelope, content: {application/json: {schema: {$ref: '#/components/schemas/Envelope'}}}}
+    Error: {description: Error envelope, content: {application/json: {schema: {$ref: '#/components/schemas/Envelope'}}}}
+    Binary:
+      description: Authorized binary stream; no JSON envelope on success.
+      content: {application/octet-stream: {schema: {type: string, contentEncoding: binary}}}
+  requestBodies:
+    Version: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/VersionBody'}}}}
+    CreateReport: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/CreateReport'}}}}
+    CreateFiling: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/CreateFiling'}}}}
+    SaveFilingSection: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/SaveFilingSection'}}}}
+    SaveFilingMatrix: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/SaveFilingMatrix'}}}}
+  x-operations:
+    portalHealth: {operationId: portalHealth, tags: [Authentication], security: [], responses: {'200': {description: Healthy}, '503': {description: Database unhealthy}}}
+    portalLogin: {operationId: portalLogin, tags: [Authentication], security: [], responses: {'302': {description: Redirect to platform OIDC Authorization Code + PKCE}, '400': {$ref: '#/components/responses/Error'}}}
+    portalActivate: {operationId: portalActivate, tags: [Authentication], security: [], parameters: [{name: token, in: query, required: true, schema: {type: string}}], responses: {'302': {description: Validate invite and redirect to platform OIDC}, '400': {$ref: '#/components/responses/Error'}}}
+    portalCallback: {operationId: portalCallback, tags: [Authentication], security: [], responses: {'302': {description: Establish server session after sub-to-customer binding}, '401': {$ref: '#/components/responses/Error'}}}
+    portalLogout: {operationId: portalLogout, tags: [Authentication], security: [{portalSession: []}], responses: {'200': {$ref: '#/components/responses/OK'}, '401': {$ref: '#/components/responses/Error'}}}
+    portalMe: &portalRead {operationId: portalMe, tags: [Account], security: [{portalSession: []}], responses: {'200': {$ref: '#/components/responses/OK'}, '400': {$ref: '#/components/responses/Error'}, '401': {$ref: '#/components/responses/Error'}, '403': {$ref: '#/components/responses/Error'}, '404': {$ref: '#/components/responses/Error'}, '409': {$ref: '#/components/responses/Error'}, '422': {$ref: '#/components/responses/Error'}, '503': {$ref: '#/components/responses/Error'}}}
+    portalCapabilities:
+      operationId: portalCapabilities
+      tags: [Account]
+      security: [{portalSession: []}]
+      description: Reports bounded local dependency-injection state without network probes or configuration values. Business action endpoints remain authoritative.
+      responses:
+        '200':
+          description: Current session-scoped runtime capabilities.
+          headers: {Cache-Control: {schema: {type: string}, description: Always no-store.}}
+          content: {application/json: {schema: {$ref: '#/components/schemas/PortalCapabilitiesEnvelope'}}}
+        '401': {$ref: '#/components/responses/Error'}
+    accountSecurity: {<<: *portalRead, operationId: accountSecurity, x-permission: account.security.manage}
+    accountSessions: {<<: *portalRead, operationId: accountSessions, x-permission: account.security.manage}
+    revokeAccountSession: {<<: *portalRead, operationId: revokeAccountSession, x-permission: account.security.manage, parameters: [{$ref: '#/components/parameters/ID'}]}
+    acknowledgeSecurityEvent: {<<: *portalRead, operationId: acknowledgeSecurityEvent, x-permission: account.security.manage, parameters: [{$ref: '#/components/parameters/ID'}]}
+    listProjects: &projectRead {<<: *portalRead, operationId: listProjects, tags: [Project], x-permission: project.read, description: Project upstream Provider remains pending; current source fails closed.}
+    getProject: {<<: *projectRead, operationId: getProject, parameters: [{$ref: '#/components/parameters/ProjectID'}]}
+    listProjectActivities: {<<: *projectRead, operationId: listProjectActivities, parameters: [{$ref: '#/components/parameters/ProjectID'}]}
+    getCurrentConversation: {<<: *projectRead, operationId: getCurrentConversation, x-permission: project.message.read, parameters: [{$ref: '#/components/parameters/ProjectID'}]}
+    createConversation: {<<: *projectRead, operationId: createConversation, x-permission: project.message.send, parameters: [{$ref: '#/components/parameters/ProjectID'}, {$ref: '#/components/parameters/IdempotencyKey'}]}
+    getConversation: {<<: *projectRead, operationId: getConversation, x-permission: project.message.read, parameters: [{$ref: '#/components/parameters/ID'}]}
+    sendConversationMessage: {<<: *projectRead, operationId: sendConversationMessage, x-permission: project.message.send, parameters: [{$ref: '#/components/parameters/ID'}, {$ref: '#/components/parameters/IdempotencyKey'}]}
+    readConversation: {<<: *projectRead, operationId: readConversation, x-permission: project.message.read, parameters: [{$ref: '#/components/parameters/ID'}]}
+    evaluationEligibility: {<<: *projectRead, operationId: evaluationEligibility, x-permission: evaluation.read or evaluation.create, parameters: [{$ref: '#/components/parameters/ProjectID'}]}
+    createProjectExport: {<<: *projectRead, operationId: createProjectExport, x-permission: project.export, parameters: [{$ref: '#/components/parameters/ProjectID'}, {$ref: '#/components/parameters/IdempotencyKey'}]}
+    getProjectExport: {<<: *projectRead, operationId: getProjectExport, x-permission: project.export, parameters: [{$ref: '#/components/parameters/ID'}]}
+    createProjectExportGrant: {<<: *projectRead, operationId: createProjectExportGrant, x-permission: project.export, parameters: [{$ref: '#/components/parameters/ID'}]}
+    downloadProjectExport: {operationId: downloadProjectExport, tags: [Project], x-permission: project.export, security: [{portalSession: []}], parameters: [{$ref: '#/components/parameters/ID'}, {name: X-Project-Export-Download-Token, in: header, required: true, schema: {type: string}}], responses: {'200': {$ref: '#/components/responses/Binary'}, '401': {$ref: '#/components/responses/Error'}, '403': {$ref: '#/components/responses/Error'}, '404': {$ref: '#/components/responses/Error'}, '409': {$ref: '#/components/responses/Error'}}}
+    listReports: &reportRead {<<: *portalRead, operationId: listReports, tags: [Report], x-permission: report.read}
+    getReport: {<<: *reportRead, operationId: getReport, parameters: [{$ref: '#/components/parameters/ID'}]}
+    createReport: {<<: *reportRead, operationId: createReport, x-permission: report.request, parameters: [{$ref: '#/components/parameters/IdempotencyKey'}], requestBody: {$ref: '#/components/requestBodies/CreateReport'}}
+    listReportRequests: {<<: *reportRead, operationId: listReportRequests, description: 'Compatibility alias of /reports.'}
+    getReportRequest: {<<: *reportRead, operationId: getReportRequest, parameters: [{$ref: '#/components/parameters/ID'}], description: 'Compatibility alias of /reports/{id}.'}
+    createReportRequest: {<<: *reportRead, operationId: createReportRequest, x-permission: report.request, parameters: [{$ref: '#/components/parameters/IdempotencyKey'}], requestBody: {$ref: '#/components/requestBodies/CreateReport'}, description: 'Compatibility alias of /reports.'}
+    createReportGrant: {<<: *reportRead, operationId: createReportGrant, x-permission: report.download, parameters: [{$ref: '#/components/parameters/ID'}, {$ref: '#/components/parameters/IdempotencyKey'}]}
+    createReportRequestGrant: {<<: *reportRead, operationId: createReportRequestGrant, x-permission: report.download, parameters: [{$ref: '#/components/parameters/ID'}, {$ref: '#/components/parameters/IdempotencyKey'}]}
+    downloadReport: &reportDownload {operationId: downloadReport, tags: [Report], x-permission: report.download, security: [{portalSession: []}], parameters: [{$ref: '#/components/parameters/ID'}, {name: X-Report-Download-Token, in: header, required: true, schema: {type: string}}], responses: {'200': {$ref: '#/components/responses/Binary'}, '401': {$ref: '#/components/responses/Error'}, '403': {$ref: '#/components/responses/Error'}, '404': {$ref: '#/components/responses/Error'}, '409': {$ref: '#/components/responses/Error'}, '503': {$ref: '#/components/responses/Error'}}, description: Object reader, decryption, watermark and risk gateway Providers remain pending; unavailable configuration fails closed.}
+    downloadReportRequest: {<<: *reportDownload, operationId: downloadReportRequest}
+    listReportNotifications: {<<: *reportRead, operationId: listReportNotifications}
+    reportNotificationUnreadCount: {<<: *reportRead, operationId: reportNotificationUnreadCount}
+    readReportNotification: {<<: *reportRead, operationId: readReportNotification, parameters: [{$ref: '#/components/parameters/ID'}]}
+    listOwnedReportRiskAlerts: {<<: *reportRead, operationId: listOwnedReportRiskAlerts}
+    listFeedbacks: &feedbackRead {<<: *portalRead, operationId: listFeedbacks, tags: [Feedback], x-permission: feedback.read}
+    getFeedback: {<<: *feedbackRead, operationId: getFeedback, parameters: [{$ref: '#/components/parameters/ID'}]}
+    createFeedback: {<<: *feedbackRead, operationId: createFeedback, x-permission: feedback.create, parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]}
+    addFeedbackMessage: {<<: *feedbackRead, operationId: addFeedbackMessage, x-permission: feedback.reply, parameters: [{$ref: '#/components/parameters/ID'}, {$ref: '#/components/parameters/IdempotencyKey'}]}
+    closeFeedback: {<<: *feedbackRead, operationId: closeFeedback, x-permission: feedback.reply, parameters: [{$ref: '#/components/parameters/ID'}, {$ref: '#/components/parameters/IdempotencyKey'}]}
+    createEvaluation: &evaluationRead {<<: *portalRead, operationId: createEvaluation, tags: [Evaluation], x-permission: evaluation.create, parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]}
+    getEvaluation: {<<: *evaluationRead, operationId: getEvaluation, x-permission: evaluation.read, parameters: [{$ref: '#/components/parameters/ID'}]}
+    listFilings: &filingRead {<<: *portalRead, operationId: listFilings, tags: [Filing], x-permission: filing.read}
+    createFiling: {<<: *filingRead, operationId: createFiling, x-permission: filing.create, parameters: [{$ref: '#/components/parameters/IdempotencyKey'}], requestBody: {$ref: '#/components/requestBodies/CreateFiling'}}
+    getFiling: {<<: *filingRead, operationId: getFiling, parameters: [{$ref: '#/components/parameters/ID'}]}
+    saveFilingSection: {<<: *filingRead, operationId: saveFilingSection, x-permission: filing.update, parameters: [{$ref: '#/components/parameters/ID'}, {name: code, in: path, required: true, schema: {type: string}}, {$ref: '#/components/parameters/IdempotencyKey'}], requestBody: {$ref: '#/components/requestBodies/SaveFilingSection'}}
+    saveFilingMatrix: {<<: *filingRead, operationId: saveFilingMatrix, x-permission: filing.update, parameters: [{$ref: '#/components/parameters/ID'}, {name: code, in: path, required: true, schema: {type: string}}, {$ref: '#/components/parameters/IdempotencyKey'}], requestBody: {$ref: '#/components/requestBodies/SaveFilingMatrix'}}
+    validateFiling: {<<: *filingRead, operationId: validateFiling, parameters: [{$ref: '#/components/parameters/ID'}]}
+    submitFiling: {<<: *filingRead, operationId: submitFiling, x-permission: filing.submit, parameters: [{$ref: '#/components/parameters/ID'}, {$ref: '#/components/parameters/IdempotencyKey'}], requestBody: {$ref: '#/components/requestBodies/Version'}, description: Formal 2025 police submission contract remains pending; accepted local work waits for the configured Provider.}
+    createFilingMaterialUpload: {<<: *filingRead, operationId: createFilingMaterialUpload, x-permission: filing.update, parameters: [{$ref: '#/components/parameters/ID'}, {$ref: '#/components/parameters/IdempotencyKey'}], description: Object store and scanner Providers remain pending; unavailable configuration fails closed.}
+    completeFilingMaterialUpload: {<<: *filingRead, operationId: completeFilingMaterialUpload, x-permission: filing.update, parameters: [{$ref: '#/components/parameters/ID'}, {name: materialID, in: path, required: true, schema: {type: string}}], requestBody: {$ref: '#/components/requestBodies/Version'}}
+    requestFilingExport: {<<: *filingRead, operationId: requestFilingExport, parameters: [{$ref: '#/components/parameters/ID'}], description: Current handler intentionally returns PORTAL_FILING_EXPORT_NOT_CONFIGURED.}
+    provisionPortalAccount: &machineProvision {operationId: provisionPortalAccount, tags: [Machine integration], security: [{machineJWT: [portal.identity_mapping.provision]}], x-scope: portal.identity_mapping.provision, x-oauth-client-subject-config: PORTAL_CRM_PROVISION_CLIENT_SUBJECT, responses: {'200': {$ref: '#/components/responses/OK'}, '201': {$ref: '#/components/responses/Created'}, '400': {$ref: '#/components/responses/Error'}, '401': {$ref: '#/components/responses/Error'}, '403': {$ref: '#/components/responses/Error'}, '409': {$ref: '#/components/responses/Error'}}}
+    disablePortalAccount: {<<: *machineProvision, operationId: disablePortalAccount, security: [{machineJWT: [portal.identity_mapping.disable]}], x-scope: portal.identity_mapping.disable, x-oauth-client-subject-config: PORTAL_CRM_DISABLE_CLIENT_SUBJECT, parameters: [{$ref: '#/components/parameters/IdempotencyKey'}], description: Atomically disables the exact tenant/customer/subject mapping, revokes all local sessions, and commits a minimized auth audit event. Exact business-idempotency replays return the original result; conflicting payloads fail with 409.}
+    reportCallback: {<<: *machineProvision, operationId: reportCallback, x-scope: report.callback.write, security: [{machineJWT: [report.callback.write]}], parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]}
+    listReportRiskAlertsForReview: {<<: *machineProvision, operationId: listReportRiskAlertsForReview, x-scope: portal.report.risk.manage, security: [{machineJWT: [portal.report.risk.manage]}]}
+    reviewReportRiskAlert: {<<: *machineProvision, operationId: reviewReportRiskAlert, x-scope: portal.report.risk.manage, security: [{machineJWT: [portal.report.risk.manage]}], parameters: [{$ref: '#/components/parameters/ID'}, {$ref: '#/components/parameters/IdempotencyKey'}]}
+    listFeedbacksForOperator: &machineFeedback {<<: *machineProvision, operationId: listFeedbacksForOperator, x-scope: portal.feedback.manage, security: [{machineJWT: [portal.feedback.manage]}]}
+    acceptFeedback: {<<: *machineFeedback, operationId: acceptFeedback, parameters: [{$ref: '#/components/parameters/ID'}, {$ref: '#/components/parameters/IdempotencyKey'}]}
+    respondFeedback: {<<: *machineFeedback, operationId: respondFeedback, parameters: [{$ref: '#/components/parameters/ID'}, {$ref: '#/components/parameters/IdempotencyKey'}]}
+    requestFeedbackInfo: {<<: *machineFeedback, operationId: requestFeedbackInfo, parameters: [{$ref: '#/components/parameters/ID'}, {$ref: '#/components/parameters/IdempotencyKey'}]}
+    noteFeedback: {<<: *machineFeedback, operationId: noteFeedback, parameters: [{$ref: '#/components/parameters/ID'}, {$ref: '#/components/parameters/IdempotencyKey'}]}
+    resolveFeedback: {<<: *machineFeedback, operationId: resolveFeedback, parameters: [{$ref: '#/components/parameters/ID'}, {$ref: '#/components/parameters/IdempotencyKey'}]}
+    rejectFeedback: {<<: *machineFeedback, operationId: rejectFeedback, parameters: [{$ref: '#/components/parameters/ID'}, {$ref: '#/components/parameters/IdempotencyKey'}]}
+    evaluationStatistics: &machineEvaluation {<<: *machineProvision, operationId: evaluationStatistics, x-scope: portal.evaluation.read, security: [{machineJWT: [portal.evaluation.read]}]}
+    listEvaluationNotices: {<<: *machineEvaluation, operationId: listEvaluationNotices}
+    readEvaluationNotice: {<<: *machineEvaluation, operationId: readEvaluationNotice, parameters: [{$ref: '#/components/parameters/ID'}]}
+    unlockFiling: {<<: *machineProvision, operationId: unlockFiling, x-scope: portal.filing.unlock, security: [{machineJWT: [portal.filing.unlock]}], parameters: [{$ref: '#/components/parameters/ID'}, {$ref: '#/components/parameters/IdempotencyKey'}]}
+    filingMaterialScanCallback: {<<: *machineProvision, operationId: filingMaterialScanCallback, x-scope: portal.filing_material.scan.write, security: [{machineJWT: [portal.filing_material.scan.write]}]}
+    listProjectHistoryForCRM: {<<: *machineProvision, operationId: listProjectHistoryForCRM, x-scope: portal.project_history.read, security: [{machineJWT: [portal.project_history.read]}], parameters: [{name: customerID, in: path, required: true, schema: {type: integer, format: uint64, minimum: 1}}]}
+    listConversationsForManager: &machineMessage {<<: *machineProvision, operationId: listConversationsForManager, x-scope: portal.project_message.manage, security: [{machineJWT: [portal.project_message.manage]}]}
+    getConversationForManager: {<<: *machineMessage, operationId: getConversationForManager, parameters: [{$ref: '#/components/parameters/ID'}]}
+    sendConversationMessageForManager: {<<: *machineMessage, operationId: sendConversationMessageForManager, parameters: [{$ref: '#/components/parameters/ID'}]}
+    readConversationForManager: {<<: *machineMessage, operationId: readConversationForManager, parameters: [{$ref: '#/components/parameters/ID'}]}

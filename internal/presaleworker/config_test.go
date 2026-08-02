@@ -1,0 +1,34 @@
+package presaleworker
+
+import (
+	"strings"
+	"testing"
+)
+
+func setValidConfig(t *testing.T) {
+	t.Helper()
+	t.Setenv("MYSQL_DSN", "crm:test@tcp(localhost:3306)/crm")
+	t.Setenv("APPROVAL_TOKEN_URL", "https://identity.example/token")
+	t.Setenv("APPROVAL_CLIENT_ID", "approval-client")
+	t.Setenv("APPROVAL_CLIENT_SECRET", "secret")
+	t.Setenv("APPROVAL_START_URL", "https://approval.example/start")
+	t.Setenv("APPROVAL_ACTION_URL", "https://approval.example/action")
+	t.Setenv("PMS_TOKEN_URL", "https://identity.example/token")
+	t.Setenv("PMS_CLIENT_ID", "pms-client")
+	t.Setenv("PMS_CLIENT_SECRET", "secret")
+	t.Setenv("PMS_WORKLOG_URL", "https://pms.example/worklogs")
+}
+
+func TestLoadConfigHeartbeatWindowCoversPollTimeoutAndJitter(t *testing.T) {
+	setValidConfig(t)
+	t.Setenv("PRESALE_WORKER_POLL_INTERVAL", "10s")
+	t.Setenv("PRESALE_WORKER_HEARTBEAT_MAX_AGE", "15s")
+	if _, err := LoadConfig(); err == nil || !strings.Contains(err.Error(), "integration timeout and jitter") {
+		t.Fatalf("short freshness window error=%v", err)
+	}
+	t.Setenv("PRESALE_WORKER_HEARTBEAT_MAX_AGE", "20s")
+	config, err := LoadConfig()
+	if err != nil || config.HeartbeatMaxAge.String() != "20s" {
+		t.Fatalf("config=%+v err=%v", config, err)
+	}
+}

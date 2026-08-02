@@ -1,0 +1,151 @@
+package presaleworker
+
+import (
+	"fmt"
+	"net/url"
+	"os"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/integrationhttp"
+)
+
+// Config deliberately uses separate OAuth clients for approval and PMS so a
+// credential can never gain both integration scopes.
+type Config struct {
+	MySQLDSN        string
+	WorkerID        string
+	PollInterval    time.Duration
+	LeaseDuration   time.Duration
+	HeartbeatMaxAge time.Duration
+	BatchSize       int
+	Approval        HTTPPortConfig
+	PMS             HTTPPortConfig
+}
+
+type HTTPPortConfig struct {
+	TokenURL     string
+	ClientID     string
+	ClientSecret string
+	Scope        string
+	StartURL     string
+	ActionURL    string
+	PublishURL   string
+	TLS          integrationhttp.TLSOptions
+}
+
+func LoadConfig() (Config, error) {
+	approvalRequireMTLS, err := boolEnv("APPROVAL_TLS_REQUIRE_MTLS", false)
+	if err != nil {
+		return Config{}, fmt.Errorf("APPROVAL_TLS_REQUIRE_MTLS: %w", err)
+	}
+	pmsRequireMTLS, err := boolEnv("PMS_TLS_REQUIRE_MTLS", false)
+	if err != nil {
+		return Config{}, fmt.Errorf("PMS_TLS_REQUIRE_MTLS: %w", err)
+	}
+	cfg := Config{
+		MySQLDSN:        os.Getenv("MYSQL_DSN"),
+		WorkerID:        env("PRESALE_WORKER_ID", hostname()),
+		PollInterval:    durationEnv("PRESALE_WORKER_POLL_INTERVAL", time.Second),
+		LeaseDuration:   durationEnv("PRESALE_WORKER_LEASE_DURATION", 30*time.Second),
+		HeartbeatMaxAge: durationEnv("PRESALE_WORKER_HEARTBEAT_MAX_AGE", 15*time.Second),
+		BatchSize:       intEnv("PRESALE_WORKER_BATCH_SIZE", 20),
+		Approval: HTTPPortConfig{TokenURL: os.Getenv("APPROVAL_TOKEN_URL"), ClientID: os.Getenv("APPROVAL_CLIENT_ID"), ClientSecret: os.Getenv("APPROVAL_CLIENT_SECRET"), Scope: env("APPROVAL_SCOPE", "presale.approval.write"), StartURL: os.Getenv("APPROVAL_START_URL"), ActionURL: os.Getenv("APPROVAL_ACTION_URL"), TLS: integrationhttp.TLSOptions{
+			RootCAFile: os.Getenv("APPROVAL_TLS_ROOT_CA_FILE"), ClientCertFile: os.Getenv("APPROVAL_TLS_CLIENT_CERT_FILE"), ClientKeyFile: os.Getenv("APPROVAL_TLS_CLIENT_KEY_FILE"), ServerName: os.Getenv("APPROVAL_TLS_SERVER_NAME"), RequireMTLS: approvalRequireMTLS,
+		}},
+		PMS: HTTPPortConfig{TokenURL: os.Getenv("PMS_TOKEN_URL"), ClientID: os.Getenv("PMS_CLIENT_ID"), ClientSecret: os.Getenv("PMS_CLIENT_SECRET"), Scope: env("PMS_SCOPE", "presale.worklog.write"), PublishURL: os.Getenv("PMS_WORKLOG_URL"), TLS: integrationhttp.TLSOptions{
+			RootCAFile: os.Getenv("PMS_TLS_ROOT_CA_FILE"), ClientCertFile: os.Getenv("PMS_TLS_CLIENT_CERT_FILE"), ClientKeyFile: os.Getenv("PMS_TLS_CLIENT_KEY_FILE"), ServerName: os.Getenv("PMS_TLS_SERVER_NAME"), RequireMTLS: pmsRequireMTLS,
+		}},
+	}
+	if cfg.MySQLDSN == "" {
+		return Config{}, fmt.Errorf("MYSQL_DSN is required")
+	}
+	if cfg.WorkerID == "" || cfg.PollInterval <= 0 || cfg.LeaseDuration < 10*time.Second || cfg.BatchSize < 1 || cfg.BatchSize > 100 {
+		return Config{}, fmt.Errorf("invalid worker scheduling configuration")
+	}
+	// HTTP ports have a hard five-second request timeout. Per-event heartbeat
+	// refresh plus five seconds of scheduling/DB jitter bounds false stale
+	// detection without pretending that configuration itself proves liveness.
+	if cfg.HeartbeatMaxAge < cfg.PollInterval+10*time.Second || cfg.HeartbeatMaxAge > 5*time.Minute {
+		return Config{}, fmt.Errorf("PRESALE_WORKER_HEARTBEAT_MAX_AGE must cover poll interval, integration timeout and jitter")
+	}
+	if err := validatePort("approval", cfg.Approval, true); err != nil {
+		return Config{}, err
+	}
+	if err := validatePort("PMS", cfg.PMS, false); err != nil {
+		return Config{}, err
+	}
+	return cfg, nil
+}
+
+func validatePort(name string, cfg HTTPPortConfig, approval bool) error {
+	required := map[string]string{"token URL": cfg.TokenURL, "client ID": cfg.ClientID, "client secret": cfg.ClientSecret, "scope": cfg.Scope}
+	if approval {
+		required["start URL"], required["action URL"] = cfg.StartURL, cfg.ActionURL
+	} else {
+		required["publish URL"] = cfg.PublishURL
+	}
+	for label, value := range required {
+		if strings.TrimSpace(value) == "" || value != strings.TrimSpace(value) {
+			return fmt.Errorf("%s %s is required", name, label)
+		}
+	}
+	expectedScope := "presale.worklog.write"
+	endpoints := []string{cfg.TokenURL, cfg.PublishURL}
+	if approval {
+		expectedScope = "presale.approval.write"
+		endpoints = []string{cfg.TokenURL, cfg.StartURL, cfg.ActionURL}
+	}
+	if cfg.Scope != expectedScope {
+		return fmt.Errorf("%s scope must be %s", name, expectedScope)
+	}
+	for _, endpoint := range endpoints {
+		parsed, err := url.ParseRequestURI(endpoint)
+		if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+			return fmt.Errorf("%s endpoint must be a valid HTTPS URL without credentials, query or fragment", name)
+		}
+	}
+	if err := cfg.TLS.ValidateEndpoints(endpoints...); err != nil {
+		return fmt.Errorf("%s TLS: %w", name, err)
+	}
+	return nil
+}
+
+func boolEnv(key string, fallback bool) (bool, error) {
+	value := os.Getenv(key)
+	if value == "" {
+		return fallback, nil
+	}
+	return strconv.ParseBool(value)
+}
+
+func env(key, fallback string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return fallback
+}
+func hostname() string { value, _ := os.Hostname(); return value }
+func durationEnv(key string, fallback time.Duration) time.Duration {
+	value := os.Getenv(key)
+	if value == "" {
+		return fallback
+	}
+	parsed, err := time.ParseDuration(value)
+	if err != nil {
+		return -1
+	}
+	return parsed
+}
+func intEnv(key string, fallback int) int {
+	value := os.Getenv(key)
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return -1
+	}
+	return parsed
+}

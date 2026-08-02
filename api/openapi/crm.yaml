@@ -1,0 +1,593 @@
+openapi: 3.1.0
+info:
+  title: Customer and Opportunity CRM API
+  version: 0.2.0
+  description: |-
+    The current CRM production HTTP surface. JSON operations use the common
+    envelope. External Provider contracts are intentionally out of scope and
+    remain pending until their owning systems publish signed contracts.
+servers:
+  - url: '{origin}/customer-opportunity'
+    description: APP_PATH_PREFIX defaults to /customer-opportunity.
+    variables:
+      origin: {default: 'https://crm.example.invalid'}
+tags:
+  - {name: Authentication}
+  - {name: Owner directory}
+  - {name: Customer}
+  - {name: Opportunity}
+  - {name: Presale}
+  - {name: Notification}
+  - {name: Portal invite}
+  - {name: Machine integration}
+paths:
+  /healthz:
+    get: {$ref: '#/components/x-operations/crmHealth'}
+  /auth/login:
+    get: {$ref: '#/components/x-operations/crmLogin'}
+  /auth/callback:
+    get: {$ref: '#/components/x-operations/crmCallback'}
+  /auth/logout:
+    post: {$ref: '#/components/x-operations/crmLogout'}
+  /api/v1/auth/me:
+    get: {$ref: '#/components/x-operations/crmMe'}
+  /api/v1/capabilities:
+    get: {$ref: '#/components/x-operations/getRuntimeCapabilities'}
+  /api/v1/owner-directory:
+    get: {$ref: '#/components/x-operations/listOwnerDirectory'}
+  /api/v1/customers:
+    get: {$ref: '#/components/x-operations/listCustomers'}
+    post: {$ref: '#/components/x-operations/createCustomer'}
+  /api/v1/customers/duplicate-check:
+    post: {$ref: '#/components/x-operations/checkCustomerDuplicate'}
+  /api/v1/customers/merge:
+    post: {$ref: '#/components/x-operations/mergeCustomers'}
+  /api/v1/customers/imports/preview:
+    post: {$ref: '#/components/x-operations/previewCustomerImport'}
+  /api/v1/customers/imports/{jobNo}/commit:
+    post: {$ref: '#/components/x-operations/commitCustomerImport'}
+  /api/v1/customers/imports/{jobNo}/errors:
+    get: {$ref: '#/components/x-operations/downloadCustomerImportErrors'}
+  /api/v1/customers/{id}:
+    get: {$ref: '#/components/x-operations/getCustomer'}
+    put: {$ref: '#/components/x-operations/updateCustomer'}
+  /api/v1/customers/{id}/contacts:
+    get: {$ref: '#/components/x-operations/listCustomerContacts'}
+  /api/v1/customers/{id}/stakeholders:
+    get: {$ref: '#/components/x-operations/listCustomerStakeholders'}
+    put: {$ref: '#/components/x-operations/replaceCustomerStakeholders'}
+  /api/v1/customers/{id}/systems:
+    get: {$ref: '#/components/x-operations/listCustomerSystems'}
+    put: {$ref: '#/components/x-operations/replaceCustomerSystems'}
+  /api/v1/customers/{id}/opportunities:
+    get: {$ref: '#/components/x-operations/listCustomerOpportunities'}
+  /api/v1/customers/{id}/projects:
+    get: {$ref: '#/components/x-operations/listCustomerProjects'}
+  /api/v1/customers/{id}/audit-logs:
+    get: {$ref: '#/components/x-operations/listCustomerAuditLogs'}
+  /api/v1/customers/{id}/void:
+    post: {$ref: '#/components/x-operations/voidCustomer'}
+  /api/v1/customers/{id}/restore:
+    post: {$ref: '#/components/x-operations/restoreCustomer'}
+  /api/v1/customers/{id}/followups:
+    get: {$ref: '#/components/x-operations/listCustomerFollowups'}
+    post: {$ref: '#/components/x-operations/createCustomerFollowup'}
+  /api/v1/customer-exports:
+    post: {$ref: '#/components/x-operations/requestCustomerExport'}
+  /api/v1/customers/{id}/portal-invites:
+    post: {$ref: '#/components/x-operations/createPortalInvite'}
+  /api/v1/customers/{id}/portal-invites/current:
+    get: {$ref: '#/components/x-operations/getCurrentPortalInvite'}
+  /api/v1/customers/{id}/portal-access:
+    get: {$ref: '#/components/x-operations/getPortalAccessStatus'}
+  /api/v1/customers/{id}/portal-access/disable:
+    post: {$ref: '#/components/x-operations/disablePortalAccess'}
+  /api/v1/portal-invites/{inviteNo}/revoke:
+    post: {$ref: '#/components/x-operations/revokePortalInvite'}
+  /api/v1/opportunity-stage-alert-rules:
+    get: {$ref: '#/components/x-operations/listOpportunityAlertRules'}
+  /api/v1/opportunity-stage-alert-rules/{stage}:
+    put: {$ref: '#/components/x-operations/updateOpportunityAlertRule'}
+  /api/v1/opportunity-stage-alerts:
+    get: {$ref: '#/components/x-operations/listOpportunityAlerts'}
+  /api/v1/opportunity-stage-alerts/{id}/read:
+    post: {$ref: '#/components/x-operations/readOpportunityAlert'}
+  /api/v1/opportunities:
+    get: {$ref: '#/components/x-operations/listOpportunities'}
+    post: {$ref: '#/components/x-operations/createOpportunity'}
+  /api/v1/opportunities/board:
+    get: {$ref: '#/components/x-operations/opportunityBoard'}
+  /api/v1/opportunities/{id}:
+    get: {$ref: '#/components/x-operations/getOpportunity'}
+    put: {$ref: '#/components/x-operations/updateOpportunity'}
+  /api/v1/opportunities/{id}/owner:
+    put: {$ref: '#/components/x-operations/changeOpportunityOwner'}
+  /api/v1/opportunities/{id}/members:
+    get: {$ref: '#/components/x-operations/getOpportunityMembers'}
+    put: {$ref: '#/components/x-operations/replaceOpportunityMembers'}
+  /api/v1/opportunities/{id}/member-terms:
+    get: {$ref: '#/components/x-operations/listOpportunityMemberTerms'}
+  /api/v1/opportunities/{id}/void:
+    post: {$ref: '#/components/x-operations/voidOpportunity'}
+  /api/v1/opportunities/{id}/restore:
+    post: {$ref: '#/components/x-operations/restoreOpportunity'}
+  /api/v1/opportunities/{id}/stage-changes:
+    post: {$ref: '#/components/x-operations/changeOpportunityStage'}
+  /api/v1/opportunities/{id}/stage-history:
+    get: {$ref: '#/components/x-operations/listOpportunityStageHistory'}
+  /api/v1/opportunities/{id}/followups:
+    get: {$ref: '#/components/x-operations/listOpportunityFollowups'}
+    post: {$ref: '#/components/x-operations/createOpportunityFollowup'}
+  /api/v1/opportunities/{id}/external-status:
+    get: {$ref: '#/components/x-operations/getOpportunityExternalStatus'}
+  /api/v1/opportunities/{id}/launch/quotation:
+    post: {$ref: '#/components/x-operations/launchQuotation'}
+  /api/v1/opportunities/{id}/launch/bid:
+    post: {$ref: '#/components/x-operations/launchBid'}
+  /api/v1/opportunities/{id}/terminal-todo:
+    put: {$ref: '#/components/x-operations/completeOpportunityTerminalTodo'}
+  /api/v1/opportunities/{id}/contract-transfer:
+    post: {$ref: '#/components/x-operations/transferOpportunityContract'}
+  /api/v1/opportunities/{id}/attachment-capabilities:
+    get: {$ref: '#/components/x-operations/getOpportunityAttachmentCapabilities'}
+  /api/v1/opportunities/{id}/attachments:
+    get: {$ref: '#/components/x-operations/listOpportunityAttachments'}
+    post: {$ref: '#/components/x-operations/createOpportunityAttachment'}
+  /api/v1/opportunities/{id}/attachments/{attachmentID}/complete:
+    post: {$ref: '#/components/x-operations/completeOpportunityAttachment'}
+  /api/v1/opportunities/{id}/attachments/{attachmentID}/content:
+    get: {$ref: '#/components/x-operations/downloadOpportunityAttachment'}
+  /api/v1/opportunities/{id}/presale-requests:
+    get: {$ref: '#/components/x-operations/listOpportunityPresaleRequests'}
+  /api/v1/notifications:
+    get: {$ref: '#/components/x-operations/listNotifications'}
+  /api/v1/notifications/unread-count:
+    get: {$ref: '#/components/x-operations/notificationUnreadCount'}
+  /api/v1/notifications/{id}/read:
+    post: {$ref: '#/components/x-operations/readNotification'}
+  /api/v1/presale/engineers:
+    get: {$ref: '#/components/x-operations/listPresaleEngineers'}
+  /api/v1/presale/engineers/sync:
+    post: {$ref: '#/components/x-operations/syncPresaleEngineers'}
+  /api/v1/presale/requests:
+    get: {$ref: '#/components/x-operations/listPresaleRequests'}
+    post: {$ref: '#/components/x-operations/createPresaleRequest'}
+  /api/v1/presale/board:
+    get: {$ref: '#/components/x-operations/presaleBoard'}
+  /api/v1/presale/filter-options:
+    get: {$ref: '#/components/x-operations/presaleFilterOptions'}
+  /api/v1/presale/requests/{id}:
+    get: {$ref: '#/components/x-operations/getPresaleRequest'}
+  /api/v1/presale/requests/{id}/contact-phone:
+    get: {$ref: '#/components/x-operations/getPresaleContactPhone'}
+  /api/v1/presale/requests/{id}/timeline:
+    get: {$ref: '#/components/x-operations/presaleTimeline'}
+  /api/v1/presale/requests/{id}/available-actions:
+    get: {$ref: '#/components/x-operations/presaleAvailableActions'}
+  /api/v1/presale/requests/{id}/approval-actions:
+    post: {$ref: '#/components/x-operations/presaleApprovalAction'}
+  /api/v1/presale/requests/{id}/approval-history:
+    get: {$ref: '#/components/x-operations/presaleApprovalHistory'}
+  /api/v1/presale/requests/{id}/assignments:
+    get: {$ref: '#/components/x-operations/listPresaleAssignments'}
+    put: {$ref: '#/components/x-operations/replacePresaleAssignments'}
+  /api/v1/presale/requests/{id}/progress:
+    post: {$ref: '#/components/x-operations/addPresaleProgress'}
+  /api/v1/presale/requests/{id}/cancel:
+    post: {$ref: '#/components/x-operations/cancelPresaleRequest'}
+  /api/v1/presale/requests/{id}/worklogs:
+    get: {$ref: '#/components/x-operations/listPresaleWorklogs'}
+    post: {$ref: '#/components/x-operations/addPresaleWorklog'}
+  /api/v1/presale/worklogs/{id}/retry:
+    post: {$ref: '#/components/x-operations/retryPresaleWorklog'}
+  /api/v1/presale/worklogs/{id}/delivery:
+    get: {$ref: '#/components/x-operations/getPresaleWorklogDelivery'}
+  /api/v1/presale/alert-rules:
+    get: {$ref: '#/components/x-operations/listPresaleAlertRules'}
+  /api/v1/presale/alert-rules/{type}:
+    put: {$ref: '#/components/x-operations/updatePresaleAlertRule'}
+  /api/v1/presale/alerts:
+    get: {$ref: '#/components/x-operations/listPresaleAlerts'}
+  /api/v1/presale/alerts/{id}/read:
+    post: {$ref: '#/components/x-operations/readPresaleAlert'}
+  /api/v1/presale/reports/summary:
+    get: {$ref: '#/components/x-operations/presaleReportSummary'}
+  /api/v1/presale/reports/trend:
+    get: {$ref: '#/components/x-operations/presaleReportTrend'}
+  /api/v1/presale/reports/distribution:
+    get: {$ref: '#/components/x-operations/presaleReportDistribution'}
+  /api/v1/presale/reports/exports:
+    post: {$ref: '#/components/x-operations/requestPresaleReportExport'}
+  /api/v1/internal/portal/invites/verify:
+    post: {$ref: '#/components/x-operations/verifyPortalInvite'}
+  /api/v1/internal/portal/invites/consume:
+    post: {$ref: '#/components/x-operations/consumePortalInvite'}
+  /api/v1/internal/integrations/qb/status-events:
+    post: {$ref: '#/components/x-operations/applyOpportunityExternalStatus'}
+  /api/v1/internal/integrations/opportunity-attachment/scan-events:
+    post: {$ref: '#/components/x-operations/applyOpportunityAttachmentScan'}
+  /api/v1/internal/approval/callbacks/presale:
+    post: {$ref: '#/components/x-operations/applyPresaleApprovalCallback'}
+components:
+  securitySchemes:
+    crmSession:
+      type: apiKey
+      in: cookie
+      name: customer_opportunity_session
+      description: OIDC-backed server session. The configured cookie name may differ.
+    machineJWT:
+      type: oauth2
+      description: Platform application JWT; issuer, audience, tenant, scope, timestamp and nonce are verified.
+      flows:
+        clientCredentials:
+          tokenUrl: https://platform.example.invalid/oauth2/token
+          scopes:
+            portal.invite.verify: Verify and consume a Portal invitation.
+            opportunity.status.write: Apply trusted quotation or bid status events.
+            opportunity.attachment.scan.write: Apply attachment malware scan events.
+            approval.callback.write: Apply trusted presale approval callbacks.
+  parameters:
+    CustomerID: {name: id, in: path, required: true, schema: {type: integer, format: uint64, minimum: 1}}
+    OpportunityID: {name: id, in: path, required: true, schema: {type: integer, format: uint64, minimum: 1}}
+    NumericID: {name: id, in: path, required: true, schema: {type: integer, format: uint64, minimum: 1}}
+    IdempotencyKey: {name: Idempotency-Key, in: header, required: true, schema: {type: string, minLength: 1, maxLength: 128}}
+  schemas:
+    Envelope:
+      type: object
+      required: [code, message, request_id]
+      properties:
+        code: {type: string}
+        message: {type: string}
+        request_id: {type: string}
+        data: {}
+        details: {}
+    Error:
+      allOf:
+        - $ref: '#/components/schemas/Envelope'
+      examples:
+        - {code: COMMON_VERSION_CONFLICT, message: resource was modified by another request, request_id: req_123}
+    VersionedReason:
+      type: object
+      required: [version, reason]
+      properties:
+        version: {type: integer, format: uint64, minimum: 1}
+        reason: {type: string, maxLength: 500}
+    ReasonOnly:
+      type: object
+      additionalProperties: false
+      required: [reason]
+      properties:
+        reason: {type: string, minLength: 1, maxLength: 500}
+    OwnerDirectoryOrganization:
+      type: object
+      additionalProperties: false
+      required: [organization_id, organization_name, is_primary]
+      properties:
+        organization_id: {type: string, minLength: 1, maxLength: 64, description: Authoritative platform organization ID.}
+        organization_name: {type: string, minLength: 1, maxLength: 200}
+        is_primary: {type: boolean}
+    OwnerDirectoryUser:
+      type: object
+      additionalProperties: false
+      required: [user_id, display_name, organizations]
+      properties:
+        user_id: {type: string, minLength: 1, maxLength: 64, description: Platform OIDC subject (`sub`); never a PMS person ID.}
+        display_name: {type: string, minLength: 1, maxLength: 200}
+        organizations:
+          type: array
+          minItems: 1
+          items: {$ref: '#/components/schemas/OwnerDirectoryOrganization'}
+    OwnerDirectoryPage:
+      type: object
+      additionalProperties: false
+      required: [items, page, page_size, total]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/OwnerDirectoryUser'}}
+        page: {type: integer, minimum: 1}
+        page_size: {type: integer, minimum: 1, maximum: 50}
+        total: {type: integer, format: int64, minimum: 0}
+    OwnerDirectoryEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/Envelope'
+        - type: object
+          required: [data]
+          properties:
+            data: {$ref: '#/components/schemas/OwnerDirectoryPage'}
+    CreateCustomer:
+      type: object
+      required: [name, customer_type, industry, region, owner_user_id, contacts, reason]
+      properties:
+        name: {type: string, maxLength: 200}
+        unified_credit_code: {type: string, maxLength: 64}
+        customer_type: {type: string, maxLength: 64}
+        industry: {type: string, maxLength: 64}
+        region: {type: string, maxLength: 64}
+        owner_user_id: {type: string, maxLength: 64}
+        owner_org_id: {type: string, maxLength: 64}
+        contacts: {type: array, minItems: 1, items: {type: object}}
+        duplicate_override: {type: boolean}
+        duplicate_override_reason: {type: string, maxLength: 500}
+        reason: {type: string, maxLength: 500}
+    CreateOpportunity:
+      type: object
+      required: [name, customer_id, type, source, expected_amount, expected_sign_date, requirement_summary, owner_user_id]
+      properties:
+        name: {type: string, maxLength: 200}
+        customer_id: {type: integer, format: uint64, minimum: 1}
+        type: {type: string, maxLength: 64}
+        source: {type: string, maxLength: 64}
+        expected_amount: {type: string}
+        expected_sign_date: {type: string, format: date}
+        requirement_summary: {type: string}
+        system_count: {type: integer, format: uint32}
+        pain_points: {type: string, maxLength: 10000}
+        competitor_info: {type: string, maxLength: 10000}
+        owner_user_id: {type: string, maxLength: 64}
+        owner_org_id: {type: string, maxLength: 64}
+    StageChange:
+      type: object
+      required: [target_stage, reason, version]
+      properties:
+        target_stage: {type: string}
+        reason: {type: string, maxLength: 500}
+        contract_ref: {type: [string, 'null'], maxLength: 64}
+        lost_reason: {type: [string, 'null'], maxLength: 64}
+        version: {type: integer, format: uint64, minimum: 1}
+    PresaleCreate:
+      type: object
+      required: [opportunity_id, venue, contact_name, contact_phone, description, expected_start, expected_end, urgency]
+      properties:
+        opportunity_id: {type: integer, format: uint64, minimum: 1}
+        venue: {type: string}
+        service_address: {type: string}
+        contact_name: {type: string}
+        contact_phone: {type: string}
+        description: {type: string}
+        expected_start: {type: string, format: date-time}
+        expected_end: {type: string, format: date-time}
+        urgency: {type: string}
+    PresaleAlert:
+      type: object
+      additionalProperties: false
+      required: [id, request_id, request_no, alert_type, rule_version, basis_at, due_at, status, recipient_kind]
+      properties:
+        id: {type: integer, format: uint64, minimum: 1}
+        request_id: {type: integer, format: uint64, minimum: 1}
+        request_no: {type: string, maxLength: 32}
+        alert_type: {type: string, enum: [APPROVAL_NODE_1_OVERDUE, APPROVAL_NODE_2_OVERDUE, ASSIGNMENT_OVERDUE, EXECUTION_DUE_SOON, EXECUTION_OVERDUE]}
+        rule_version: {type: integer, format: uint64, minimum: 1}
+        basis_at: {type: string, format: date-time}
+        due_at: {type: string, format: date-time}
+        status: {type: string, enum: [UNREAD, READ]}
+        recipient_kind: {type: string, enum: [USER, PERSON], description: USER is the CRM OIDC subject namespace; PERSON is the separately signed PMS person_id namespace.}
+        sent_at: {type: [string, 'null'], format: date-time}
+        read_at: {type: [string, 'null'], format: date-time}
+    PresaleAlertPage:
+      type: object
+      additionalProperties: false
+      required: [items, page, page_size, total]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/PresaleAlert'}}
+        page: {type: integer, minimum: 1}
+        page_size: {type: integer, minimum: 1, maximum: 100}
+        total: {type: integer, format: int64, minimum: 0}
+    PresaleAlertListEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/Envelope'
+        - type: object
+          required: [data]
+          properties:
+            data: {$ref: '#/components/schemas/PresaleAlertPage'}
+    ExternalStatusEvent:
+      type: object
+      required: [opportunity_id, source_id, status, changed_at]
+      properties:
+        opportunity_id: {type: integer, format: uint64, minimum: 1}
+        type: {type: string, maxLength: 16}
+        source_id: {type: string, maxLength: 64}
+        status: {type: string, maxLength: 32}
+        source_amount: {type: [string, 'null']}
+        contract_ref: {type: [string, 'null'], maxLength: 64}
+        lost_reason: {type: [string, 'null'], maxLength: 64}
+        changed_at: {type: string, format: date-time}
+    QuoteAmountCheck:
+      type: object
+      required: [status, warning, opportunity_version, expected_amount]
+      properties:
+        status: {type: string, enum: [NO_APPROVED_QUOTE, APPROVED_QUOTE_AMOUNT_MISSING, MATCH, MISMATCH]}
+        warning: {type: boolean, description: True only for a non-blocking amount mismatch.}
+        opportunity_version: {type: integer, format: uint64, minimum: 1}
+        expected_amount: {type: string, pattern: '^[0-9]+\\.[0-9]{2}$'}
+        approved_quote_amount: {type: [string, 'null'], pattern: '^[0-9]+\\.[0-9]{2}$'}
+        approved_quote_source_id: {type: [string, 'null'], maxLength: 64}
+        approved_quote_changed_at: {type: [string, 'null'], format: date-time}
+  responses:
+    OK:
+      description: Successful JSON response
+      content: {application/json: {schema: {$ref: '#/components/schemas/Envelope'}}}
+    Created:
+      description: Created JSON response
+      content: {application/json: {schema: {$ref: '#/components/schemas/Envelope'}}}
+    Error:
+      description: Error envelope
+      content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}
+    NoStoreError:
+      description: Non-cacheable error envelope for a sensitive-data operation.
+      headers:
+        Cache-Control: {schema: {type: string, const: 'no-store, private'}}
+        Pragma: {schema: {type: string, const: no-cache}}
+      content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}
+    PresaleAlertList:
+      description: Personal presale alert page with explicit USER/PERSON recipient namespaces.
+      content: {application/json: {schema: {$ref: '#/components/schemas/PresaleAlertListEnvelope'}}}
+    OwnerDirectoryList:
+      description: Active internal users and their selectable application-authorized organization memberships.
+      content: {application/json: {schema: {$ref: '#/components/schemas/OwnerDirectoryEnvelope'}}}
+    Binary:
+      description: Authorized binary stream; no JSON envelope on success.
+      headers:
+        Cache-Control: {schema: {type: string}}
+        X-Content-Type-Options: {schema: {type: string}}
+      content: {application/octet-stream: {schema: {type: string, contentEncoding: binary}}}
+  requestBodies:
+    EmptyJSON: {content: {application/json: {schema: {type: object, maxProperties: 0}}}}
+    VersionedReason: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/VersionedReason'}}}}
+    ReasonOnly: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ReasonOnly'}}}}
+    CreateCustomer: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/CreateCustomer'}}}}
+    CreateOpportunity: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/CreateOpportunity'}}}}
+    StageChange: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/StageChange'}}}}
+    PresaleCreate: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/PresaleCreate'}}}}
+    ExternalStatusEvent: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ExternalStatusEvent'}}}}
+  x-operations:
+    crmHealth: &publicGet {operationId: crmHealth, tags: [Authentication], security: [], responses: {'200': {description: Healthy}, '503': {description: Database unhealthy}}}
+    crmLogin: {operationId: crmLogin, tags: [Authentication], security: [], parameters: [{name: return_to, in: query, schema: {type: string}}], responses: {'302': {description: Redirect to the platform authorization endpoint}, '400': {$ref: '#/components/responses/Error'}}}
+    crmCallback: {operationId: crmCallback, tags: [Authentication], security: [], parameters: [{name: code, in: query, schema: {type: string}}, {name: state, in: query, schema: {type: string}}], responses: {'302': {description: Establish session and redirect}, '401': {$ref: '#/components/responses/Error'}}}
+    crmLogout: {operationId: crmLogout, tags: [Authentication], security: [{crmSession: []}], responses: {'200': {$ref: '#/components/responses/OK'}, '401': {$ref: '#/components/responses/Error'}}}
+    crmMe: &crmRead {operationId: crmMe, tags: [Authentication], security: [{crmSession: []}], responses: {'200': {$ref: '#/components/responses/OK'}, '401': {$ref: '#/components/responses/Error'}, '403': {$ref: '#/components/responses/Error'}}}
+    getRuntimeCapabilities: {<<: *crmRead, operationId: getRuntimeCapabilities, tags: [Authentication], description: Returns non-secret process configuration readiness for optional integrations and persisted freshness evidence for the independent presale delivery worker. This is not authorization or a remote health probe.}
+    listOwnerDirectory:
+      operationId: listOwnerDirectory
+      tags: [Owner directory]
+      security: [{crmSession: []}]
+      x-permission: customer.create|customer.update|opportunity.create|opportunity.owner.change
+      description: |-
+        Proxies the platform machine directory and returns only active internal
+        OIDC subjects paired with their effective CRM-authorized organization
+        memberships. The endpoint fails closed when the platform directory is
+        disabled or unavailable; it never falls back to caller-entered IDs.
+      parameters:
+        - {name: keyword, in: query, schema: {type: string, maxLength: 100}, description: Display-name search or exact user ID.}
+        - {name: user_id, in: query, schema: {type: string, minLength: 1, maxLength: 64}, description: Exact OIDC subject lookup; mutually exclusive with keyword.}
+        - {name: page, in: query, schema: {type: integer, minimum: 1, default: 1}}
+        - {name: page_size, in: query, schema: {type: integer, minimum: 1, maximum: 50, default: 20}}
+      responses:
+        '200': {$ref: '#/components/responses/OwnerDirectoryList'}
+        '401': {$ref: '#/components/responses/Error'}
+        '403': {$ref: '#/components/responses/Error'}
+        '422': {$ref: '#/components/responses/Error'}
+        '503': {$ref: '#/components/responses/Error'}
+    listCustomers: {<<: *crmRead, operationId: listCustomers, tags: [Customer], x-permission: customer.read}
+    createCustomer: {<<: *crmRead, operationId: createCustomer, tags: [Customer], x-permission: customer.create, parameters: [{$ref: '#/components/parameters/IdempotencyKey'}], requestBody: {$ref: '#/components/requestBodies/CreateCustomer'}}
+    checkCustomerDuplicate: {<<: *crmRead, operationId: checkCustomerDuplicate, tags: [Customer], x-permission: customer.create}
+    mergeCustomers: {<<: *crmRead, operationId: mergeCustomers, tags: [Customer], x-permission: customer.merge, parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]}
+    previewCustomerImport: {<<: *crmRead, operationId: previewCustomerImport, tags: [Customer], x-permission: customer.import, requestBody: {required: true, content: {multipart/form-data: {schema: {type: object, required: [file, reason], properties: {file: {type: string, contentEncoding: binary}, reason: {type: string, maxLength: 2000}}}}}}}
+    commitCustomerImport: {<<: *crmRead, operationId: commitCustomerImport, tags: [Customer], x-permission: customer.import, parameters: [{name: jobNo, in: path, required: true, schema: {type: string}}, {$ref: '#/components/parameters/IdempotencyKey'}]}
+    downloadCustomerImportErrors: {operationId: downloadCustomerImportErrors, tags: [Customer], x-permission: customer.import, security: [{crmSession: []}], parameters: [{name: jobNo, in: path, required: true, schema: {type: string}}], responses: {'200': {description: CSV error rows, content: {text/csv: {schema: {type: string}}}}, '401': {$ref: '#/components/responses/Error'}, '403': {$ref: '#/components/responses/Error'}, '404': {$ref: '#/components/responses/Error'}}}
+    getCustomer: &customerIDRead {<<: *crmRead, operationId: getCustomer, tags: [Customer], x-permission: customer.read, parameters: [{$ref: '#/components/parameters/CustomerID'}]}
+    updateCustomer: {<<: *customerIDRead, operationId: updateCustomer, x-permission: customer.update, requestBody: {$ref: '#/components/requestBodies/VersionedReason'}}
+    listCustomerContacts: {<<: *customerIDRead, operationId: listCustomerContacts}
+    listCustomerStakeholders: {<<: *customerIDRead, operationId: listCustomerStakeholders}
+    replaceCustomerStakeholders: {<<: *customerIDRead, operationId: replaceCustomerStakeholders, x-permission: customer.update}
+    listCustomerSystems: {<<: *customerIDRead, operationId: listCustomerSystems}
+    replaceCustomerSystems: {<<: *customerIDRead, operationId: replaceCustomerSystems, x-permission: customer.update}
+    listCustomerOpportunities: {<<: *customerIDRead, operationId: listCustomerOpportunities}
+    listCustomerProjects: {<<: *customerIDRead, operationId: listCustomerProjects, description: External project-history Provider remains pending; unavailable configuration fails closed.}
+    listCustomerAuditLogs: {<<: *customerIDRead, operationId: listCustomerAuditLogs, x-permission: customer.audit.read}
+    voidCustomer: {<<: *customerIDRead, operationId: voidCustomer, x-permission: customer.void, requestBody: {$ref: '#/components/requestBodies/VersionedReason'}}
+    restoreCustomer: {<<: *customerIDRead, operationId: restoreCustomer, x-permission: customer.restore, requestBody: {$ref: '#/components/requestBodies/VersionedReason'}}
+    listCustomerFollowups: {<<: *customerIDRead, operationId: listCustomerFollowups}
+    createCustomerFollowup: {<<: *customerIDRead, operationId: createCustomerFollowup, x-permission: customer.update}
+    requestCustomerExport: {<<: *crmRead, operationId: requestCustomerExport, tags: [Customer], x-permission: customer.export, description: Current handler returns 503 until the export Provider is configured.}
+    createPortalInvite: {<<: *customerIDRead, operationId: createPortalInvite, tags: [Portal invite], x-permission: portal_account.provision, parameters: [{$ref: '#/components/parameters/CustomerID'}, {$ref: '#/components/parameters/IdempotencyKey'}]}
+    getCurrentPortalInvite: {<<: *customerIDRead, operationId: getCurrentPortalInvite, tags: [Portal invite], x-permission: portal_account.provision|portal_account.revoke}
+    getPortalAccessStatus: {<<: *customerIDRead, operationId: getPortalAccessStatus, tags: [Portal invite], x-permission: portal_account.provision|portal_account.disable, description: Returns the effective local access state and the latest durable disable operation without exposing the platform subject.}
+    disablePortalAccess: {<<: *customerIDRead, operationId: disablePortalAccess, tags: [Portal invite], x-permission: portal_account.disable, parameters: [{$ref: '#/components/parameters/CustomerID'}, {$ref: '#/components/parameters/IdempotencyKey'}], requestBody: {$ref: '#/components/requestBodies/ReasonOnly'}, description: Disables the Portal mapping and sessions before revoking the platform role; invitation revoke remains a separate action.}
+    revokePortalInvite: {<<: *crmRead, operationId: revokePortalInvite, tags: [Portal invite], x-permission: portal_account.revoke, parameters: [{name: inviteNo, in: path, required: true, schema: {type: string}}], requestBody: {$ref: '#/components/requestBodies/VersionedReason'}}
+    listOpportunityAlertRules: &opportunityRead {<<: *crmRead, operationId: listOpportunityAlertRules, tags: [Opportunity], x-permission: opportunity.alert.config}
+    updateOpportunityAlertRule: {<<: *opportunityRead, operationId: updateOpportunityAlertRule, parameters: [{name: stage, in: path, required: true, schema: {type: string}}]}
+    listOpportunityAlerts: {<<: *opportunityRead, operationId: listOpportunityAlerts, x-permission: opportunity.read}
+    readOpportunityAlert: {<<: *opportunityRead, operationId: readOpportunityAlert, x-permission: opportunity.read, parameters: [{$ref: '#/components/parameters/NumericID'}]}
+    listOpportunities: {<<: *opportunityRead, operationId: listOpportunities, x-permission: opportunity.read}
+    createOpportunity: {<<: *opportunityRead, operationId: createOpportunity, x-permission: opportunity.create, parameters: [{$ref: '#/components/parameters/IdempotencyKey'}], requestBody: {$ref: '#/components/requestBodies/CreateOpportunity'}}
+    opportunityBoard: {<<: *opportunityRead, operationId: opportunityBoard, x-permission: opportunity.read}
+    getOpportunity: &opportunityIDRead {<<: *opportunityRead, operationId: getOpportunity, x-permission: opportunity.read, parameters: [{$ref: '#/components/parameters/OpportunityID'}]}
+    updateOpportunity: {<<: *opportunityIDRead, operationId: updateOpportunity, x-permission: opportunity.update}
+    changeOpportunityOwner: {<<: *opportunityIDRead, operationId: changeOpportunityOwner, x-permission: opportunity.owner.change, parameters: [{$ref: '#/components/parameters/OpportunityID'}, {$ref: '#/components/parameters/IdempotencyKey'}]}
+    getOpportunityMembers: {<<: *opportunityIDRead, operationId: getOpportunityMembers}
+    replaceOpportunityMembers: {<<: *opportunityIDRead, operationId: replaceOpportunityMembers, x-permission: opportunity.team.manage}
+    listOpportunityMemberTerms: {<<: *opportunityIDRead, operationId: listOpportunityMemberTerms}
+    voidOpportunity: {<<: *opportunityIDRead, operationId: voidOpportunity, x-permission: opportunity.void, requestBody: {$ref: '#/components/requestBodies/VersionedReason'}}
+    restoreOpportunity: {<<: *opportunityIDRead, operationId: restoreOpportunity, x-permission: opportunity.restore, requestBody: {$ref: '#/components/requestBodies/VersionedReason'}}
+    changeOpportunityStage: {<<: *opportunityIDRead, operationId: changeOpportunityStage, x-permission: opportunity.stage.change, requestBody: {$ref: '#/components/requestBodies/StageChange'}}
+    listOpportunityStageHistory: {<<: *opportunityIDRead, operationId: listOpportunityStageHistory}
+    listOpportunityFollowups: {<<: *opportunityIDRead, operationId: listOpportunityFollowups}
+    createOpportunityFollowup: {<<: *opportunityIDRead, operationId: createOpportunityFollowup, x-permission: opportunity.update}
+    getOpportunityExternalStatus: {<<: *opportunityIDRead, operationId: getOpportunityExternalStatus, description: Active quote/bid query Provider contract and environment remain pending.}
+    launchQuotation: {<<: *opportunityIDRead, operationId: launchQuotation, x-permission: opportunity.update, description: Returns 503 unless the signed short-lived launch adapter is configured.}
+    launchBid: {<<: *opportunityIDRead, operationId: launchBid, x-permission: opportunity.update, description: Returns 503 unless the signed short-lived launch adapter is configured.}
+    completeOpportunityTerminalTodo: {<<: *opportunityIDRead, operationId: completeOpportunityTerminalTodo, x-permission: opportunity.stage.change}
+    transferOpportunityContract: {<<: *opportunityIDRead, operationId: transferOpportunityContract, x-permission: opportunity.contract.transfer, parameters: [{$ref: '#/components/parameters/OpportunityID'}, {$ref: '#/components/parameters/IdempotencyKey'}]}
+    getOpportunityAttachmentCapabilities: {<<: *opportunityIDRead, operationId: getOpportunityAttachmentCapabilities, x-permission: opportunity.attachment.read}
+    listOpportunityAttachments: {<<: *opportunityIDRead, operationId: listOpportunityAttachments, x-permission: opportunity.attachment.read}
+    createOpportunityAttachment: {<<: *opportunityIDRead, operationId: createOpportunityAttachment, x-permission: opportunity.attachment.upload, parameters: [{$ref: '#/components/parameters/OpportunityID'}, {$ref: '#/components/parameters/IdempotencyKey'}], description: Object store and scanner Providers are pending; unavailable configuration fails closed.}
+    completeOpportunityAttachment: {<<: *opportunityIDRead, operationId: completeOpportunityAttachment, x-permission: opportunity.attachment.upload, parameters: [{$ref: '#/components/parameters/OpportunityID'}, {name: attachmentID, in: path, required: true, schema: {type: string}}, {$ref: '#/components/parameters/IdempotencyKey'}]}
+    downloadOpportunityAttachment: {operationId: downloadOpportunityAttachment, tags: [Opportunity], x-permission: opportunity.attachment.download, security: [{crmSession: []}], parameters: [{$ref: '#/components/parameters/OpportunityID'}, {name: attachmentID, in: path, required: true, schema: {type: string}}], responses: {'200': {$ref: '#/components/responses/Binary'}, '401': {$ref: '#/components/responses/Error'}, '403': {$ref: '#/components/responses/Error'}, '404': {$ref: '#/components/responses/Error'}, '503': {$ref: '#/components/responses/Error'}}}
+    listOpportunityPresaleRequests: {<<: *opportunityIDRead, operationId: listOpportunityPresaleRequests}
+    listNotifications: &notificationRead {<<: *crmRead, operationId: listNotifications, tags: [Notification], x-permission: opportunity.read or presale.read}
+    notificationUnreadCount: {<<: *notificationRead, operationId: notificationUnreadCount}
+    readNotification: {<<: *notificationRead, operationId: readNotification, parameters: [{$ref: '#/components/parameters/NumericID'}]}
+    listPresaleEngineers: &presaleRead {<<: *crmRead, operationId: listPresaleEngineers, tags: [Presale], x-permission: presale.read}
+    syncPresaleEngineers: {<<: *presaleRead, operationId: syncPresaleEngineers, x-permission: presale.engineer.sync, parameters: [{$ref: '#/components/parameters/IdempotencyKey'}], description: PMS formal environment remains pending.}
+    listPresaleRequests: {<<: *presaleRead, operationId: listPresaleRequests}
+    createPresaleRequest: {<<: *presaleRead, operationId: createPresaleRequest, x-permission: presale.create, parameters: [{$ref: '#/components/parameters/IdempotencyKey'}], requestBody: {$ref: '#/components/requestBodies/PresaleCreate'}}
+    presaleBoard: {<<: *presaleRead, operationId: presaleBoard}
+    presaleFilterOptions: {<<: *presaleRead, operationId: presaleFilterOptions}
+    getPresaleRequest: &presaleIDRead {<<: *presaleRead, operationId: getPresaleRequest, parameters: [{$ref: '#/components/parameters/NumericID'}]}
+    getPresaleContactPhone:
+      <<: *presaleIDRead
+      operationId: getPresaleContactPhone
+      x-permission: presale.contact_phone.read
+      description: |-
+        Explicit sensitive-data read. The service additionally requires a current or historical
+        assignment relation or an allowlisted manager role, always rejects auditor principals,
+        decrypts only after authorization, writes privacy audit before returning plaintext, and
+        fails closed if decryption or audit is unavailable. Success and errors carry
+        Cache-Control: no-store, private.
+      responses:
+        '200':
+          description: Audited plaintext contact phone response.
+          headers:
+            Cache-Control: {schema: {type: string, const: 'no-store, private'}}
+            Pragma: {schema: {type: string, const: no-cache}}
+          content: {application/json: {schema: {$ref: '#/components/schemas/Envelope'}}}
+        '400': {$ref: '#/components/responses/NoStoreError'}
+        '401': {$ref: '#/components/responses/NoStoreError'}
+        '403': {$ref: '#/components/responses/NoStoreError'}
+        '404': {$ref: '#/components/responses/NoStoreError'}
+        '503': {$ref: '#/components/responses/NoStoreError'}
+    presaleTimeline: {<<: *presaleIDRead, operationId: presaleTimeline}
+    presaleAvailableActions: {<<: *presaleIDRead, operationId: presaleAvailableActions, description: Returns no action unless the authoritative approval current-task resolver succeeds.}
+    presaleApprovalAction: {<<: *presaleIDRead, operationId: presaleApprovalAction, x-permission: presale.approve, parameters: [{$ref: '#/components/parameters/NumericID'}, {$ref: '#/components/parameters/IdempotencyKey'}]}
+    presaleApprovalHistory: {<<: *presaleIDRead, operationId: presaleApprovalHistory}
+    listPresaleAssignments: {<<: *presaleIDRead, operationId: listPresaleAssignments}
+    replacePresaleAssignments: {<<: *presaleIDRead, operationId: replacePresaleAssignments, x-permission: presale.assign, parameters: [{$ref: '#/components/parameters/NumericID'}, {$ref: '#/components/parameters/IdempotencyKey'}]}
+    addPresaleProgress: {<<: *presaleIDRead, operationId: addPresaleProgress, x-permission: presale.progress, parameters: [{$ref: '#/components/parameters/NumericID'}, {$ref: '#/components/parameters/IdempotencyKey'}]}
+    cancelPresaleRequest: {<<: *presaleIDRead, operationId: cancelPresaleRequest, x-permission: service applies applicant/manager policy, parameters: [{$ref: '#/components/parameters/NumericID'}, {$ref: '#/components/parameters/IdempotencyKey'}]}
+    listPresaleWorklogs: {<<: *presaleIDRead, operationId: listPresaleWorklogs}
+    addPresaleWorklog: {<<: *presaleIDRead, operationId: addPresaleWorklog, x-permission: presale.worklog, parameters: [{$ref: '#/components/parameters/NumericID'}, {$ref: '#/components/parameters/IdempotencyKey'}]}
+    retryPresaleWorklog: {<<: *presaleRead, operationId: retryPresaleWorklog, x-permission: presale.worklog.retry, parameters: [{$ref: '#/components/parameters/NumericID'}]}
+    getPresaleWorklogDelivery: {<<: *presaleRead, operationId: getPresaleWorklogDelivery, parameters: [{$ref: '#/components/parameters/NumericID'}]}
+    listPresaleAlertRules: {<<: *presaleRead, operationId: listPresaleAlertRules, x-permission: presale.alert.config}
+    updatePresaleAlertRule: {<<: *presaleRead, operationId: updatePresaleAlertRule, x-permission: presale.alert.config, parameters: [{name: type, in: path, required: true, schema: {type: string}}]}
+    listPresaleAlerts:
+      <<: *presaleRead
+      operationId: listPresaleAlerts
+      description: |-
+        Returns the exact union of (USER, authenticated OIDC subject) and, only
+        when non-empty, (PERSON, signed person_id). SELF/ORG/ALL scope never
+        expands this personal inbox and matching raw identifiers are not inferred
+        to be the same identity. LEGACY_UNKNOWN rows are inaccessible.
+      responses:
+        '200': {$ref: '#/components/responses/PresaleAlertList'}
+        '401': {$ref: '#/components/responses/Error'}
+        '403': {$ref: '#/components/responses/Error'}
+    readPresaleAlert: {<<: *presaleRead, operationId: readPresaleAlert, parameters: [{$ref: '#/components/parameters/NumericID'}], description: Marks read only within the same exact USER/PERSON identity union used by listPresaleAlerts.}
+    presaleReportSummary: {<<: *presaleRead, operationId: presaleReportSummary, x-permission: presale.report}
+    presaleReportTrend: {<<: *presaleRead, operationId: presaleReportTrend, x-permission: presale.report}
+    presaleReportDistribution: {<<: *presaleRead, operationId: presaleReportDistribution, x-permission: presale.report}
+    requestPresaleReportExport: {<<: *presaleRead, operationId: requestPresaleReportExport, x-permission: presale.report, description: Current handler returns 503 until export storage/worker is configured.}
+    verifyPortalInvite: &machinePortalInvite {operationId: verifyPortalInvite, tags: [Machine integration], security: [{machineJWT: [portal.invite.verify]}], x-scope: portal.invite.verify, responses: {'200': {$ref: '#/components/responses/OK'}, '400': {$ref: '#/components/responses/Error'}, '401': {$ref: '#/components/responses/Error'}, '403': {$ref: '#/components/responses/Error'}}}
+    consumePortalInvite: {<<: *machinePortalInvite, operationId: consumePortalInvite}
+    applyOpportunityExternalStatus: &machineOpportunityStatus {operationId: applyOpportunityExternalStatus, tags: [Machine integration], security: [{machineJWT: [opportunity.status.write]}], x-scope: opportunity.status.write, requestBody: {$ref: '#/components/requestBodies/ExternalStatusEvent'}, responses: {'200': {$ref: '#/components/responses/OK'}, '400': {$ref: '#/components/responses/Error'}, '401': {$ref: '#/components/responses/Error'}, '403': {$ref: '#/components/responses/Error'}, '409': {$ref: '#/components/responses/Error'}}}
+    applyOpportunityAttachmentScan: {<<: *machineOpportunityStatus, operationId: applyOpportunityAttachmentScan, x-scope: opportunity.attachment.scan.write, security: [{machineJWT: [opportunity.attachment.scan.write]}]}
+    applyPresaleApprovalCallback: {<<: *machineOpportunityStatus, operationId: applyPresaleApprovalCallback, x-scope: approval.callback.write, security: [{machineJWT: [approval.callback.write]}], description: Approval Provider request fields are the current inbound projection; the formal engine contract remains pending.}

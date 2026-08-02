@@ -252,14 +252,13 @@ button { cursor: pointer; border: none; outline: none; font-family: inherit; }
 let currentPage = 'portal-login';
 let currentFilingStep = 0;
 let currentProjectId = null;
-let showChangePwdPanel = false;
 // ==================== DATA STORE ====================
 const store = {
   customers: [
-    { id:'KH202606150001', name:'华兴证券股份有限公司', type:'业主', industry:'金融', scale:'大型', credit:'A', status:'成交', addr:'深圳市福田区福华三路88号', uscc:'91440300100008888K', biz:'证券经纪、投资银行、资产管理、研究咨询', needs:'等保测评、渗透测试、代码审计', followDate:'2026-06-14' },
-    { id:'KH202606120042', name:'鹏程能源科技有限公司', type:'三方', industry:'能源', scale:'中型', credit:'B', status:'在跟', addr:'广州市天河区珠江新城', uscc:'91440100000012345X', biz:'新能源技术开发、电力系统集成', needs:'风险评估、渗透测试', followDate:'2026-06-13' },
-    { id:'KH202606080157', name:'滨江医疗集团有限公司', type:'政府', industry:'医疗', scale:'大型', credit:'C', status:'潜在', addr:'杭州市西湖区', uscc:'91330000000067890Y', biz:'医疗服务、健康管理', needs:'等保测评', followDate:'2026-06-10' },
-    { id:'KH202606030289', name:'众诚制造有限责任公司', type:'事业单位', industry:'制造', scale:'中型', credit:'D', status:'流失', addr:'东莞市松山湖', uscc:'91441900000098765Z', biz:'智能制造装备', needs:'代码审计', followDate:'2026-05-28' }
+    { id:'KH202606150001', name:'华兴证券股份有限公司', type:'业主', industry:'金融', scale:'大型', status:'成交', addr:'深圳市福田区福华三路88号', uscc:'91440300100008888K', biz:'证券经纪、投资银行、资产管理、研究咨询', needs:'等保测评、渗透测试、代码审计', followDate:'2026-06-14' },
+    { id:'KH202606120042', name:'鹏程能源科技有限公司', type:'三方', industry:'能源', scale:'中型', status:'在跟', addr:'广州市天河区珠江新城', uscc:'91440100000012345X', biz:'新能源技术开发、电力系统集成', needs:'风险评估、渗透测试', followDate:'2026-06-13' },
+    { id:'KH202606080157', name:'滨江医疗集团有限公司', type:'政府', industry:'医疗', scale:'大型', status:'潜在', addr:'杭州市西湖区', uscc:'91330000000067890Y', biz:'医疗服务、健康管理', needs:'等保测评', followDate:'2026-06-10' },
+    { id:'KH202606030289', name:'众诚制造有限责任公司', type:'事业单位', industry:'制造', scale:'中型', status:'流失', addr:'东莞市松山湖', uscc:'91441900000098765Z', biz:'智能制造装备', needs:'代码审计', followDate:'2026-05-28' }
   ],
   opportunities: [
     { id:'SJ202606100005', name:'核心交易系统等保测评', customer:'华兴证券', stage:'初步接触', amount:48.5, date:'2026-07-15', owner:'张明远', source:'老客户推荐' },
@@ -327,13 +326,16 @@ const store = {
     }
   ],
   portalAccount: {
+    platformUserId: 'EXT-KH202606150001',
     account: 'huaxing@sec.com',
+    identityProvider: '基础平台 OIDC',
+    role: 'portal_customer',
+    mappingStatus: '已绑定',
+    sessionExpiresAt: '2026-07-21 14:47:18',
     lastLogin: '2026-07-21 14:32:18',
     lastIp: '113.88.22.10',
     lastLocation: '广东省深圳市',
-    lastDevice: 'Chrome 128 · Windows 11',
-    pwdStrength: 85,
-    forcePwdChange: true
+    lastDevice: 'Chrome 128 · Windows 11'
   }
 };
 
@@ -343,7 +345,7 @@ function navigate(page) {
 }
 function render() {
   const app = document.getElementById('portalApp');
-  if (currentPage === 'portal-login' || currentPage === 'portal-force-pwd') app.classList.add('portal-login-active');
+  if (currentPage === 'portal-login') app.classList.add('portal-login-active');
   else app.classList.remove('portal-login-active');
   renderPortalSidebar();
   renderPortalHeader();
@@ -397,7 +399,6 @@ function renderPortalPage() {
   const content = document.getElementById('portalContent');
   const pages = {
     'portal-login': renderPortalLogin,
-    'portal-force-pwd': renderForcePwdPage,
     'portal-dashboard': renderPortalDashboard,
     'portal-projects': renderPortalProjects,
     'portal-reports': renderReportPage,
@@ -421,109 +422,21 @@ function renderPortalLogin() {
         <h2>客户自助服务平台</h2>
         <p class="login-sub">测评业务全生命周期管理</p>
         <div style="background:var(--primary-bg);border-radius:8px;padding:10px 12px;font-size:12px;color:var(--primary);line-height:1.5">
-          🔐 本平台<b>不支持自助注册</b>。客户账号由客户经理在「客户与商机管理子系统」通过<b>生成注册链接</b>同步开通；收到链接后凭<b>默认口令 11223344</b>首次登录，并需立即修改口令。
+          🔐 本门户<b>不支持自助注册</b>。客户经理预置基础平台外部用户和 Portal 角色，并发送 2 小时有效邀请链接。点击下方按钮后将跳转<b>统一身份平台 OIDC</b>完成登录。
         </div>
         <div class="login-form">
-          <div class="form-group"><label>企业账号 / 手机号</label><input id="portalLoginName" placeholder="请输入账号或手机号"></div>
-          <div class="form-group"><label>登录密码</label><input id="portalLoginPwd" type="password" placeholder="请输入密码"></div>
-          <button class="btn btn-primary btn-lg" style="width:100%" onclick="portalLogin()">登 录</button>
+          <button class="btn btn-primary btn-lg" style="width:100%" onclick="portalLogin()">使用统一身份平台登录</button>
         </div>
-        <div style="display:flex;gap:16px;font-size:13px">
-          <a>忘记密码</a>
-        </div>
+        <div style="font-size:12px;color:var(--text-muted);line-height:1.6">演示流程：校验邀请 → 生成 state / nonce / PKCE → 基础平台授权 → 回调校验 OIDC sub → 建立 Portal 本地会话。</div>
       </div>
     </div>
   `;
 }
 
-// --- Portal Login handler (CM-004: 首登强制改密) ---
+// --- Portal OIDC Login handler (prototype simulation) ---
 function portalLogin() {
-  const name = (document.getElementById('portalLoginName')||{}).value || '';
-  const pwd = (document.getElementById('portalLoginPwd')||{}).value || '';
-  if (!name || !pwd) { alert('请输入账号与密码'); return; }
-  if (store.portalAccount.forcePwdChange) {
-    // 默认口令首次登录 → 强制修改口令
-    navigate('portal-force-pwd');
-  } else {
-    navigate('portal-dashboard');
-  }
-}
-
-// --- Portal Force Password Change (CM-004, first-login) ---
-function renderForcePwdPage() {
-  const a = store.portalAccount;
-  return `
-    <div class="login-page">
-      <div class="login-card" style="width:460px">
-        <div class="login-logo">A</div>
-        <h2>首次登录 · 设置口令</h2>
-        <p class="login-sub">您通过客户经理下发的注册链接首次登录</p>
-        <div style="background:var(--warning-bg);border-radius:8px;padding:10px 12px;font-size:12px;color:#D97706;line-height:1.5">
-          ⚠️ 当前为<b>默认口令 11223344</b>首次登录，系统强制要求修改口令后方可使用。登录账号：<b>${a.account}</b>
-        </div>
-        <div class="login-form">
-          <div class="form-group"><label>新口令</label><input id="portalNewPwd" type="password" placeholder="请设置新口令" oninput="renderPwdComplexity('portalNewPwd','pwdMeterBox')"></div>
-          <div id="pwdMeterBox"></div>
-          <div class="form-group"><label>确认新口令</label><input id="portalNewPwd2" type="password" placeholder="请再次输入新口令"></div>
-          <div id="forcePwdErr" style="color:var(--danger);font-size:12px;display:none"></div>
-          <button class="btn btn-primary btn-lg" style="width:100%" onclick="saveForcePwd()">确认并设置口令</button>
-          <button class="btn btn-secondary btn-lg" style="width:100%" onclick="navigate('portal-login')">返回登录</button>
-        </div>
-      </div>
-    </div>
-  `;
-}
-
-function saveForcePwd() {
-  const pwd = (document.getElementById('portalNewPwd')||{}).value || '';
-  const pwd2 = (document.getElementById('portalNewPwd2')||{}).value || '';
-  const a = store.portalAccount;
-  const r = checkPwdComplexity(pwd, a.account, '11223344');
-  const err = document.getElementById('forcePwdErr');
-  if (!pwd || !pwd2) { err.textContent='请填写新口令与确认口令'; err.style.display='block'; return; }
-  if (pwd !== pwd2) { err.textContent='两次输入的口令不一致'; err.style.display='block'; return; }
-  if (!r.ok) { err.textContent='口令不满足复杂度要求：'+r.msgs.join('、'); err.style.display='block'; return; }
-  a.forcePwdChange = false;
-  err.style.display='none';
-  alert('口令已设置，欢迎使用客户自助门户');
+  alert('OIDC 校验成功：sub 与邀请预置用户一致，Portal 本地会话已建立');
   navigate('portal-dashboard');
-}
-
-// --- Password complexity (system param: t_sys_param portal_password_policy) ---
-function checkPwdComplexity(pwd, loginName, defaultPwd) {
-  const msgs = [];
-  if (pwd.length < 8) msgs.push('至少 8 位');
-  if (!/[A-Z]/.test(pwd)) msgs.push('含大写字母');
-  if (!/[a-z]/.test(pwd)) msgs.push('含小写字母');
-  if (!/[0-9]/.test(pwd)) msgs.push('含数字');
-  if (!/[^A-Za-z0-9]/.test(pwd)) msgs.push('含特殊字符');
-  if (defaultPwd && pwd === defaultPwd) msgs.push('不能与默认口令相同');
-  if (loginName && pwd && loginName.length>=4 && pwd.indexOf(loginName)>-1) msgs.push('不能包含登录名/手机号');
-  let score = 0;
-  if (pwd.length>=8) score+=25;
-  if (/[A-Z]/.test(pwd)&&/[a-z]/.test(pwd)) score+=20;
-  if (/[0-9]/.test(pwd)) score+=20;
-  if (/[^A-Za-z0-9]/.test(pwd)) score+=20;
-  if (pwd && pwd!==defaultPwd && !(loginName&&pwd.indexOf(loginName)>-1)) score+=15;
-  score = Math.min(100, score);
-  return { ok: msgs.length===0, msgs, score };
-}
-function renderPwdComplexity(inputId, boxId) {
-  const el = document.getElementById(inputId);
-  const box = document.getElementById(boxId);
-  if (!el || !box) return;
-  const pwd = el.value;
-  const a = store.portalAccount;
-  const r = checkPwdComplexity(pwd, a.account, '11223344');
-  const color = r.score>=80?'var(--accent)':r.score>=50?'var(--warning)':'var(--danger)';
-  const label = r.score>=80?'强':r.score>=50?'中':'弱';
-  let html = `<div class="pwd-strength"><div class="pwd-strength-fill" style="width:${r.score}%;background:${color}"></div></div>`;
-  html += `<div style="font-size:11px;margin-top:4px;color:${color}">口令强度：${label}（${r.score}%）</div>`;
-  if (pwd) {
-    html += `<div style="font-size:11px;margin-top:4px;color:var(--text-muted)">要求：≥8 位；含大写+小写+数字+特殊字符；不与默认口令 11223344 相同；不包含登录名/手机号。</div>`;
-    if (r.msgs.length) html += `<div style="font-size:11px;margin-top:2px;color:var(--danger)">未满足：${r.msgs.join('、')}</div>`;
-  }
-  box.innerHTML = html;
 }
 
 // --- Portal Projects ---
@@ -1139,62 +1052,38 @@ function renderEvalPage() {
 // --- Account Security ---
 function renderPortalAccountSecurity() {
   const a = store.portalAccount;
-  const strengthColor = a.pwdStrength >= 80 ? 'var(--accent)' : a.pwdStrength >= 50 ? 'var(--warning)' : 'var(--danger)';
-  const strengthLabel = a.pwdStrength >= 80 ? '强' : a.pwdStrength >= 50 ? '中' : '弱';
-  const strengthCls = a.pwdStrength >= 80 ? 'badge-success' : a.pwdStrength >= 50 ? 'badge-warning' : 'badge-danger';
   return `
     <div style="padding:32px;display:flex;flex-direction:column;gap:20px;max-width:880px">
       <div class="card"><div class="card-body">
-        <h3 style="font-size:16px;margin-bottom:16px">登录信息</h3>
+        <h3 style="font-size:16px;margin-bottom:16px">统一身份登录信息</h3>
+        <div class="info-row"><span class="info-label">身份提供方</span><span class="info-value">${a.identityProvider}</span></div>
+        <div class="info-row"><span class="info-label">OIDC 用户标识</span><span class="info-value">${a.platformUserId}</span></div>
+        <div class="info-row"><span class="info-label">Portal 角色</span><span class="info-value">${a.role}</span></div>
+        <div class="info-row"><span class="info-label">客户映射状态</span><span class="badge badge-success">${a.mappingStatus}</span></div>
         <div class="info-row"><span class="info-label">上一次登录时间</span><span class="info-value">${a.lastLogin}</span></div>
         <div class="info-row"><span class="info-label">登录 IP / 属地</span><span class="info-value">${a.lastIp} · ${a.lastLocation}</span></div>
         <div class="info-row"><span class="info-label">登录设备</span><span class="info-value">${a.lastDevice}</span></div>
         <div class="info-row" style="border-bottom:none"><span class="info-label">登录账号</span><span class="info-value">${a.account}</span></div>
       </div></div>
       <div class="card"><div class="card-body">
-        <h3 style="font-size:16px;margin-bottom:6px">登录口令</h3>
-        <div style="display:flex;align-items:center;gap:12px;margin:14px 0 6px">
-          <span style="color:var(--text-muted);font-size:13px">当前口令强度</span>
-          <span class="badge ${strengthCls}">${strengthLabel}</span>
-          <span style="color:var(--text-muted);font-size:12px">${a.pwdStrength}%</span>
+        <h3 style="font-size:16px;margin-bottom:6px">账号与会话安全</h3>
+        <div style="font-size:13px;color:var(--text-muted);line-height:1.7;margin-top:12px">密码设置、找回、登录失败锁定和 MFA 由基础平台统一身份系统负责；Portal 不保存或校验客户密码。</div>
+        <div class="info-row"><span class="info-label">本地会话到期</span><span class="info-value">${a.sessionExpiresAt}</span></div>
+        <div style="display:flex;gap:12px;margin-top:16px">
+          <button class="btn btn-primary" onclick="openIdentitySecurityCenter()">前往统一身份安全中心</button>
+          <button class="btn btn-secondary" onclick="revokeOtherSessions()">撤销其他 Portal 会话</button>
         </div>
-        <div class="pwd-strength"><div class="pwd-strength-fill" style="width:${a.pwdStrength}%;background:${strengthColor}"></div></div>
-        <button class="btn btn-secondary" style="margin-top:16px" onclick="toggleChangePwd()">修改口令</button>
-        ${showChangePwdPanel ? `
-          <div style="margin-top:18px;padding-top:18px;border-top:1px solid var(--card-border);display:flex;flex-direction:column;gap:14px">
-            <div class="form-group"><label>当前口令</label><input type="password" placeholder="请输入当前登录口令"></div>
-            <div class="form-group"><label>新口令</label><input id="acctNewPwd" type="password" placeholder="≥8 位，含大写+小写+数字+特殊字符" oninput="renderPwdComplexity('acctNewPwd','acctPwdMeter')"></div>
-            <div id="acctPwdMeter"></div>
-            <div class="form-group"><label>确认新口令</label><input id="acctNewPwd2" type="password" placeholder="请再次输入新口令"></div>
-            <div style="display:flex;gap:12px;justify-content:flex-end">
-              <button class="btn btn-secondary" onclick="toggleChangePwd()">取消</button>
-              <button class="btn btn-primary" onclick="saveChangePwd()">保存修改</button>
-            </div>
-          </div>
-        ` : ''}
       </div></div>
     </div>
   `;
 }
 
-function toggleChangePwd() {
-  showChangePwdPanel = !showChangePwdPanel;
-  const pc = document.getElementById('portalContent');
-  if (pc) pc.innerHTML = renderPortalAccountSecurity();
+function openIdentitySecurityCenter() {
+  alert('将跳转基础平台统一身份账号安全中心（改密 / MFA / 账号恢复）');
 }
 
-function saveChangePwd() {
-  const pwd = (document.getElementById('acctNewPwd')||{}).value || '';
-  const pwd2 = (document.getElementById('acctNewPwd2')||{}).value || '';
-  const a = store.portalAccount;
-  const r = checkPwdComplexity(pwd, a.account, '11223344');
-  if (!pwd || !pwd2) { alert('请填写新口令与确认口令'); return; }
-  if (pwd !== pwd2) { alert('两次输入的口令不一致'); return; }
-  if (!r.ok) { alert('口令不满足复杂度要求：'+r.msgs.join('、')); return; }
-  showChangePwdPanel = false;
-  const pc = document.getElementById('portalContent');
-  if (pc) pc.innerHTML = renderPortalAccountSecurity();
-  alert('口令已修改，请使用新口令重新登录');
+function revokeOtherSessions() {
+  alert('其他 Portal 本地会话已撤销');
 }
 
 
