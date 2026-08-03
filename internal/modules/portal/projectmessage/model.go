@@ -7,9 +7,7 @@ const (
 	SenderManager  = "MANAGER"
 )
 
-// Conversation is a Portal-owned station-message thread. The recipient is an
-// authoritative account identifier supplied by the project source; display
-// names and person references are never used as delivery identities.
+// Conversation 是 Portal 自有的站内信会话。收件人必须是项目源提供的权威账号标识，展示名和人员引用不能用于投递身份。
 type Conversation struct {
 	ID                       uint64     `gorm:"primaryKey;autoIncrement" json:"-"`
 	PublicID                 string     `gorm:"size:64;not null;uniqueIndex" json:"id"`
@@ -45,8 +43,7 @@ type Message struct {
 
 func (Message) TableName() string { return "portal_project_messages" }
 
-// MessageReadReceipt records one displayed recipient message. Unlike a high
-// water mark it cannot silently acknowledge unread holes on older pages.
+// MessageReadReceipt 逐条记录客户端实际展示的收件消息；相比高水位，它不会把旧分页中的未读空洞静默标记为已读。
 type MessageReadReceipt struct {
 	ID              uint64    `gorm:"primaryKey;autoIncrement"`
 	TenantID        string    `gorm:"size:64;not null;uniqueIndex:uq_portal_project_message_read,priority:1"`

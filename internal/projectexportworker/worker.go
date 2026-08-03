@@ -67,12 +67,14 @@ func (w *Worker) RunOnce(ctx context.Context) (bool, error) {
 		return false, err
 	}
 	var capture projectexport.Capture
+	// 导出只使用创建任务时冻结的快照，并复核租户、客户、项目和源版本绑定，绝不在渲染时读取漂移中的实时数据。
 	if err = json.Unmarshal(job.SnapshotJSON, &capture); err != nil || capture.TenantID != job.TenantID || capture.CustomerID != job.CustomerID || capture.Detail.Snapshot.ProjectID != job.ProjectID || capture.Detail.Snapshot.CustomerID != job.CustomerID || !capture.Detail.Snapshot.SourceUpdatedAt.Equal(job.SourceUpdatedAt) {
 		failErr := w.store.Fail(ctx, job, w.workerID, "PORTAL_PROJECT_EXPORT_SNAPSHOT_INVALID", w.now().UTC())
 		return true, errors.Join(err, failErr)
 	}
 	detail := capture.Detail
 	pdf, err := w.renderer.Render(ctx, detail, now)
+	// 即使渲染器未报错，也校验 PDF 魔数和大小上限，防止错误格式或异常大对象进入数据库下载链路。
 	if err != nil || len(pdf) == 0 || len(pdf) > maxPDFBytes || !bytes.HasPrefix(pdf, []byte("%PDF-")) {
 		failErr := w.store.Fail(ctx, job, w.workerID, "PORTAL_PROJECT_EXPORT_RENDER_FAILED", w.now().UTC())
 		return true, errors.Join(err, failErr)
@@ -99,8 +101,7 @@ func safeFileName(projectName string) string {
 	return value + "-项目进度.pdf"
 }
 
-// PDFCPURenderer generates a real PDF from the immutable snapshot JSON. Its
-// font file is deployment configuration, not a host-specific implicit path.
+// PDFCPURenderer 从不可变快照生成真实 PDF；字体路径属于显式部署配置，不依赖宿主机隐式环境。
 type PDFCPURenderer struct {
 	config   *model.Configuration
 	fontName string
@@ -197,6 +198,7 @@ func paginatePDFRows(rows []string, columns, linesPerPage int) [][]string {
 }
 
 func wrapPDFLine(value string, columns int) []string {
+	// 使用显示宽度而非 rune 数量换行，保证中英文混排在等宽 PDF 文本布局中不会越界。
 	if value == "" {
 		return []string{""}
 	}

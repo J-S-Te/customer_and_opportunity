@@ -12,8 +12,7 @@ type outboxStore struct{ db *gorm.DB }
 
 func newOutboxStore(db *gorm.DB) *outboxStore { return &outboxStore{db: db} }
 
-// claim holds row locks only while establishing a finite processing lease.
-// External HTTP is always called after this transaction has committed.
+// 领取事务只负责建立有限租约，提交后才调用项目系统；数据库行锁不会跨越外部 HTTP。
 func (s *outboxStore) claim(ctx context.Context, workerID string, now time.Time, lease time.Duration, limit int) ([]report.Outbox, error) {
 	var claimed []report.Outbox
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -65,6 +64,7 @@ func (s *outboxStore) sent(ctx context.Context, event report.Outbox, workerID st
 }
 
 func (s *outboxStore) failed(ctx context.Context, event report.Outbox, workerID string, now time.Time, summary string) error {
+	// 有限退避耗尽后转死信；错误摘要先清洗，避免上游响应或凭据污染持久化诊断字段。
 	attempt := event.RetryCount + 1
 	status, next := outboxFailurePlan(now, attempt)
 	result := s.db.WithContext(ctx).Model(&report.Outbox{}).

@@ -26,6 +26,7 @@ func Created(c *gin.Context, data any) {
 }
 
 func Error(c *gin.Context, err error) {
+	// 对外只暴露稳定错误码和安全消息，内部 Cause 不进入响应；同时把错误码留给访问日志关联。
 	appErr := apperror.As(err)
 	observability.RecordErrorCode(c, appErr.Code)
 	c.JSON(appErr.HTTPStatus, Envelope{Code: appErr.Code, Message: appErr.Message, RequestID: request.ID(c.Request.Context()), Details: appErr.Details})

@@ -81,8 +81,7 @@ type machineAuthenticator interface {
 func NewRouter(deps RouterDependencies) *gin.Engine {
 	logger := deps.Logger
 	if logger == nil {
-		// Router-only tests and embedders remain silent unless they explicitly
-		// provide a logger. The production bootstrap always supplies one.
+		// 仅路由测试和嵌入方未显式提供日志器时保持静默；生产装配始终注入结构化日志器。
 		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
 	router := gin.New()
@@ -237,11 +236,8 @@ func portalAccessLogActor(c *gin.Context) (string, string) {
 	return session.TenantID, session.PlatformUserID
 }
 
-// configureOpaquePathRouting keeps encoded path separators inside one route
-// parameter. Project-service identifiers are opaque and may legitimately
-// contain '/', while every handler still applies its tenant/customer scope
-// before reading data. Browsers must percent-encode the identifier; accepting
-// a literal slash would still select another route shape.
+// 保留编码后的路径分隔符，使其仍属于一个不透明项目标识。处理器读取前继续叠加租户和客户范围；
+// 浏览器必须编码标识中的斜杠，未编码斜杠仍会匹配成另一条路由结构。
 func configureOpaquePathRouting(router *gin.Engine) {
 	router.UseRawPath = true
 	router.UnescapePathValues = true
@@ -404,9 +400,8 @@ func maskIPAddress(value string) string {
 	return net.IP(bytes).String()
 }
 
-// directRemoteIP deliberately ignores forwarding headers. Deployments that
-// need the original client address must first introduce an explicit trusted
-// proxy CIDR contract; Gin's permissive proxy defaults are not security data.
+// 有意忽略转发头。若部署需要原始客户端地址，必须先配置明确的可信代理 CIDR；Gin 的宽松代理
+// 默认值不能作为账号安全审计依据。
 func directRemoteIP(remoteAddress string) string {
 	host, _, err := net.SplitHostPort(strings.TrimSpace(remoteAddress))
 	if err == nil {
@@ -835,10 +830,8 @@ func downloadReport(deps RouterDependencies) gin.HandlerFunc {
 		auditCtx, cancel := context.WithTimeout(context.WithoutCancel(c.Request.Context()), 3*time.Second)
 		defer cancel()
 		if completeErr := content.Complete(auditCtx, success, reason); completeErr != nil {
-			// The response body may already be committed, so its status cannot be
-			// rewritten safely. Surface the audit/count failure through Gin's
-			// error chain for the server's request-level observability without
-			// logging credentials or object references.
+			// 响应体可能已经提交，不能再安全改写状态码；通过 Gin 错误链暴露审计/计数失败，供请求级
+			// 可观测性记录，同时不记录凭据或对象引用。
 			_ = c.Error(completeErr)
 			if deps.ReportDownloadError != nil {
 				deps.ReportDownloadError(auditCtx, completeErr)
@@ -988,8 +981,7 @@ func readReportNotification(deps RouterDependencies) gin.HandlerFunc {
 }
 
 func contentDisposition(fileName string) string {
-	// RFC 5987 encoding avoids quoted-string injection and keeps the ASCII
-	// fallback independent of callback-provided characters.
+	// RFC 5987 编码避免 quoted-string 注入，ASCII 回退文件名不依赖回调返回的任意字符。
 	return "attachment; filename=report.pdf; filename*=UTF-8''" + url.PathEscape(fileName)
 }
 
@@ -1487,8 +1479,7 @@ func listFeedbackForOperator(deps RouterDependencies) gin.HandlerFunc {
 			response.Error(c, err)
 			return
 		}
-		// This machine endpoint returns the same minimized customer DTO until a
-		// separately owned operator application contract is approved.
+		// 在独立的运营端应用契约获批前，机器接口仍返回与客户侧相同的最小 DTO，避免扩大数据披露。
 		items := make([]feedback.CustomerFeedback, 0, len(value.Items))
 		for i := range value.Items {
 			items = append(items, feedbackCustomerView(&value.Items[i]))
@@ -1523,9 +1514,8 @@ func processFeedback(deps RouterDependencies, action string) gin.HandlerFunc {
 	}
 }
 
-// bindFeedbackListQuery keeps the customer and operator list contracts
-// explicit. Pagination is rejected rather than silently normalized so a
-// malformed client cannot accidentally run a different query than intended.
+// 客户侧与运营侧列表查询保持显式契约；非法分页直接拒绝而非静默归一化，避免客户端实际执行
+// 与其意图不同的查询。
 func bindFeedbackListQuery(c *gin.Context) (feedback.ListQuery, bool) {
 	page, pageSize, ok := bindProjectPagination(c, "status", "type")
 	if !ok {
@@ -1538,9 +1528,8 @@ func bindFeedbackListQuery(c *gin.Context) (feedback.ListQuery, bool) {
 	}, true
 }
 
-// rejectFeedbackQuery enforces that detail and mutation commands do not
-// accept query-controlled behavior. Authentication, permission/scope and
-// browser Origin/CSRF middleware run before this handler-level check.
+// 详情和变更命令不接受查询参数控制行为；在此处理器校验前，认证、权限/范围及 Origin/CSRF
+// 中间件已经执行。
 func rejectFeedbackQuery(c *gin.Context) bool {
 	if onlyProjectQueryKeys(c) {
 		return true
@@ -1559,8 +1548,8 @@ func originAndCSRF(config Config) gin.HandlerFunc {
 			c.Abort()
 			return
 		}
-		// Custom non-simple header is required in addition to Origin. This protects
-		// cookie-authenticated writes without exposing a CSRF secret to JavaScript.
+		// 除 Origin 外还要求非简单自定义头，在不向 JavaScript 暴露 CSRF 密钥的情况下保护
+		// Cookie 认证写请求。
 		if c.GetHeader("X-CSRF-Token") != "1" {
 			response.Error(c, apperror.ErrForbidden)
 			c.Abort()
@@ -1582,9 +1571,8 @@ func requirePermission(expected string) gin.HandlerFunc {
 	}
 }
 
-// requireAnyPermission protects a read-only prerequisite shared by more than
-// one capability. The protected read does not broaden the separate detail or
-// mutation endpoints guarded by their own exact permissions.
+// 多种能力共享的只读前置数据可接受任一权限；详情和变更接口仍由各自精确权限保护，不随此前置
+// 查询扩大授权面。
 func requireAnyPermission(expected ...string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		for _, actual := range currentSession(c).Permissions {
@@ -1630,9 +1618,8 @@ func requireMachineScope(expected string) gin.HandlerFunc {
 	}
 }
 
-// requireMachineClientSubject prevents a valid application token belonging to
-// another integration client from exercising a high-impact account route merely
-// because it was accidentally granted the same scope.
+// 除 scope 外再绑定精确机器客户端 subject，防止其他集成客户端因误获同名 scope 而调用高影响
+// 账号接口。
 func requireMachineClientSubject(expected string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		principal, ok := sharedauth.FromContext(c.Request.Context())
@@ -1672,9 +1659,7 @@ func safeLocalPath(value, prefix string) bool {
 }
 func decode(c *gin.Context, target any) bool {
 	if err := requestbody.DecodeJSON(c, target); err != nil {
-		// Parser and body details are deliberately not returned. Besides keeping
-		// the response contract stable, this prevents unknown field names or
-		// malformed sensitive values from being reflected to callers.
+		// 不返回解析器和请求体细节，既保持错误契约稳定，也避免未知字段名或畸形敏感值被反射给调用方。
 		response.Error(c, apperror.New(http.StatusUnprocessableEntity, "COMMON_VALIDATION_ERROR", "request body is invalid"))
 		return false
 	}

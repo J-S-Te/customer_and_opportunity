@@ -140,6 +140,7 @@ func (r *GORMRepository) CountUnreadNotifications(ctx context.Context, actor Act
 	return count, err
 }
 func (r *GORMRepository) FindNotificationForUpdate(ctx context.Context, actor Actor, id uint64) (*Notification, error) {
+	// 行锁查询保留账号级范围，通知 ID 本身不能成为跨客户读取或确认的能力凭据。
 	var value Notification
 	err := r.tx(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
 		Where("tenant_id=? AND customer_id=? AND account_id=? AND id=?", actor.TenantID, actor.CustomerID, actor.AccountID, id).
@@ -215,6 +216,7 @@ func (r *GORMRepository) CreateDownloadEvent(ctx context.Context, value *Downloa
 	return r.tx(ctx).Create(value).Error
 }
 func (r *GORMRepository) CreateDownloadEventOnce(ctx context.Context, value *DownloadEvent) error {
+	// DedupeKey 的唯一约束用于压缩重复拒绝审计；没有去重键的正常事件仍保持只追加。
 	return r.tx(ctx).Clauses(clause.OnConflict{DoNothing: true}).Create(value).Error
 }
 

@@ -26,9 +26,8 @@ import (
 
 const maxAdapterResponseBytes = 64 << 10
 
-// OIDCAdapter follows the platform's deployed Discovery/JWKS contract. Token
-// claims are returned only after signature, issuer, audience, expiry and nonce
-// validation performed by go-oidc and the explicit platform checks below.
+// OIDC 适配器遵循平台发布的 Discovery/JWKS 契约；只有签名、issuer、audience、过期时间、
+// nonce 以及平台扩展声明全部通过后，才向账号服务返回 Claims。
 type OIDCAdapter struct {
 	config     oauth2.Config
 	verifier   *oidc.IDTokenVerifier
@@ -39,6 +38,8 @@ type OIDCAdapter struct {
 func NewOIDCAdapter(ctx context.Context, config Config) (*OIDCAdapter, error) {
 	httpClient := &http.Client{Timeout: 10 * time.Second}
 	if config.OIDCBackchannelURL != "" {
+		// 容器内可把公开 issuer 的网络请求改写到后通道地址，但请求语义和令牌 issuer 仍保持
+		// 公开地址，避免内部 DNS 结构泄露到浏览器协议。
 		publicURL, err := url.Parse(strings.TrimRight(config.OIDCIssuer, "/"))
 		if err != nil {
 			return nil, fmt.Errorf("parse OIDC issuer: %w", err)
@@ -68,6 +69,7 @@ func (a *OIDCAdapter) AuthorizationURL(state, nonce, codeChallenge, _ string) (s
 }
 
 func (a *OIDCAdapter) ExchangeAndValidate(ctx context.Context, code, verifier, nonce string) (account.Claims, error) {
+	// 授权码必须与一次性 PKCE verifier 和 nonce 同时消费；缺少任一绑定都拒绝交换。
 	if strings.TrimSpace(code) == "" || verifier == "" || nonce == "" {
 		return account.Claims{}, errors.New("OIDC callback parameters are incomplete")
 	}
@@ -107,6 +109,7 @@ func (a *OIDCAdapter) ExchangeAndValidate(ctx context.Context, code, verifier, n
 	if claims.Nonce != nonce || claims.TokenUse != "id_token" || strings.TrimSpace(claims.Subject) == "" || claims.Subject != strings.TrimSpace(claims.Subject) || claims.TenantID == "" || claims.RoleConfigHash == "" || claims.AuthzRevision == 0 || len(claims.Roles) == 0 || len(claims.Permissions) == 0 {
 		return account.Claims{}, errors.New("OIDC authorization claims are invalid")
 	}
+	// 本地会话上限取 ID Token 与 Access Token 的最早过期时间，避免访问令牌失效后仍保留权限快照。
 	return account.Claims{Subject: claims.Subject, TenantID: claims.TenantID, Roles: claims.Roles, Permissions: claims.Permissions, RoleConfigHash: claims.RoleConfigHash, AuthzRevision: claims.AuthzRevision, ExpiresAt: earliestExpiry(idToken.Expiry, token.Expiry), AccessToken: token.AccessToken}, nil
 }
 
@@ -139,6 +142,8 @@ type issuerTransport struct {
 }
 
 func (t *issuerTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	// 只改写与公开 issuer 精确同源的请求；其他 OAuth 或业务地址沿用原 Transport，防止凭据
+	// 被后通道配置吸收到非预期主机。
 	if request.URL.Scheme != t.public.Scheme || request.URL.Host != t.public.Host {
 		return t.base.RoundTrip(request)
 	}
@@ -177,10 +182,8 @@ type CRMInviteClient struct {
 	nonceReader io.Reader
 }
 
-// NewCRMInviteClient builds the Portal's dedicated client-credentials caller.
-// Audience is deliberately not sent to the token endpoint: the deployed base
-// platform signs all application tokens with its deployment-wide application
-// JWT audience, which CRM independently verifies from its own configuration.
+// 构造 Portal 专用的 client-credentials 调用方。取令牌时不发送 audience：平台使用部署级应用
+// JWT audience 签名，CRM 再依据自身配置独立验签并校验精确客户端 subject 与 scope。
 func NewCRMInviteClient(ctx context.Context, options CRMInviteClientOptions) (*CRMInviteClient, error) {
 	for name, value := range map[string]string{"base URL": options.BaseURL, "token URL": options.TokenURL, "client ID": options.ClientID, "client secret": options.ClientSecret} {
 		if strings.TrimSpace(value) == "" {

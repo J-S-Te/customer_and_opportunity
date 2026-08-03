@@ -8,9 +8,8 @@ import (
 	"io"
 )
 
-// AEADCodec encrypts short-lived OIDC secrets and sensitive report fields with
-// a fresh AES-256-GCM nonce. Production deployments should rotate this key via
-// a managed secret and retain old key versions until activation rows expire.
+// 使用每次随机 nonce 的 AES-256-GCM 加密短期 OIDC 秘密和报告敏感字段。生产轮换密钥时需保留
+// 旧版本，直到仍引用旧密文的登录事务或业务记录完成迁移/过期。
 type AEADCodec struct{ aead cipher.AEAD }
 
 func NewAEADCodec(key []byte) (*AEADCodec, error) {

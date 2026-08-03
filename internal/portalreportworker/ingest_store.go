@@ -15,6 +15,7 @@ func newIngestJobStore(db *gorm.DB) *ingestJobStore { return &ingestJobStore{db:
 func (s *ingestJobStore) claim(ctx context.Context, workerID string, now time.Time, lease time.Duration, limit int) ([]report.IngestJob, error) {
 	var claimed []report.IngestJob
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// 过期租约允许接管，稳定 EventID 则把可能重复的文件摄取约束为幂等操作。
 		var jobs []report.IngestJob
 		if err := tx.Raw(`SELECT * FROM portal_report_ingest_jobs
 WHERE ((status IN ('PENDING','RETRY_WAIT') AND (next_retry_at IS NULL OR next_retry_at <= ?))

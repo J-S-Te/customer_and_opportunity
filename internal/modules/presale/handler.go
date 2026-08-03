@@ -25,14 +25,14 @@ func NewHandler(service *Service, alerts *AlertService, actors ActorResolver) *H
 	return &Handler{service: service, alerts: alerts, actors: actors}
 }
 
-// UseReports attaches the TS-009 query boundary without changing the existing
-// TS handler constructor used by earlier modules.
+// 报表服务作为可选能力后装配，保留原有处理器构造签名；未装配时查询入口失败关闭，
+// 不会绕过报表服务中的数据范围解析直接访问仓储。
 func (h *Handler) UseReports(reports *ReportService) *Handler {
 	h.reports = reports
 	return h
 }
 
-// UseEngineers attaches the PMS-backed tenant personnel directory.
+// 工程师目录来自 PMS 同步投影；HTTP 层只传递筛选条件，人员有效性和租户边界仍由服务层确认。
 func (h *Handler) UseEngineers(engineers *EngineerService) *Handler {
 	h.engineers = engineers
 	return h
@@ -146,6 +146,8 @@ func (h *Handler) RequestReportExport(c *gin.Context) {
 }
 
 func (h *Handler) reportRequest(c *gin.Context) (Actor, ReportQuery, bool) {
+	// 报表范围从已认证主体解析，查询参数只能进一步收窄范围。organization_id、person_id
+	// 和 opportunity_id 不能把调用者扩展到服务端授权范围之外。
 	actor, ok := h.actor(c)
 	if !ok {
 		return Actor{}, ReportQuery{}, false
@@ -168,6 +170,7 @@ func (h *Handler) reportRequest(c *gin.Context) (Actor, ReportQuery, bool) {
 }
 
 func parseReportQuery(from, to, organizationID, personID string, opportunityID uint64) (ReportQuery, bool) {
+	// 统一转换到 UTC，仓储按 [From, To) 统计；区间先后关系及可访问范围由报表服务继续校验。
 	fromValue, err := time.Parse(time.RFC3339, strings.TrimSpace(from))
 	if err != nil {
 		return ReportQuery{}, false
@@ -396,8 +399,8 @@ func (h *Handler) RequestDetail(c *gin.Context) {
 	response.OK(c, value)
 }
 
-// ContactPhone is a separate no-store read path so opening ordinary task
-// detail never decrypts sensitive contact data in the browser or service.
+// 联系电话使用独立的 no-store 读取入口，普通详情不会触发解密；服务层还会复核资源范围，
+// 并在返回明文前写入隐私审计，审计失败时不泄露号码。
 func (h *Handler) ContactPhone(c *gin.Context) {
 	c.Header("Cache-Control", "no-store, private")
 	c.Header("Pragma", "no-cache")
@@ -473,6 +476,7 @@ func (h *Handler) AvailableActions(c *gin.Context) {
 }
 
 func onlyQueryKeys(c *gin.Context, allowed ...string) bool {
+	// 拒绝未知参数和同名多值参数，避免代理、框架或签名组件对重复查询值选择不一致。
 	values, err := url.ParseQuery(c.Request.URL.RawQuery)
 	if err != nil {
 		return false
@@ -741,8 +745,8 @@ func (h *Handler) Delivery(c *gin.Context) {
 	response.OK(c, value)
 }
 
-// ApprovalCallback accepts only machine-authenticated calls. The callback's
-// tenant must be supplied by verified machine claims, never by request JSON.
+// 审批回调只接受具备单用途权限的机器主体；租户来自已验证的机器声明，而不是请求 JSON，
+// 服务层再以任务绑定、事件序号和当前节点抵御伪造、重复及乱序回调。
 func (h *Handler) ApprovalCallback(c *gin.Context) {
 	actor, ok := h.actor(c)
 	if !ok {

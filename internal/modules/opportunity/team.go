@@ -24,9 +24,8 @@ var memberRoles = map[string]struct{}{
 	MemberRoleOther:            {},
 }
 
-// ChangeOwner replaces the single owner under optimistic locking. Target IDs
-// are platform OIDC subjects, and the injected platform owner directory
-// validates the selected subject/organization membership before persistence.
+// 负责人变更通过乐观锁替换唯一负责人。目标用户 ID 是平台 OIDC 主体，
+// 落库前由平台权威目录校验用户与组织的有效任职关系。
 func (s *Service) ChangeOwner(ctx context.Context, id uint64, input ChangeOwnerRequest) (*Response, error) {
 	principal, err := requirePrincipal(ctx)
 	if err != nil {
@@ -74,8 +73,7 @@ func (s *Service) ChangeOwner(ctx context.Context, id uint64, input ChangeOwnerR
 		return nil, ErrVersionConflict
 	}
 	if model.OwnerUserID == ownerID && model.OwnerOrgID == ownerOrgID {
-		// A semantic no-op does not consume a version or generate audit/outbox
-		// noise. The response is still persisted for stable key replay.
+		// 业务语义未变化时不消耗版本号，也不制造审计或发件箱噪声；但仍保存响应，保证同键重放稳定。
 		result := toResponse(model)
 		encodedResponse, encodeErr := json.Marshal(result)
 		if encodeErr != nil {
@@ -98,9 +96,8 @@ func (s *Service) ChangeOwner(ctx context.Context, id uint64, input ChangeOwnerR
 		if updateErr := s.repo.UpdateOwner(txCtx, model, input.Version); updateErr != nil {
 			return updateErr
 		}
-		// Alert recipients are versioned by owner. A transfer must cancel the
-		// old owner's unread alert immediately; the next scan creates the new
-		// owner's alert under the same threshold version if still overdue.
+		// 阶段告警按负责人区分接收者。转交时立即取消旧负责人未读告警；若仍超期，
+		// 下次扫描会在同一阈值版本下为新负责人生成告警。
 		if cancelErr := cancelActiveStageAlerts(txCtx, s.db, principal.TenantID, model.ID, principal.UserID, s.now()); cancelErr != nil {
 			return cancelErr
 		}
@@ -122,9 +119,8 @@ func (s *Service) ChangeOwner(ctx context.Context, id uint64, input ChangeOwnerR
 		})
 	})
 	if err != nil {
-		// A same-key concurrent request can lose the version race after the
-		// winning transaction commits. Re-read the actor-bound durable result
-		// before surfacing the underlying version/unique-key error.
+		// 同键并发请求可能在胜出事务提交后输掉版本竞争；返回底层版本或唯一键错误前，
+		// 先重读操作者绑定的持久化结果以恢复精确重放。
 		return s.replayOwnerChange(ctx, principal, id, idempotencyKey, requestHash, err)
 	}
 	result := toResponse(model)
@@ -146,9 +142,8 @@ func (s *Service) replayOwnerChange(ctx context.Context, principal auth.Principa
 	return &replay, nil
 }
 
-// GetMembers returns current rows by default. includeInactive also returns
-// deactivated subjects, but it is not a complete sequence of repeated
-// membership terms; the immutable business audit is authoritative for changes.
+// GetMembers 默认返回当前成员；includeInactive 也包含停用主体，但它并不是多次任期的完整序列，
+// 成员变化仍以不可变业务审计和任期记录为准。
 func (s *Service) GetMembers(ctx context.Context, id uint64, includeInactive bool) (*TeamResponse, error) {
 	principal, err := requirePrincipal(ctx)
 	if err != nil {
@@ -165,10 +160,8 @@ func (s *Service) GetMembers(ctx context.Context, id uint64, includeInactive boo
 	return &TeamResponse{OpportunityID: id, Version: model.Version, Members: memberResponses(members)}, nil
 }
 
-// ListMemberTerms returns independently queryable membership intervals after
-// proving access to the parent opportunity. A LEGACY_SNAPSHOT row carries a
-// snapshot_at observation and active_at_snapshot state, never a fabricated
-// pre-migration start or end time.
+// ListMemberTerms 先证明父商机可见，再返回可独立查询的参与区间。LEGACY_SNAPSHOT 只记录
+// 迁移时观察时间和当时活动状态，不伪造迁移前的开始或结束时间。
 func (s *Service) ListMemberTerms(ctx context.Context, id uint64, query MemberTermQuery) (pagination.Page[MemberTermResponse], error) {
 	principal, err := requirePrincipal(ctx)
 	if err != nil {
@@ -184,8 +177,7 @@ func (s *Service) ListMemberTerms(ctx context.Context, id uint64, query MemberTe
 	return s.repo.ListMemberTerms(ctx, principal.TenantID, id, query)
 }
 
-// ReplaceMembers atomically replaces the current set, reactivates historical
-// rows when necessary, and deactivates removed rows without physical deletion.
+// ReplaceMembers 原子替换当前成员集合：需要时重新激活历史行，并停用被移除成员而不物理删除。
 func (s *Service) ReplaceMembers(ctx context.Context, id uint64, input ReplaceMembersRequest) (*TeamResponse, error) {
 	principal, err := requirePrincipal(ctx)
 	if err != nil {
@@ -290,8 +282,7 @@ func memberResponses(models []Member) []MemberResponse {
 }
 
 func ownerNotificationEvents(tenantID string, opportunity *Opportunity, oldOwnerID, newOwnerID string, version uint64, now time.Time) ([]OutboxEvent, error) {
-	// An organization reassignment with the same human owner is auditable but is
-	// not a person-to-person handover, so it must not create owner notifications.
+	// 同一负责人仅变更所属组织需要审计，但不属于人员交接，因此不能生成负责人变更通知。
 	if oldOwnerID == newOwnerID {
 		return nil, nil
 	}

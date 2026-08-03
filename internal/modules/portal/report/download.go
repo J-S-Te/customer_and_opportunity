@@ -64,8 +64,7 @@ type GrantResult struct {
 type DownloadMetadata struct {
 	IPHash     string
 	DeviceHash string
-	// TrustedLocationCode is populated only from a mutually authenticated
-	// gateway/GeoIP contract. Direct browser headers are never promoted into it.
+	// TrustedLocationCode 只能由双向认证的网关/GeoIP 契约填写，浏览器请求头不能直接提升为可信位置。
 	TrustedLocationCode string
 }
 
@@ -109,9 +108,7 @@ func (c *DownloadContent) Complete(ctx context.Context, success bool, reason str
 	return c.complete(ctx, success, reason)
 }
 
-// DownloadRiskPolicy is the explicit trust boundary for gateway/GeoIP-based
-// anomaly rules. The default policy only permits a configured trusted policy;
-// bootstrap leaves it nil and therefore does not invent location assertions.
+// DownloadRiskPolicy 是网关/GeoIP 异常规则的显式信任边界；未配置可信策略时不能自行构造位置断言。
 type DownloadRiskPolicy interface {
 	Evaluate(context.Context, Actor, *Request, *Grant, DownloadMetadata) (freeze bool, reason string, err error)
 }
@@ -122,17 +119,14 @@ type WatermarkContext struct {
 	DownloadedAt                      time.Time
 }
 
-// DownloadWatermarker returns a newly rendered PDF containing the customer
-// name, masked account, request number/time and an unpredictable tracking code.
-// Identity and CJK font/template resolution belong to the implementation; the
-// download service never invents those values from numeric IDs.
+// DownloadWatermarker 生成含客户名、脱敏账号、申请编号/时间和不可预测追踪码的新 PDF。
+// 身份、中文字体和模板解析由实现负责，下载服务不能从数字 ID 猜测这些值。
 type DownloadWatermarker interface {
 	Apply(context.Context, []byte, WatermarkContext) ([]byte, error)
 }
 
-// FileReader must return plaintext whose size/hash/MIME have already been
-// verified against File. Implementations own object retrieval and envelope
-// decryption; returning an unverified object stream violates this contract.
+// FileReader 必须返回已对照 File 校验大小、摘要和 MIME 的明文。
+// 实现负责对象获取与信封解密，返回未验证数据流属于违反接口契约。
 type FileReader interface {
 	OpenVerified(context.Context, *File) (PreparedDownload, error)
 }
@@ -178,10 +172,8 @@ type DownloadService struct {
 	requireProductionSecurity bool
 }
 
-// RequireProductionSecurity makes trusted risk evaluation and per-download
-// watermarking mandatory. Portal bootstrap enables this even while adapters
-// are unavailable so partial production configuration cannot silently bypass
-// either control.
+// RequireProductionSecurity 强制可信风险评估和逐次下载水印。
+// 即使适配器暂不可用，生产启动仍开启要求，避免部分配置静默绕过控制。
 func (s *DownloadService) RequireProductionSecurity(watermarks DownloadWatermarker) *DownloadService {
 	s.requireProductionSecurity = true
 	s.watermarks = watermarks
@@ -195,9 +187,7 @@ func NewDownloadService(repo DownloadRepository, files FileReader, risk Download
 	return &DownloadService{repo: repo, files: files, risk: risk, clock: clock, ids: ids, tokens: tokens, ttl: ttl, bufferSlots: make(chan struct{}, maxConcurrentDownloadBuffers)}
 }
 
-// RuntimeAvailable reports whether the dependencies required by the secure
-// download path are actually injected. It is intentionally local-only: it
-// never probes a remote Provider and never exposes configuration values.
+// RuntimeAvailable 只报告安全下载依赖是否已注入；它不探测远端供应方，也不暴露配置值。
 func (s *DownloadService) RuntimeAvailable() bool {
 	if s == nil || s.files == nil {
 		return false
@@ -212,6 +202,7 @@ func (s *DownloadService) RuntimeAvailable() bool {
 }
 
 func (s *DownloadService) CreateGrant(ctx context.Context, actor Actor, requestID uint64, command GrantCommand) (*GrantResult, error) {
+	// 每个账号/报告只保留一个活动授权槽位；明文令牌仅存在于首次成功响应，服务端只持久化摘要。
 	actor.TenantID = strings.TrimSpace(actor.TenantID)
 	actor.AccountID = strings.TrimSpace(actor.AccountID)
 	idempotencyKey, metadata := strings.TrimSpace(command.IdempotencyKey), command.Metadata
@@ -266,10 +257,7 @@ func (s *DownloadService) CreateGrant(ctx context.Context, actor Actor, requestI
 		return s.repo.CreateDownloadEvent(tx, downloadEvent(actor, requestID, &grant.ID, "GRANT_ISSUED", "SUCCESS", "", metadata, sourceHash("GRANT", idempotencyKey), requestctx.ID(tx), now))
 	})
 	if err != nil {
-		// Losing a same-scope ACTIVE-slot race never returns another request's
-		// credential and never persists plaintext. The caller must request a new
-		// authorization with a new key because an old plaintext token cannot be
-		// reconstructed safely.
+		// 同范围活动槽位竞争失败时绝不返回其他请求的凭据，也不持久化明文；旧令牌无法安全重建，调用方必须换键重新申请。
 		if strings.Contains(strings.ToLower(err.Error()), "uq_portal_report_grant_active") || strings.Contains(strings.ToLower(err.Error()), "duplicate") {
 			return nil, ErrIssueReplay
 		}
@@ -278,8 +266,7 @@ func (s *DownloadService) CreateGrant(ctx context.Context, actor Actor, requestI
 	return &GrantResult{GrantID: grant.PublicID, Status: GrantActive, ExpiresAt: grant.ExpiresAt, DownloadToken: token}, nil
 }
 
-// AuthorizeDownload consumes no token and opens no object until every scoped
-// check passes. Dependency failures are audited but do not increase counters.
+// AuthorizeDownload 在全部范围检查通过前不消费令牌、不开启对象；依赖故障会审计但不增加下载次数。
 func (s *DownloadService) AuthorizeDownload(ctx context.Context, actor Actor, requestID uint64, plaintextToken string, metadata DownloadMetadata) (*DownloadContent, error) {
 	actor.TenantID = strings.TrimSpace(actor.TenantID)
 	actor.AccountID = strings.TrimSpace(actor.AccountID)
@@ -292,9 +279,7 @@ func (s *DownloadService) AuthorizeDownload(ctx context.Context, actor Actor, re
 	now := s.clock.Now().UTC()
 	if len(plaintextToken) < minimumTokenLen || len(plaintextToken) > maximumTokenLen {
 		if err := s.auditInvalidToken(ctx, actor, requestID, metadata, now); err != nil {
-			// A missing or foreign parent cannot accept a referentially valid audit
-			// row. Keep it indistinguishable from every other invalid credential;
-			// only a real audit dependency/write failure is surfaced as 503.
+			// 缺失或跨范围父记录无法承载满足外键的审计行，应与其他无效凭据保持不可区分；只有真实审计依赖/写入故障才返回 503。
 			if errors.Is(err, ErrNotFound) {
 				return nil, ErrGrantNotFound
 			}
@@ -363,8 +348,7 @@ func (s *DownloadService) AuthorizeDownload(ctx context.Context, actor Actor, re
 					publicID = sourceHash("RISK_ALERT", grant.PublicID+"\x00"+strconv.FormatInt(now.UnixNano(), 10))
 				}
 				riskCode := normalizeRiskCode(reason)
-				// Persist the denied event first. A repository transaction rolls the
-				// alert and grant mutation back if immutable audit cannot be written.
+				// 先持久化拒绝事件；若不可变审计写入失败，仓储事务会回滚告警及授权变更。
 				if auditErr := s.auditDenied(tx, actor, requestID, grant, "FROZEN", riskCode, metadata, now); auditErr != nil {
 					return auditErr
 				}
@@ -450,12 +434,8 @@ func (s *DownloadService) AuthorizeDownload(ctx context.Context, actor Actor, re
 		}
 		return nil, ErrDownloadIntegrity
 	}
-	// OpenVerified is a trust-boundary contract, but a stream can still be
-	// truncated or swapped after its metadata is returned. Buffer at most the
-	// product's 50 MiB file limit and verify before the handler commits a 200.
-	// This intentionally trades bounded memory for correct HTTP semantics and
-	// avoids writing decrypted reports to temporary disk. A small process-local
-	// semaphore caps concurrent buffers; waiting is cancellable with the request.
+	// OpenVerified 是信任边界，但返回元数据后流仍可能被截断或替换。
+	// 在提交 200 前按 50 MiB 上限缓冲并复核，以有限内存换取正确 HTTP 语义且避免明文落临时盘；本地信号量限制并发，等待可随请求取消。
 	raw, readErr := io.ReadAll(io.LimitReader(prepared.Reader, file.Size+1))
 	closeErr := prepared.Reader.Close()
 	actualHash := sha256.Sum256(raw)
@@ -600,10 +580,8 @@ func (s *DownloadService) completeAttempt(ctx context.Context, actor Actor, requ
 	return decisionErr
 }
 
-// watermarkTrackingDigest binds the opaque code printed in the PDF to the
-// tenant/customer/account/report scope without storing the plaintext code.
-// Operations can hash a reported code with the same canonical coordinates to
-// locate the exact append-only success event.
+// watermarkTrackingDigest 将 PDF 中的不透明追踪码绑定到租户/客户/账号/报告范围而不保存明文。
+// 运维可用相同规范坐标计算摘要，定位对应的只追加成功事件。
 func watermarkTrackingDigest(actor Actor, requestID uint64, trackingCode string) string {
 	value := strings.Join([]string{actor.TenantID, strconv.FormatUint(actor.CustomerID, 10), actor.AccountID, strconv.FormatUint(requestID, 10), trackingCode}, "\x00")
 	digest := sha256.Sum256([]byte(value))
@@ -627,9 +605,7 @@ func tokenHash(token string) string {
 	return base64.RawURLEncoding.EncodeToString(sum[:])
 }
 
-// invalidAttemptDedupeKey caps unauthenticated-token denial rows to one per
-// scoped account/report/hour. It intentionally excludes the token, so neither
-// plaintext credentials nor token digests become an audit-table oracle.
+// invalidAttemptDedupeKey 将无效令牌拒绝审计限制为每账号/报告/小时一条，且不含令牌，避免审计表成为凭据摘要探测器。
 func invalidAttemptDedupeKey(actor Actor, requestID uint64, now time.Time) string {
 	bucket := now.UTC().Truncate(time.Hour).Format(time.RFC3339)
 	return sourceHash("INVALID_DOWNLOAD", actor.TenantID+"\x00"+actor.AccountID+"\x00"+strconv.FormatUint(requestID, 10)+"\x00"+bucket)

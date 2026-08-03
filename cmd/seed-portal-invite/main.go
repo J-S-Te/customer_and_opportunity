@@ -1,8 +1,6 @@
-// Command seed-portal-invite provisions a real Portal customer account through
-// the production CM-004 saga: it creates the platform external user (no local
-// password), assigns customer_portal/portal_customer, registers the Portal
-// identity mapping and returns the one-time activation link. Use it only on a
-// local development stack that has completed the Portal onboarding.
+// Command seed-portal-invite 通过生产 CM-004 Saga 创建真实 Portal 客户账号：创建无本地密码的
+// 平台外部用户、授予 customer_portal/portal_customer、登记 Portal 身份映射并返回一次性激活链接。
+// 仅用于已完成 Portal 接入的本地开发环境。
 package main
 
 import (
@@ -122,8 +120,7 @@ func findCustomer(ctx context.Context, db *gorm.DB, tenantID, filter string) (cu
 	return model, nil
 }
 
-// inviteProtector mirrors the bootstrap portal-invite operation protector so
-// provision snapshots stay encrypted outside the portalinvite module.
+// 与正式装配使用相同的邀请操作保护器，确保 provision 补偿快照离开 portalinvite 模块后仍为密文。
 type inviteProtector struct {
 	codec *security.SensitiveCodec
 }

@@ -151,8 +151,7 @@ func (r *GORMRepository) ListMessages(ctx context.Context, tenantID string, conv
 		}
 		db = db.Where("accepted_at<? OR (accepted_at=? AND id<?)", anchor.AcceptedAt, anchor.AcceptedAt, anchor.ID)
 	}
-	// Fetch one extra row to derive has_more without OFFSET. The first item in
-	// display order becomes the next page's stable exclusive anchor.
+	// 多取一行推导 has_more，避免 OFFSET；当前显示顺序的首项成为下一页稳定的排他游标。
 	items := make([]Message, 0, pageSize+1)
 	if err := db.Order("accepted_at DESC,id DESC").Limit(pageSize + 1).Find(&items).Error; err != nil {
 		return page, err

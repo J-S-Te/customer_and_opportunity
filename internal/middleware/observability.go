@@ -14,13 +14,11 @@ import (
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/response"
 )
 
-// AccessLogActor resolves an authenticated actor that is stored outside the
-// shared Principal context. It must only return server-verified identity data.
+// 为未使用共享 Principal 的认证实现解析日志主体；只能返回服务端已验证的身份数据。
 type AccessLogActor func(*gin.Context) (tenantID string, userID string)
 
-// AccessLog emits one bounded structured event per request. Deliberately only
-// allowlisted fields are logged: query strings, raw paths, headers, bodies,
-// cookies, network addresses and user agents are never inspected.
+// 每个请求只输出一条字段受限的结构化事件；仅记录允许列表，查询串、原始路径、请求头、请求体、
+// Cookie、网络地址和 User-Agent 均不读取。
 func AccessLog(logger *slog.Logger, module string, actor AccessLogActor) gin.HandlerFunc {
 	if logger == nil {
 		logger = slog.Default()
@@ -48,10 +46,8 @@ func emitAccessLog(c *gin.Context, logger *slog.Logger, module string, actor Acc
 			tenantID, userID = resolvedTenant, resolvedUser
 		}
 	}
-	// Keep a stable error code that Recovery recorded even when a handler had
-	// already committed a success status before panicking. The status/bytes
-	// fields describe the actual writer state; the error code explains that the
-	// request still failed internally.
+	// 即使处理器在 panic 前已提交成功状态，也保留 Recovery 写入的稳定错误码。状态码/字节数描述
+	// 实际 Writer 状态，错误码则表明请求内部仍然失败。
 	if status < http.StatusBadRequest && errorCode == "" {
 		errorCode = ""
 	} else if errorCode == "" {
@@ -101,9 +97,8 @@ func safeHTTPMethod(method string) string {
 	}
 }
 
-// Recovery returns a controlled JSON error without logging the panic value or
-// request metadata. AccessLog records the resulting 500 using only its safe
-// allowlist, so secrets cannot leak through Gin's default header dump.
+// 将 panic 转换为受控 JSON 错误，不记录 panic 值或请求元数据；访问日志只按安全允许列表记录
+// 结果，避免 Gin 默认头转储泄露秘密。
 func Recovery(logger *slog.Logger, module string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		defer func() {

@@ -46,8 +46,7 @@ type RiskReviewCommand struct {
 	IdempotencyKey  string
 }
 
-// ListRiskAlerts returns only the current Portal account's alert evidence.
-// AccountID and operator identity are removed from the browser projection.
+// ListRiskAlerts 只返回当前 Portal 账号的告警证据；浏览器投影移除 AccountID 和运营身份。
 func (s *DownloadService) ListRiskAlerts(ctx context.Context, actor Actor, openOnly bool, page, pageSize int) (pagination.Page[RiskAlertView], error) {
 	actor.TenantID, actor.AccountID = strings.TrimSpace(actor.TenantID), strings.TrimSpace(actor.AccountID)
 	if !validActor(actor) {
@@ -63,9 +62,8 @@ func (s *DownloadService) ListRiskAlerts(ctx context.Context, actor Actor, openO
 	return result, err
 }
 
-// ListRiskAlertsForReview is machine-only and tenant scoped. It exposes the
-// account identifier needed by an authorized reviewer but never token/object
-// metadata, IP/device digests or provider error text.
+// ListRiskAlertsForReview 仅供机器接口使用并按租户限定。
+// 它暴露授权复核所需账号标识，但不暴露令牌/对象元数据、IP/设备摘要或供应方错误文本。
 func (s *DownloadService) ListRiskAlertsForReview(ctx context.Context, tenantID, status string, page, pageSize int) (pagination.Page[RiskAlertView], error) {
 	tenantID, status = strings.TrimSpace(tenantID), strings.ToUpper(strings.TrimSpace(status))
 	if !validBoundedText(tenantID, maxTenantIDBytes) || (status != "" && status != RiskAlertOpen && status != RiskAlertResolved) {
@@ -75,11 +73,8 @@ func (s *DownloadService) ListRiskAlertsForReview(ctx context.Context, tenantID,
 	return s.repo.ListRiskAlertsForReview(ctx, tenantID, status, page, pageSize)
 }
 
-// ReviewRiskAlert resolves one OPEN alert under a row lock. UNFREEZE restores
-// only the exact, unexpired frozen grant and is rejected if another active
-// grant already exists. REVOKE_AND_REISSUE never manufactures a plaintext
-// credential; it revokes the old grant and tells the customer UI to create a
-// new one on its next explicit click.
+// ReviewRiskAlert 在行锁下处理一个 OPEN 告警。UNFREEZE 只恢复精确且未过期的冻结授权，已有其他活动授权时拒绝。
+// REVOKE_AND_REISSUE 不制造明文凭据，而是撤销旧授权并要求客户下次明确点击时重新创建。
 func (s *DownloadService) ReviewRiskAlert(ctx context.Context, tenantID, operatorID, alertID string, command RiskReviewCommand) (*RiskAlertView, error) {
 	tenantID, operatorID, alertID = strings.TrimSpace(tenantID), strings.TrimSpace(operatorID), strings.TrimSpace(alertID)
 	command.Action = strings.ToUpper(strings.TrimSpace(command.Action))

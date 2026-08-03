@@ -63,6 +63,7 @@ func NewHTTPSource(cfg Config) (*HTTPSource, error) {
 }
 
 func (s *HTTPSource) Fetch(ctx context.Context, tenant string) (SourceSnapshot, error) {
+	// PMS 是共享技术人员池，租户边界只来自本地持久化任务；请求不发送 tenant，响应也不能声明或改变 tenant。
 	endpoint, err := url.Parse(s.endpoint)
 	if err != nil {
 		return SourceSnapshot{}, errors.New("invalid PMS endpoint")
@@ -149,9 +150,7 @@ func (s *HTTPSource) Fetch(ctx context.Context, tenant string) (SourceSnapshot, 
 		}
 		result.Engineers = append(result.Engineers, SourceEngineer{PersonID: strings.TrimSpace(value.PersonID), PersonName: strings.TrimSpace(value.PersonName), Department: strings.TrimSpace(value.Department), Role: strings.TrimSpace(value.Role), SkillTags: skills, Contact: strings.TrimSpace(value.Contact), ValidFlag: *value.ValidFlag, SyncedAt: syncedAt})
 	}
-	// J is a shared authoritative technical-personnel pool. The fixed OAuth
-	// client and configured endpoint establish the source; tenant is pinned from
-	// the durable local job only and is never sent to or accepted from PMS.
+	// 固定 OAuth 客户端和固定端点共同确定权威来源，返回快照只绑定到调用方传入的本地租户。
 	return result, nil
 }
 

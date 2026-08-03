@@ -70,6 +70,7 @@ func (r *GORMRepository) CreateGrant(ctx context.Context, actor Actor, exportPub
 }
 
 func (r *GORMRepository) ConsumeGrant(ctx context.Context, actor Actor, exportPublicID, tokenHash string, now time.Time, trace string) (*Job, error) {
+	// 授权消费、任务读取和审计事件处于同一事务，避免文件已返回但凭据仍可再次使用。
 	var result Job
 	err := r.session(ctx).Transaction(func(tx *gorm.DB) error {
 		err := tx.Clauses(clause.Locking{Strength: "SHARE"}).Where("tenant_id=? AND customer_id=? AND account_id=? AND public_id=? AND status=?", actor.TenantID, actor.CustomerID, actor.AccountID, exportPublicID, StatusReady).Take(&result).Error
@@ -103,6 +104,7 @@ func (r *GORMRepository) ConsumeGrant(ctx context.Context, actor Actor, exportPu
 }
 
 func (r *GORMRepository) RecordDeliveryOutcome(ctx context.Context, actor Actor, exportID uint64, now time.Time, trace string, success bool, reason string) error {
+	// 这里只记录服务端传输观察值；失败原因会规范化，避免把底层网络或文件细节写入审计。
 	eventType, result := "DOWNLOAD_STREAM_WRITTEN", "SUCCESS"
 	if !success {
 		eventType, result = "DOWNLOAD_STREAM_FAILED", "FAILED"

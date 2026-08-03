@@ -72,6 +72,7 @@ func (r *GORMRepository) FindForUpdate(ctx context.Context, tenantID string, id 
 	return feedbackResult(&value, err)
 }
 func (r *GORMRepository) Update(ctx context.Context, value *Feedback, version uint64, fields map[string]any) error {
+	// 乐观版本确保状态机转换不会覆盖另一位操作者刚提交的处理结果。
 	fields["version"] = gorm.Expr("version+1")
 	result := r.tx(ctx).Model(&Feedback{}).Where("tenant_id=? AND id=? AND version=? AND deleted_at IS NULL", value.TenantID, value.ID, version).Updates(fields)
 	if result.Error != nil {
@@ -86,6 +87,7 @@ func (r *GORMRepository) CreateMessage(ctx context.Context, value *Message) erro
 	return r.tx(ctx).Create(value).Error
 }
 func (r *GORMRepository) FindMessageByKey(ctx context.Context, tenantID string, feedbackID uint64, senderType, senderID, key string) (*Message, error) {
+	// 消息幂等范围包含聚合和发送者，不能用一个账号的键重放另一个账号的正文。
 	var value Message
 	err := r.tx(ctx).Where("tenant_id=? AND feedback_id=? AND sender_type=? AND sender_id=? AND idempotency_key=?", tenantID, feedbackID, senderType, senderID, key).Take(&value).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {

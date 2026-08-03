@@ -97,6 +97,7 @@ func (a *App) RunOnce(ctx context.Context) (int, error) {
 func (a *App) claim(ctx context.Context, now time.Time) ([]presale.OutboxEvent, error) {
 	var result []presale.OutboxEvent
 	err := a.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// 批量领取只建立有限租约，过期事件可被其他副本接管；后续投影仍需重新验证领取资格。
 		var events []presale.OutboxEvent
 		if err := tx.Raw(claimSQL(), eventType, statusPending, statusRetryWait, now, statusProcessing, now, a.batchSize).Scan(&events).Error; err != nil {
 			return err
@@ -135,6 +136,7 @@ type eventPayload struct {
 func (a *App) process(ctx context.Context, candidate presale.OutboxEvent) error {
 	now := a.now().UTC()
 	return a.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// 载荷仅作证据索引；通知接收人、快照和时点均由租户内的分配事件、任职记录及售前请求交叉复核。
 		var outbox presale.OutboxEvent
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id=? AND event_type=? AND status=? AND locked_by=? AND locked_until>=?", candidate.ID, eventType, statusProcessing, a.workerID, now).Take(&outbox).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -171,6 +173,7 @@ func (a *App) process(ctx context.Context, candidate presale.OutboxEvent) error 
 			return a.finish(tx, outbox, now, statusDeadLetter, outbox.RetryCount+1, reason, nil)
 		}
 		message := project(outbox, evidence, request, now)
+		// tenant_id + source_event_id 是投影幂等键，租约回收后重复执行也只产生一条站内通知。
 		if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "tenant_id"}, {Name: "source_event_id"}}, DoNothing: true}).Create(&message).Error; err != nil {
 			return err
 		}

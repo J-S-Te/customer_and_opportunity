@@ -111,9 +111,8 @@ func readProjectMessages(deps RouterDependencies) gin.HandlerFunc {
 	}
 }
 
-// The dedicated project-system machine client supplies the exact Portal
-// account recipient. Service queries also require it to equal the current
-// source-owned project snapshot, so a header alone never grants access.
+// 专用项目系统机器客户端提供精确 Portal 收件账号；服务查询还要求其等于当前源系统项目快照，
+// 单独伪造请求头不能获得访问权。
 func projectMessageManagerActor(c *gin.Context) (projectmessage.ManagerActor, error) {
 	principal, ok := sharedauth.FromContext(c.Request.Context())
 	accountID := strings.TrimSpace(c.GetHeader("X-Manager-Portal-Account-ID"))
@@ -241,9 +240,8 @@ func publicConversationDetail(value *projectmessage.Detail) gin.H {
 	return gin.H{"conversation": publicConversation(&value.Conversation), "messages": gin.H{"items": items, "page": 1, "page_size": value.Messages.PageSize, "total": value.Messages.Total, "has_more": value.Messages.HasMore, "next_before": value.Messages.NextBefore, "page_order": "LATEST_FIRST", "items_order": "OLDEST_FIRST"}, "read_state": value.ReadState}
 }
 
-// bindProjectMessagePagination preserves the old page=1 request while making
-// every historical page use an opaque exclusive keyset anchor. page>1 is
-// rejected because OFFSET pagination cannot remain stable during new writes.
+// 兼容旧客户端的 page=1，同时历史翻页统一使用不透明、排他的 keyset 游标；拒绝 page>1，
+// 因为新增消息期间 OFFSET 分页无法保持稳定。
 func bindProjectMessagePagination(c *gin.Context) (string, int, bool) {
 	page, size, ok := bindProjectPagination(c, "before")
 	if !ok {

@@ -11,6 +11,7 @@ const RequestIDHeader = "X-Request-ID"
 
 func RequestID() gin.HandlerFunc {
 	return func(c *gin.Context) {
+		// 仅接受长度受限的可打印标识字符，拒绝换行和分隔符注入；不可信值会被服务端新 ID 替换。
 		id := strings.TrimSpace(c.GetHeader(RequestIDHeader))
 		if !validRequestID(id) {
 			id = request.NewID()

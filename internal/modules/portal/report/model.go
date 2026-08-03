@@ -7,12 +7,8 @@ import (
 	"gorm.io/gorm"
 )
 
-// ActorModel mirrors the shared persistence fields for the two report records
-// whose human actor is an external Portal OIDC account. Portal account/subject
-// identifiers are bounded at 128 bytes, unlike the 64-byte internal-operator
-// default used by database.Model. Keeping the GORM metadata aligned with
-// migration 000041 prevents schema tooling and reviewers from inferring the
-// obsolete width; this service still uses explicit migrations, not AutoMigrate.
+// ActorModel 用于人类操作者是外部 Portal OIDC 账号的报告记录。
+// Portal 账号/主体上限为 128 字节，不同于 database.Model 的 64 字节内部操作者默认值；GORM 元数据须与显式迁移保持一致，本服务不使用 AutoMigrate。
 type ActorModel struct {
 	ID        uint64         `gorm:"primaryKey" json:"id"`
 	TenantID  string         `gorm:"size:64;not null;index" json:"-"`
@@ -60,9 +56,7 @@ type Request struct {
 
 func (Request) TableName() string { return "portal_report_requests" }
 
-// StatusEvent is the append-only audit projection used by the Portal report
-// detail timeline. Actor and trace fields are retained for server-side audit,
-// but are deliberately not exposed by the browser response.
+// StatusEvent 是报告详情时间线的只追加审计投影；操作者和追踪字段仅供服务端审计，不暴露给浏览器。
 type StatusEvent struct {
 	ID            uint64    `gorm:"primaryKey;autoIncrement"`
 	TenantID      string    `gorm:"size:64;not null"`
@@ -88,9 +82,7 @@ const (
 	NotificationRead       = "READ"
 )
 
-// Notification is an account-scoped Portal station message. It is created
-// only after trusted report ingestion succeeds; it does not imply email or
-// external-message delivery.
+// Notification 是账号范围内的 Portal 站内信，仅在可信报告入库成功后创建，不代表邮件或外部消息已送达。
 type Notification struct {
 	ID         uint64     `gorm:"primaryKey;autoIncrement;uniqueIndex:uq_portal_report_notification_scope,priority:3"`
 	TenantID   string     `gorm:"size:64;not null;uniqueIndex:uq_portal_report_notification_scope,priority:1"`
@@ -105,8 +97,7 @@ type Notification struct {
 
 func (Notification) TableName() string { return "portal_report_notifications" }
 
-// NotificationReadEvent is append-only evidence for the first successful
-// UNREAD-to-READ transition. Exact retries do not append another event.
+// NotificationReadEvent 是首次 UNREAD 到 READ 成功转换的只追加证据；精确重试不会追加第二条。
 type NotificationReadEvent struct {
 	ID             uint64    `gorm:"primaryKey;autoIncrement"`
 	TenantID       string    `gorm:"size:64;not null"`
@@ -149,9 +140,7 @@ const (
 	IngestDeadLetter = "DEAD_LETTER"
 )
 
-// IngestJob is the durable boundary between a trusted project-service
-// callback and object retrieval, malware scanning and envelope encryption.
-// DescriptorCipher never stores the upstream object reference in plaintext.
+// IngestJob 是可信项目回调与对象获取、恶意软件扫描、信封加密之间的持久化边界；上游对象引用只以密文保存。
 type IngestJob struct {
 	ID               uint64     `gorm:"primaryKey;autoIncrement"`
 	EventID          string     `gorm:"size:64;not null;uniqueIndex"`
@@ -181,8 +170,7 @@ const (
 	GrantRevoked GrantStatus = "REVOKED"
 )
 
-// Grant stores only a digest of the high-entropy download credential. The
-// plaintext credential exists only in the successful create response.
+// Grant 只保存高熵下载凭据的摘要；明文只存在于首次创建成功响应中。
 type Grant struct {
 	ActorModel
 	PublicID       string      `gorm:"size:64;not null;uniqueIndex:uq_portal_report_grant_public,priority:2"`
@@ -201,8 +189,7 @@ type Grant struct {
 
 func (Grant) TableName() string { return "portal_report_grants" }
 
-// DownloadEvent is append-only. It deliberately stores only keyed digests of
-// network/device metadata and never stores a grant token or object reference.
+// DownloadEvent 只追加，仅保存网络/设备元数据的带键摘要，不保存授权令牌或对象引用。
 type DownloadEvent struct {
 	ID              uint64    `gorm:"primaryKey;autoIncrement"`
 	TenantID        string    `gorm:"size:64;not null"`
@@ -232,10 +219,8 @@ const (
 	RiskActionRevokeAndReissue = "REVOKE_AND_REISSUE"
 )
 
-// RiskAlert is both the immutable detection evidence and the account-scoped
-// station alert for a grant frozen by a trusted risk policy. active_slot
-// prevents concurrent duplicate OPEN alerts for one grant while still
-// allowing a later, independently reviewed incident on the same grant.
+// RiskAlert 既是不可变检测证据，也是可信策略冻结授权后的账号级站内告警。
+// active_slot 防止同一授权并发产生重复 OPEN 告警，同时允许之后出现独立复核的新事件。
 type RiskAlert struct {
 	ID               uint64     `gorm:"primaryKey;autoIncrement"`
 	PublicID         string     `gorm:"size:64;not null;uniqueIndex:uq_portal_report_risk_alert_public,priority:2"`
@@ -259,9 +244,7 @@ type RiskAlert struct {
 
 func (RiskAlert) TableName() string { return "portal_report_risk_alerts" }
 
-// RiskReviewEvent is append-only operator evidence. The idempotency and
-// payload digests let an exact retry succeed without reactivating or revoking
-// a grant twice, while conflicting reuse is rejected.
+// RiskReviewEvent 是只追加的运营复核证据；幂等与载荷摘要允许精确重试，但拒绝冲突复用，避免重复激活或撤销授权。
 type RiskReviewEvent struct {
 	ID              uint64    `gorm:"primaryKey;autoIncrement"`
 	TenantID        string    `gorm:"size:64;not null;uniqueIndex:uq_portal_report_risk_review_key,priority:1"`

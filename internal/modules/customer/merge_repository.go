@@ -62,9 +62,8 @@ func (r *GORMRepository) FindMergeIdempotency(ctx context.Context, tenantID, act
 	return &model, err
 }
 
-// LockMergeRelations serializes terminal contract writes and every other
-// opportunity mutation with customer merge. Ordering by primary key gives all
-// merge transactions a deterministic child-row lock order.
+// LockMergeRelations 让终态合同写入及其他商机变更与客户合并串行；按主键排序加锁，
+// 使所有合并事务采用确定的子记录锁顺序，降低死锁风险。
 func (r *GORMRepository) LockMergeRelations(ctx context.Context, tenantID string, sourceID uint64) error {
 	rows, err := database.FromContext(ctx, r.db).Raw(lockSourceOpportunitiesSQL, tenantID, sourceID).Rows()
 	if err != nil {
@@ -146,8 +145,7 @@ func (r *GORMRepository) MergeBlockers(ctx context.Context, tenantID string, sou
 		return nil, err
 	}
 	if sourceCurrentMappingRefs > 0 {
-		// Kept as a defensive cross-table check in addition to the direct link
-		// blocker so a future link status filter cannot make old invites unsafe.
+		// 除直接映射阻断外继续保留跨表防御检查，避免未来调整映射状态过滤后让旧邀请变得可合并。
 		alreadyBlocked := false
 		for _, blocker := range blockers {
 			if blocker.Code == "PORTAL_IDENTITY_LINK" {
@@ -165,8 +163,7 @@ func (r *GORMRepository) MergeBlockers(ctx context.Context, tenantID string, sou
 func (r *GORMRepository) MigrateMergeRelations(ctx context.Context, tenantID string, sourceID, targetID uint64, actorID string, now time.Time) (MergeMigrationCounts, error) {
 	db := database.FromContext(ctx, r.db)
 	counts := MergeMigrationCounts{}
-	// The surviving target already has exactly one registration contact. Source
-	// contacts are retained as ordinary contacts so the invariant remains true.
+	// 存续目标已经且只能有一个注册联系人；源客户联系人迁移后降为普通联系人，维持该不变量。
 	contacts := db.Model(&Contact{}).
 		Where("tenant_id=? AND customer_id=? AND deleted_at IS NULL", tenantID, sourceID).
 		Updates(map[string]any{"customer_id": targetID, "is_registration": false, "updated_by": actorID, "updated_at": now, "version": gorm.Expr("version+1")})
@@ -249,8 +246,7 @@ func (r *GORMRepository) CreateMergeIdempotency(ctx context.Context, model *Merg
 }
 
 func (r *GORMRepository) CreateMergeOutbox(ctx context.Context, model *MergeOutboxEvent) error {
-	// Marshal/unmarshal defensively verifies the payload remains valid JSON before
-	// it enters the shared outbox consumed by other CRM integrations.
+	// 事件进入供其他 CRM 集成消费的共享发件箱前，通过编解码防御性确认载荷仍是合法 JSON。
 	var payload any
 	if len(model.Payload) == 0 || json.Unmarshal(model.Payload, &payload) != nil {
 		return errors.New("customer merge outbox payload is invalid")

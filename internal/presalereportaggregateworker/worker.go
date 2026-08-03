@@ -27,8 +27,7 @@ type App struct {
 	now           func() time.Time
 }
 
-// RunOnce performs one bounded rebuild and is intended for release checks,
-// controlled backfills and tests. Normal deployments should call Run.
+// RunOnce 只执行一个有界重建窗口，供发布检查、受控回填和测试使用；常驻部署应使用 Run 周期调度。
 func (a *App) RunOnce(ctx context.Context) error { return a.runOnce(ctx) }
 
 func New(config Config) (*App, error) {
@@ -89,6 +88,7 @@ func (a *App) runOnce(ctx context.Context) error {
 		}
 	}
 	for _, tenantID := range tenants {
+		// 每个租户在全局租约内独立重建，并把查询截止时间压在租约前一秒，避免失租后继续写入。
 		if err = validateTenantID(tenantID); err != nil {
 			return err
 		}
@@ -157,9 +157,7 @@ func (a *App) acquireLease(ctx context.Context, now time.Time) (bool, time.Time,
 		if result.Error != nil {
 			return result.Error
 		}
-		// INSERT IGNORE may have inserted this exact lease in the same
-		// transaction. MySQL then reports zero changed rows for the identical
-		// UPDATE; the locked row and owner/expiry check above are authoritative.
+		// INSERT IGNORE 可能刚插入完全相同的租约，MySQL 对随后相同 UPDATE 返回零变更；锁定行的所有者和期限才是权威判断。
 		acquired = true
 		return nil
 	})
@@ -195,6 +193,7 @@ func (a *App) aggregateTenant(ctx context.Context, tenantID string, from, to tim
 	var rowCount int64
 	var sourceMax *time.Time
 	err := a.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// 先删窗口再重算，但二者位于同一事务；失败时旧指标仍保留，不会暴露半空报表。
 		if err := tx.Exec(`DELETE FROM crm_presale_daily_metrics
 			WHERE tenant_id=? AND metric_date>=DATE(?) AND metric_date<DATE(?)`, tenantID, from, to).Error; err != nil {
 			return err
@@ -225,6 +224,7 @@ func (a *App) aggregateTenant(ctx context.Context, tenantID string, from, to tim
 	}
 	finishedAt := a.now().UTC()
 	recoveryCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	// 聚合上下文即使被取消，也尽力用独立短上下文把 RUNNING 标为 FAILED，避免永久悬挂运行记录。
 	defer cancel()
 	updateErr := a.db.WithContext(recoveryCtx).Table("crm_presale_daily_metric_runs").
 		Where("id=? AND tenant_id=? AND status='RUNNING'", run.ID, tenantID).

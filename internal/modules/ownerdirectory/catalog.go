@@ -59,6 +59,8 @@ func validatePair(page Page, userID, organizationID string) error {
 			continue
 		}
 		for _, organization := range user.Organizations {
+			// 只有平台目录在同一个用户条目下返回的组织才构成有效负责人归属；
+			// 不能把两个各自存在但没有任职关系的标识拼成一对。
 			if organization.ID == organizationID {
 				return nil
 			}

@@ -23,11 +23,15 @@ func main() {
 		os.Exit(1)
 	}
 	manifest := platformcatalog.CRMManifest()
+	// 角色数量上限同时存在于平台目录策略和本地会话校验中；启动时对账可避免平台签发了
+	// 本进程拒绝的声明，或本进程意外接受超出目录治理规则的角色集合。
 	if config.OIDCMaxRoles != manifest.Policy.MaxEffectiveRoles {
 		logger.Error("CRM OIDC role policy is incompatible", "expected_max_roles", manifest.Policy.MaxEffectiveRoles)
 		os.Exit(1)
 	}
 	if !config.DevelopmentAuth {
+		// 正式模式必须把二进制内置的角色—权限映射与平台声明哈希绑定；开发头认证不消费
+		// 平台签发的声明，因此不参与这项兼容性检查。
 		if err = platformcatalog.ValidateClaimsRoleConfigHash(manifest, config.OIDCRoleConfigHash); err != nil {
 			logger.Error("CRM authorization catalog is incompatible", "error", err)
 			os.Exit(1)
@@ -46,6 +50,7 @@ func main() {
 		os.Exit(1)
 	}
 	serverErrors := make(chan error, 1)
+	// 缓冲通道保证进程收到退出信号后，即使主协程不再接收，监听协程也不会因上报结果而泄漏。
 	go func() { serverErrors <- app.Server.ListenAndServe() }()
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
@@ -58,6 +63,7 @@ func main() {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	// 先停止接收新请求并等待在途请求，再关闭数据库连接；超时后由进程退出兜底。
 	if err = app.Close(ctx); err != nil {
 		logger.Error("CRM shutdown failed", "error", err)
 	}

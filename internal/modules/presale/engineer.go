@@ -11,9 +11,8 @@ import (
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/pagination"
 )
 
-// EngineerListQuery is deliberately independent from request data scope. The
-// PMS personnel pool is a tenant-wide assignment directory and never accepts a
-// caller supplied tenant override.
+// 工程师池是 PMS 同步得到的租户级分派目录，不沿用申请数据范围，
+// 也不接受调用者覆盖租户；能否查看仍由售前读取权限控制。
 type EngineerListQuery struct {
 	Keyword    string
 	Department string

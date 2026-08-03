@@ -77,6 +77,8 @@ func (r *GORMRepository) WithTransaction(ctx context.Context, fn func(context.Co
 func (r *GORMRepository) nextNumber(ctx context.Context, tenant string, at time.Time, prefix string) (string, error) {
 	date := at.UTC().Format("20060102")
 	var seq NumberSequence
+	// 序列表按“租户 + 类型 + 日期”加行锁，确保并发创建时编号单调且不重复；
+	// 首次插入与后续递增都必须运行在调用方事务中。
 	err := r.tx(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
 		Where("tenant_id = ? AND sequence_type = ? AND sequence_date = ?", tenant, prefix, date).Take(&seq).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -142,16 +144,16 @@ func applyRequestScope(db *gorm.DB, scope RequestQueryScope) *gorm.DB {
 	case scope.AssigneeID != "":
 		return db.Where(assignmentScope, scope.AssigneeID)
 	default:
-		// A caller without application ownership or an authoritative PMS person
-		// identity must not acquire tenant data from presale.read alone.
+		// 仅有 presale.read 但既不是申请人、也没有可信 PMS 人员身份时，返回空集合，
+		// 不能把基础读权限退化成租户级全量读取。
 		return db.Where("1=0")
 	}
 }
 
 func applyRequestFilters(db *gorm.DB, query RequestListQuery, now time.Time) *gorm.DB {
 	if query.RequestNo != "" {
-		// INSTR treats %, _ and backslash as literal task-number characters and
-		// keeps user input out of SQL syntax while retaining substring search.
+		// INSTR 将 %, _ 和反斜杠按普通任务编号字符处理；既保留子串搜索，
+		// 又不让用户输入改变 LIKE 通配语义。
 		db = db.Where("INSTR(crm_presale_requests.request_no, ?) > 0", query.RequestNo)
 	}
 	if query.OpportunityID != 0 {
@@ -304,9 +306,8 @@ func (r *GORMRepository) ListRequests(ctx context.Context, scope RequestQuerySco
 	return RequestListPage{Items: items, Page: query.Page, PageSize: query.PageSize, Total: total}, nil
 }
 
-// ListRequestFilterOptions derives every option from the same scoped and
-// filtered request relation used by ListRequests. Each dimension is bounded;
-// limit+1 is read only to report truncation without loading an unbounded set.
+// 每个筛选维度都从与列表相同的“已授权且已过滤”关系派生；只多取一条判断是否截断，
+// 不会为了构造选项加载无限集合，也不会旁路列表的数据范围。
 func (r *GORMRepository) ListRequestFilterOptions(ctx context.Context, scope RequestQueryScope, query RequestListQuery, now time.Time, limit int) (RequestFilterOptions, error) {
 	visible := func() *gorm.DB {
 		return applyRequestFilters(applyRequestScope(r.tx(ctx).Model(&PresaleRequest{}), scope), query, now)
@@ -395,9 +396,8 @@ func (r *GORMRepository) ListRequestFilterOptions(ctx context.Context, scope Req
 	return result, nil
 }
 
-// ListOpportunityRequests is the TS-010 summary query after the opportunity
-// service has authorized the parent resource. It is intentionally tenant and
-// opportunity bound, and does not apply the narrower presale detail scope.
+// 上层完成商机授权后，本查询只按可信租户和商机读取摘要；它不套用更窄的售前详情范围，
+// 详情能力由服务层逐条计算，且摘要本身不含联系人等敏感字段。
 func (r *GORMRepository) ListOpportunityRequests(ctx context.Context, tenant string, opportunityID uint64, page, pageSize int, now time.Time) (RequestListPage, error) {
 	return r.ListRequests(ctx, RequestQueryScope{TenantID: tenant, All: true}, RequestListQuery{
 		OpportunityID: opportunityID, Page: page, PageSize: pageSize, SortBy: "created_at", SortOrder: "desc",
@@ -614,9 +614,9 @@ func (r *GORMRepository) ListWorklogs(ctx context.Context, tenant string, reques
 	return values, err
 }
 
-// ListTimeline performs a single database-side merge of the immutable process
-// sources. The outer tuple predicate is a descending keyset, so concurrent
-// inserts cannot shift already-returned records as OFFSET pagination would.
+// 时间线在数据库内合并申请、状态、审批、分派、进展和工时等不可变事实。
+// 外层使用“发生时间、类型优先级、源记录 ID”的降序游标，并发插入不会像 OFFSET
+// 那样推移已经返回的记录。
 func (r *GORMRepository) ListTimeline(ctx context.Context, tenant string, requestID uint64, cursor *TimelineCursor, limit int) ([]TimelineRecord, error) {
 	type timelineRow struct {
 		SourceID     uint64

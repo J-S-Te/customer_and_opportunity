@@ -1,6 +1,5 @@
-// Package applicationjwt verifies the base platform's client-credentials JWTs.
-// It is intentionally independent from OIDC Discovery: the platform's OIDC JWKS
-// publishes a different signing manager and cannot verify application tokens.
+// Package applicationjwt 验证基础平台签发的 client-credentials JWT。它与 OIDC Discovery
+// 有意隔离：平台 OIDC JWKS 使用另一套签名管理器，不能用于验证应用令牌。
 package applicationjwt
 
 import (
@@ -20,7 +19,7 @@ import (
 
 const allowedClockSkew = time.Minute
 
-// Claims is the complete signed application identity issued by the base platform.
+// Claims 是平台签名后的完整应用身份，包含租户、应用、环境和规范化 scope 绑定。
 type Claims struct {
 	Subject         string
 	OAuthClientID   string
@@ -35,8 +34,7 @@ type Claims struct {
 	ExpiresAt       time.Time
 }
 
-// Verifier accepts only the platform's EdDSA application-token contract and a
-// public key. A subsystem must never receive the platform signing private key.
+// 验证器只接受平台 EdDSA 应用令牌契约和公钥；子系统不应获得平台签名私钥。
 type Verifier struct {
 	issuer    string
 	audience  string
@@ -65,7 +63,7 @@ type jwtPayload struct {
 	ExpiresAt       int64    `json:"exp"`
 }
 
-// LoadVerifier loads one PKIX Ed25519 public key from a read-only PEM file.
+// 从只读 PEM 文件加载且只加载一把 PKIX Ed25519 公钥，额外 PEM 块也会被拒绝。
 func LoadVerifier(issuer, audience, publicKeyPath string) (*Verifier, error) {
 	if strings.TrimSpace(issuer) == "" || issuer != strings.TrimSpace(issuer) {
 		return nil, errors.New("application JWT issuer must not be empty or contain surrounding whitespace")
@@ -80,8 +78,8 @@ func LoadVerifier(issuer, audience, publicKeyPath string) (*Verifier, error) {
 	return &Verifier{issuer: issuer, audience: audience, publicKey: publicKey}, nil
 }
 
-// Verify validates signature, header, issuer, audience, token use, timestamps,
-// tenant/application/environment binding and the canonical scope set.
+// 依次校验紧凑序列化、固定算法头、签名、issuer/audience/token_use、时间窗，以及租户、应用、
+// 环境和无重复 scope；任何异常均失败关闭。
 func (v *Verifier) Verify(rawToken string, now time.Time) (Claims, error) {
 	if v == nil {
 		return Claims{}, errors.New("application JWT verifier must not be nil")
@@ -109,6 +107,7 @@ func (v *Verifier) Verify(rawToken string, now time.Time) (Claims, error) {
 		return Claims{}, fmt.Errorf("decode application JWT payload: %w", err)
 	}
 	if payload.Issuer != v.issuer || payload.Audience != v.audience || payload.TokenUse != "application" {
+		// token_use 阻止同一签名体系下的其他 JWT 类型被当作机器访问令牌复用。
 		return Claims{}, errors.New("application JWT issuer, audience or token use does not match")
 	}
 	if payload.IssuedAt <= 0 || payload.NotBefore <= 0 || payload.ExpiresAt <= 0 {
@@ -126,6 +125,7 @@ func (v *Verifier) Verify(rawToken string, now time.Time) (Claims, error) {
 	}
 	now = now.UTC()
 	if !claims.ExpiresAt.After(now) || claims.IssuedAt.After(now.Add(allowedClockSkew)) || claims.NotBefore.After(now.Add(allowedClockSkew)) {
+		// 时钟偏差只放宽未来 iat/nbf；过期时间必须严格晚于当前时间，不能借偏差延长令牌寿命。
 		return Claims{}, errors.New("application JWT is expired or not yet valid")
 	}
 	return claims, nil
@@ -177,6 +177,7 @@ func loadPublicKey(path string) (ed25519.PublicKey, error) {
 }
 
 func decodeJSON(encoded string, destination any) error {
+	// JWT 头和载荷使用严格 JSON：未知字段及尾随第二个值都拒绝，避免不同解析器解释不一致。
 	decoded, err := base64.RawURLEncoding.DecodeString(encoded)
 	if err != nil {
 		return err

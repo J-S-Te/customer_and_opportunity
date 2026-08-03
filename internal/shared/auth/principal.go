@@ -10,8 +10,8 @@ const (
 	ScopeAll  ScopeMode = "ALL"
 )
 
-// Principal contains verified identity claims. Production implementations must populate it
-// only after validating the platform OIDC token and the local server-side session.
+// Principal 是认证边界输出而非请求 DTO。正式环境只有在平台令牌验签、服务端会话复核及当前
+// 授权重验后才能写入，业务层不得从客户端字段重建该对象。
 type Principal struct {
 	UserID          string
 	PersonID        string
@@ -44,7 +44,7 @@ func FromContext(ctx context.Context) (Principal, bool) {
 	return principal, ok
 }
 
-// Authenticator is the boundary to the production OIDC/session implementation.
+// Authenticator 隔离具体 OIDC 与会话实现，中间件只消费最终主体，不缓存令牌中的旧权限快照。
 type Authenticator interface {
 	Authenticate(context.Context, string) (Principal, error)
 }

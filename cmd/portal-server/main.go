@@ -25,6 +25,8 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	manifest := platformcatalog.PortalManifest()
+	// Portal 只接受与当前二进制权限目录完全一致的声明，防止平台目录更新与应用滚动发布
+	// 不同步时把旧权限解释成新权限。
 	if err = platformcatalog.ValidateClaimsRoleConfigHash(manifest, config.RoleConfigHash); err != nil {
 		logger.Error("Portal authorization catalog is incompatible", "error", err)
 		os.Exit(1)
@@ -42,12 +44,14 @@ func main() {
 		os.Exit(1)
 	}
 	defer func() {
+		// Close 同时汇总 HTTP 与数据库关闭结果；此处属于进程退出清理，不能覆盖主运行错误。
 		closeCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		_ = app.Close(closeCtx)
 	}()
 	go func() {
 		<-ctx.Done()
+		// 信号只触发优雅停机，不直接关闭数据库，避免仍在处理的请求失去事务连接。
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		_ = app.Server.Shutdown(shutdownCtx)

@@ -84,6 +84,8 @@ func (w *Worker) dispatch(ctx context.Context, event report.Outbox) error {
 	}
 	downstreamID, err := w.project.Submit(ctx, event)
 	if err == nil {
+		// 远端提交以 EventID 幂等；本地只有在审批实例 ID 投影成功后才把 Outbox 标为 SENT。
+		// 若两步之间失败，重试会再次提交同一事件并收敛到同一审批实例。
 		err = w.service.MarkApprovalStarted(ctx, event.TenantID, event.AggregateID, downstreamID)
 	}
 	if err != nil {
@@ -117,6 +119,7 @@ func safeLogError(err error) string {
 		return context.Canceled.Error()
 	}
 	value := sanitize(err.Error())
+	// 对可能包含认证材料的错误整体降级为固定文本，不尝试通过局部遮盖猜测敏感边界。
 	if strings.Contains(strings.ToLower(value), "token") || strings.Contains(strings.ToLower(value), "secret") || strings.Contains(strings.ToLower(value), "authorization") {
 		return "Portal report integration failed"
 	}

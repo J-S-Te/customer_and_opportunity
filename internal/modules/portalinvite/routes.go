@@ -16,9 +16,8 @@ func RegisterAccessDisableRoute(api *gin.RouterGroup, handler *AccessDisableHand
 	api.POST("/customers/:id/portal-access/disable", middleware.RequirePermission("portal_account.disable"), handler.Disable)
 }
 
-// RegisterInternalRoutes must receive the CRM's dedicated machine-authenticated
-// group. The middleware verifies platform audience/scope and consumes the
-// timestamp/nonce replay key before these handlers run.
+// RegisterInternalRoutes 必须挂在 CRM 专用机器认证路由组下；中间件先校验平台 audience/scope，
+// 并消费时间戳与 nonce 重放键，之后才允许处理内部接口。
 func RegisterInternalRoutes(internal *gin.RouterGroup, handler *Handler) {
 	invites := internal.Group("/portal/invites", middleware.RequirePermission("portal.invite.verify"))
 	invites.POST("/verify", handler.Verify)

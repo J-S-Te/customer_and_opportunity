@@ -70,6 +70,8 @@ func (r *GORMEngineerDirectoryRepository) EnqueueEngineerSync(ctx context.Contex
 	var output *EngineerSyncJob
 	err := database.WithTransaction(ctx, r.db, func(txCtx context.Context) error {
 		tx := database.FromContext(txCtx, r.db)
+		// 租户同步状态行同时充当串行化锁：同一租户的并发人工触发会在此排队，
+		// 从而能稳定地复用活动任务，而不是创建多个并行拉取任务冲击 PMS。
 		state := EngineerSyncState{BaseModel: BaseModel{TenantID: tenant, CreatedBy: actor, UpdatedBy: actor, Version: 1}, NextSyncAt: now}
 		if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "tenant_id"}}, DoNothing: true}).Create(&state).Error; err != nil {
 			return err
@@ -96,6 +98,8 @@ func (r *GORMEngineerDirectoryRepository) EnqueueEngineerSync(ctx context.Contex
 		var active EngineerSyncJob
 		err = tx.Where("tenant_id=? AND status IN ?", tenant, []string{"PENDING", "PROCESSING", "RETRY_WAIT"}).Order("id").Take(&active).Error
 		if err == nil {
+			// 每个调用者的幂等请求仍单独留痕，并绑定到被合并的活动任务；
+			// 后续使用相同键重试时返回同一任务，而不是依赖“当前活动任务”的瞬时状态。
 			request := &EngineerSyncRequest{BaseModel: BaseModel{TenantID: tenant, CreatedBy: actor, UpdatedBy: actor, Version: 1}, RequestedBy: actor, IdempotencyKey: key, RequestHash: requestHash, JobID: active.ID, JobNo: active.JobNo}
 			if err = tx.Create(request).Error; err != nil {
 				return err

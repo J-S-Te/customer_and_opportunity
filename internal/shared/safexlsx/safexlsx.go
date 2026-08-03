@@ -1,6 +1,5 @@
-// Package safexlsx provides a deliberately small, fail-closed OOXML reader for
-// customer imports. It does not evaluate formulas or support legacy/macro-enabled
-// workbooks.
+// Package safexlsx 为客户导入提供刻意收窄、失败关闭的 OOXML 读取器；不计算公式，也不支持旧版
+// 或含宏工作簿。
 package safexlsx
 
 import (
@@ -30,8 +29,7 @@ const (
 	xlsxSharedStringsType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"
 )
 
-// Limits bounds both archive expansion and the dense result returned by
-// ParseWorkbook. Zero values select the corresponding DefaultLimits value.
+// Limits 同时约束压缩包展开量和 ParseWorkbook 返回的稠密矩阵；零值使用对应默认上限。
 type Limits struct {
 	MaxArchiveBytes      int64
 	MaxEntries           int
@@ -41,15 +39,13 @@ type Limits struct {
 	MaxCellRunes         int
 }
 
-// Cell is a textual workbook cell. Formula is true when the source cell has an
-// OOXML formula element. Value is the stored/cached value; formulas are never
-// interpreted or executed.
+// Cell 只保存文本结果；Formula 表示源单元格含公式元素，Value 是存储/缓存值，公式从不解释执行。
 type Cell struct {
 	Value   string
 	Formula bool
 }
 
-// DefaultLimits returns conservative import limits suitable for an HTTP upload.
+// 默认限制面向 HTTP 上传，兼顾正常批量导入并限制 ZIP 膨胀、超大共享字符串和稠密空白区域。
 func DefaultLimits() Limits {
 	return Limits{
 		MaxArchiveBytes:      10 << 20,
@@ -61,9 +57,7 @@ func DefaultLimits() Limits {
 	}
 }
 
-// ParseWorkbook reads the first visible worksheet of a genuine .xlsx OOXML
-// package. It rejects macro-enabled/encrypted/external-link packages and never
-// evaluates formulas.
+// 只读取真实 .xlsx OOXML 包的首个可见工作表；拒绝宏、加密和外部链接包，且永不计算公式。
 func ParseWorkbook(data []byte, limits Limits) ([][]Cell, error) {
 	limits, err := normalizeLimits(limits)
 	if err != nil {

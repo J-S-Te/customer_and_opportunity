@@ -1,5 +1,4 @@
-// Command migration-plan emits an immutable, schema-specific release manifest.
-// It never opens a database or executes DDL.
+// Command migration-plan 生成不可变、按 schema 区分的发布清单；不连接数据库，也不执行 DDL。
 package main
 
 import (

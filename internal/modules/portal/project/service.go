@@ -21,9 +21,7 @@ type ListQuery struct {
 	Page, PageSize int
 }
 
-// HistoryItem is the minimum CRM-facing projection of a locally synchronized
-// project. It deliberately excludes Portal account identifiers, manager contact
-// details, team members and source raw versions.
+// HistoryItem 是返回 CRM 的最小项目投影，刻意排除 Portal 账号、负责人联系方式、团队成员和源版本细节。
 type HistoryItem struct {
 	ProjectID       string     `json:"project_id"`
 	ProjectName     string     `json:"project_name"`
@@ -35,12 +33,10 @@ type HistoryItem struct {
 	Delayed         bool       `json:"delayed"`
 	SourceUpdatedAt time.Time  `json:"source_updated_at"`
 	SyncedAt        time.Time  `json:"synced_at"`
-	// SyncLastSuccessAt describes the customer-scoped synchronization link,
-	// whereas SyncedAt describes when this individual snapshot row changed.
+	// SyncLastSuccessAt 描述客户级同步链路，SyncedAt 则描述当前快照行何时发生变化。
 	SyncLastSuccessAt *time.Time `json:"sync_last_success_at"`
 	Stale             bool       `json:"stale"`
-	// StalenessSeconds is nil until this customer has completed a successful
-	// synchronization. A zero value therefore cannot masquerade as freshness.
+	// 客户至少成功同步一次后才计算 StalenessSeconds，避免零值伪装成“刚同步”。
 	StalenessSeconds *int64 `json:"staleness_seconds"`
 }
 
@@ -77,8 +73,7 @@ func (s *Service) List(ctx context.Context, scope Scope, query ListQuery) (pagin
 	return s.repo.List(ctx, scope, query)
 }
 
-// History returns only persisted Portal projections. Staleness describes the
-// age of the local successful sync and is not a claim about upstream liveness.
+// History 只读取 Portal 已持久化投影；新鲜度表示本地上次成功同步时间，不承诺上游当前可用。
 func (s *Service) History(ctx context.Context, scope Scope, query ListQuery, now time.Time, staleAfter time.Duration) (HistoryPage, error) {
 	if strings.TrimSpace(scope.TenantID) == "" || scope.CustomerID == 0 || query.Page < 1 || query.PageSize < 1 || query.PageSize > pagination.MaxPageSize || staleAfter <= 0 {
 		return HistoryPage{}, apperror.New(http.StatusBadRequest, "COMMON_INVALID_ARGUMENT", "invalid request")
@@ -125,9 +120,7 @@ func (s *Service) Get(ctx context.Context, scope Scope, projectID string) (*Deta
 	return s.repo.Find(ctx, scope, projectID)
 }
 
-// StatusForEvaluation locks the project snapshot row in a submit transaction,
-// preventing a concurrent source sync from changing completion state between
-// validation and evaluation insertion.
+// StatusForEvaluation 在评价提交事务中锁定项目快照，防止并发源同步在资格验证与评价插入之间改变完成状态。
 func (s *Service) StatusForEvaluation(ctx context.Context, scope Scope, projectID string) (string, error) {
 	if strings.TrimSpace(projectID) == "" || scope.CustomerID == 0 {
 		return "", ErrNotFound
@@ -148,8 +141,7 @@ func (s *Service) Activities(ctx context.Context, scope Scope, projectID string,
 	return s.repo.ListActivities(ctx, scope, projectID, page, pageSize)
 }
 
-// Sync accepts only source-owned snapshots and prevents older source versions
-// from replacing newer customer-visible data in the repository.
+// Sync 只接受源系统拥有的快照，并阻止旧源版本覆盖更新的客户可见数据。
 func (s *Service) Sync(ctx context.Context, tenantID string, customerID uint64, cursor string) (int, error) {
 	bundles, err := s.source.ChangedProjects(ctx, tenantID, customerID, cursor)
 	if err != nil {

@@ -20,8 +20,8 @@ const (
 	maxTimelineCursorSize = 1024
 )
 
-// TimelineCursor is the stable keyset position used by the repository. The
-// tuple is ordered by occurred_at, type priority and source-row ID.
+// 时间线游标记录稳定的键集位置，排序元组依次为发生时间、类型优先级和源记录 ID。
+// 三元组可以为同一时间戳下的不同事实建立确定顺序。
 type TimelineCursor struct {
 	OccurredAt   time.Time
 	TypePriority uint8
@@ -37,8 +37,8 @@ type timelineCursorPayload struct {
 	SourceID     uint64 `json:"source_id"`
 }
 
-// TimelineRecord is an internal, deliberately sparse projection of one of the
-// existing immutable TS process tables. It is never serialized directly.
+// TimelineRecord 是多个不可变过程表合并后的稀疏内部投影，不直接序列化，
+// 对外字段由事件类型决定，避免暴露各来源表的内部列。
 type TimelineRecord struct {
 	SourceID     uint64
 	TypePriority uint8
@@ -87,15 +87,14 @@ type AvailableActionsView struct {
 	Actions []string      `json:"actions"`
 }
 
-// UseTimelineCursorKey attaches the server-only cursor authentication key.
-// A distinct cursor format/version allows safe rotation through deployment.
+// 游标使用服务端密钥认证并携带格式版本，客户端不能篡改租户、申请或翻页位置；
+// 独立版本字段为部署期间的密钥和格式轮换保留边界。
 func (s *Service) UseTimelineCursorKey(key []byte) *Service {
 	s.timelineCursorKey = append([]byte(nil), key...)
 	return s
 }
 
-// Timeline first applies the same parent-resource scope check as detail, then
-// delegates to a SQL keyset query. It never loads all child tables in memory.
+// 时间线先复用详情的父资源授权，再执行数据库键集查询；不会把所有子表加载到内存后合并。
 func (s *Service) Timeline(ctx context.Context, actor Actor, requestID uint64, cursorValue string, limit int) (TimelinePage, error) {
 	if !actor.Can("presale.read") {
 		return TimelinePage{}, ErrForbidden
@@ -143,8 +142,8 @@ func (s *Service) Timeline(ctx context.Context, actor Actor, requestID uint64, c
 	return page, nil
 }
 
-// AvailableActions is a separate backend-computed operation boundary used by
-// clients that refresh only the task action area.
+// 可用动作由后端根据最新状态、版本、角色和真实审批待办共同计算。
+// 前端可单独刷新操作区，但该结果仅用于展示，实际写接口仍会重新完整鉴权。
 func (s *Service) AvailableActions(ctx context.Context, actor Actor, requestID uint64) (AvailableActionsView, error) {
 	detail, err := s.RequestDetail(ctx, actor, requestID)
 	if err != nil {
@@ -214,7 +213,7 @@ func decodeTimelineCursor(key []byte, tenant string, requestID uint64, value str
 	if payload.Version != timelineCursorVersion || payload.TenantID != tenant || payload.RequestID != requestID || payload.OccurredUnix <= 0 || payload.TypePriority == 0 || payload.TypePriority > 50 || payload.SourceID == 0 {
 		return TimelineCursor{}, errors.New("invalid timeline cursor")
 	}
-	// Reject a second JSON value without exposing parsing details.
+	// 拒绝游标载荷后的第二个 JSON 值，且不向调用者暴露具体解析细节。
 	var trailing any
 	if trailingErr := decoder.Decode(&trailing); !errors.Is(trailingErr, io.EOF) {
 		return TimelineCursor{}, errors.New("invalid timeline cursor")

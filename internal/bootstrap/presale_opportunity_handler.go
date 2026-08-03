@@ -12,9 +12,8 @@ import (
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/response"
 )
 
-// opportunityPresaleHandler composes the opportunity and presale public
-// service boundaries. It first proves that the caller can see the opportunity,
-// then lets presale apply its independent TS-007 role scope.
+// 组合商机与售前两个公开服务边界：先证明调用方可见该商机，再由售前服务应用独立的 TS-007
+// 角色范围，避免只凭售前权限枚举其他组织的商机。
 type opportunityPresaleHandler struct {
 	opportunities *opportunity.Service
 	presales      *presale.Service

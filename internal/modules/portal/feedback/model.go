@@ -18,9 +18,7 @@ const (
 	StatusRejected         Status = "REJECTED"
 )
 
-// ActorModel mirrors the shared persistence fields but keeps Portal OIDC
-// account actors at the signed 128-byte boundary. The shared CRM-oriented model
-// uses 64 bytes for internal operator identifiers.
+// ActorModel 复用通用持久化字段，但 Portal OIDC 账号按签名声明的 128 字节边界保存；CRM 内部操作者模型仅为 64 字节。
 type ActorModel struct {
 	ID        uint64         `gorm:"primaryKey" json:"id"`
 	TenantID  string         `gorm:"size:64;not null;index" json:"-"`
@@ -100,9 +98,7 @@ type Escalation struct {
 
 func (Escalation) TableName() string { return "portal_feedback_escalations" }
 
-// Notification is the Portal-owned internal pending-work projection. It does
-// not pretend that an external IM, email or customer-service platform accepted
-// the alert.
+// Notification 是 Portal 自有的内部待办投影，不宣称外部 IM、邮件或客服平台已经接受告警。
 type Notification struct {
 	ID         uint64     `gorm:"primaryKey;autoIncrement"`
 	TenantID   string     `gorm:"size:64;not null;index"`

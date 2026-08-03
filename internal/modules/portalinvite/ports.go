@@ -31,11 +31,8 @@ type PlatformProvisioner interface {
 	AssignPortalRoleIdempotent(context.Context, string, string) error
 }
 
-// PlatformRoleRevoker is intentionally separate from PlatformProvisioner. A
-// caller holding this capability may only converge the Portal application role
-// to DISABLED; it cannot provision users or grant access. Invitation-link
-// revocation must not call this port because an invitation and Portal access
-// have independent lifecycles.
+// PlatformRoleRevoker 与 PlatformProvisioner 刻意分权：持有该能力的调用方只能把门户应用角色
+// 收敛为禁用，不能创建用户或授予访问。邀请链接撤销不能调用它，因为链接和门户访问生命周期独立。
 type PlatformRoleRevoker interface {
 	RevokePortalRole(context.Context, string, string) error
 }
@@ -48,9 +45,7 @@ type PortalMappingDisabler interface {
 	DisableMapping(context.Context, string, uint64, string, string, string) error
 }
 
-// OperationProtector encrypts recovery snapshots and the one-time invitation
-// token. Implementations must provide authenticated encryption and must never
-// log plaintext or include it in errors.
+// OperationProtector 对恢复快照和一次性邀请令牌做认证加密；实现不得记录明文，也不得把明文带入错误。
 type OperationProtector interface {
 	Encrypt(context.Context, []byte) ([]byte, error)
 	Decrypt(context.Context, []byte) ([]byte, error)

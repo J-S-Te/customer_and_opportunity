@@ -49,6 +49,7 @@ func LoadConfig() (Config, error) {
 		cfg.ClientID == "" || cfg.ClientSecret == "" || cfg.Scope != "opportunity.signed.write" {
 		return Config{}, fmt.Errorf("invalid contract transfer worker configuration")
 	}
+	// 两个端点都属于机器间协议；配置阶段固定 scheme、禁止 URL 用户信息，并把是否允许明文 HTTP 交给显式安全开关。
 	for name, raw := range map[string]string{"CONTRACT_TOKEN_URL": cfg.TokenURL, "CONTRACT_OPPORTUNITY_INTAKE_URL": cfg.IntakeURL} {
 		parsed, err := url.ParseRequestURI(raw)
 		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {

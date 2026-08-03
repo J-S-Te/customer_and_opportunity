@@ -12,8 +12,8 @@ import (
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/response"
 )
 
-// SessionAuth trusts only the opaque subsystem cookie and the server-side CRM
-// session store. Browser-supplied identity or permission headers are ignored.
+// 浏览器身份只来自不透明 Cookie 对应的服务端 CRM 会话；请求头里的用户、角色和权限声明
+// 不参与认证，避免客户端伪造授权上下文。
 func SessionAuth(authenticator auth.Authenticator, cookieName string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		cookie, err := c.Request.Cookie(cookieName)
@@ -33,8 +33,8 @@ func SessionAuth(authenticator auth.Authenticator, cookieName string) gin.Handle
 	}
 }
 
-// RequireSameOriginWrite protects cookie-authenticated CRM writes. Safe methods
-// remain readable without a CSRF header; machine routes use a separate group.
+// Cookie 认证的写请求必须同时匹配精确 Origin 和自定义 CSRF 头。安全方法保持可读，机器接口
+// 位于独立路由组，不借此规则把任意 Authorization 头当作 CSRF 豁免。
 func RequireSameOriginWrite(publicOrigin string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		switch c.Request.Method {
@@ -57,7 +57,8 @@ type machineAuthenticator interface {
 	Authenticate(context.Context, *http.Request) (auth.Principal, error)
 }
 
-// MachineAuth authenticates internal integrations independently from browser sessions.
+// 内部集成独立验证平台应用令牌，并把验签后的主体放入同一 Principal 边界；浏览器会话不能
+// 复用到该路由组。
 func MachineAuth(authenticator machineAuthenticator) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		principal, err := authenticator.Authenticate(c.Request.Context(), c.Request)
@@ -71,8 +72,8 @@ func MachineAuth(authenticator machineAuthenticator) gin.HandlerFunc {
 	}
 }
 
-// DevelopmentAuth is deliberately header-based and must never be enabled outside local development.
-// It preserves the same Principal boundary that a production OIDC server-side session will populate.
+// 开发认证有意使用请求头，仅用于本地联调；它仍构造与正式服务端会话相同的 Principal，
+// 但这些头没有密码学可信度，部署环境必须通过配置校验阻止启用。
 func DevelopmentAuth(enabled bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if !enabled {
@@ -113,6 +114,7 @@ func DevelopmentAuth(enabled bool) gin.HandlerFunc {
 }
 
 func RequirePermission(permission string) gin.HandlerFunc {
+	// 此处只判断已验证主体的应用权限码；服务层还需根据 ScopeMode、组织和资源归属收窄数据范围。
 	return func(c *gin.Context) {
 		principal, ok := auth.FromContext(c.Request.Context())
 		if !ok {
@@ -129,9 +131,8 @@ func RequirePermission(permission string) gin.HandlerFunc {
 	}
 }
 
-// RequireAnyPermission grants a read-only route when the principal owns at
-// least one of the explicitly listed capabilities. Callers must not use it for
-// mutations where each capability has different authority.
+// 只读前置接口可在明确列出的能力中满足任意一个；权限含义不同的写操作不能复用“任一满足”，
+// 否则较弱权限可能间接获得较强操作权。
 func RequireAnyPermission(permissions ...string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		principal, ok := auth.FromContext(c.Request.Context())

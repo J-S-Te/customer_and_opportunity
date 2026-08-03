@@ -11,6 +11,7 @@ import (
 	"time"
 )
 
+// Portal 本地会话最多缓存授权十五分钟，且不能超过上游令牌的实际有效期。
 const maxSessionTTL = 15 * time.Minute
 
 type Config struct {
@@ -52,6 +53,7 @@ type Config struct {
 }
 
 func LoadConfig() (Config, error) {
+	// 所有安全相关配置在启动时冻结；解析或校验失败即退出，运行时不从环境变量做隐式降级。
 	secure, err := strconv.ParseBool(valueOrDefault("PORTAL_SESSION_COOKIE_SECURE", "true"))
 	if err != nil {
 		return Config{}, fmt.Errorf("PORTAL_SESSION_COOKIE_SECURE: %w", err)
@@ -132,8 +134,7 @@ func (c Config) validate() error {
 		"PORTAL_CRM_PROVISION_CLIENT_SUBJECT": c.CRMProvisionClientSubject,
 		"PORTAL_CRM_DISABLE_CLIENT_SUBJECT":   c.CRMDisableClientSubject,
 	} {
-		// The authenticated actor is persisted as "machine:" + subject in the
-		// shared 64-byte updated_by columns.
+		// 已认证机器主体以 "machine:" + subject 写入共享的 64 字节 updated_by 列，故需为前缀预留空间。
 		if value != strings.TrimSpace(value) || len(value) > 56 {
 			return fmt.Errorf("%s must be a trimmed OAuth client subject of at most 56 bytes", key)
 		}
@@ -142,12 +143,14 @@ func (c Config) validate() error {
 		return fmt.Errorf("Portal encryption keys must each decode to 32 bytes and HMAC key to at least 32 bytes")
 	}
 	if string(c.EncryptionKey) == string(c.ReportIngestDescriptorKey) {
+		// 通用敏感数据与报告摄取描述符使用独立密钥域，避免一种密文协议中的泄漏扩大到另一域。
 		return fmt.Errorf("Portal report ingest descriptor key must be distinct from the general encryption key")
 	}
 	if c.ProjectHistoryStaleAfter < 0 {
 		return fmt.Errorf("PORTAL_PROJECT_HISTORY_STALE_AFTER must be positive")
 	}
 	if c.CatalogSyncEnabled {
+		// 开启目录同步就必须完整提供发布客户端，不能把“同步失败”降级成继续使用未知版本目录。
 		for key, value := range map[string]string{
 			"PORTAL_PLATFORM_BASE_URL":                    c.PlatformBaseURL,
 			"PORTAL_AUTHORIZATION_CATALOG_APPLICATION_ID": c.CatalogApplicationID,
@@ -179,6 +182,7 @@ func (c Config) validate() error {
 		}
 	}
 	securityCenter, err := url.ParseRequestURI(c.AccountSecurityCenterURL)
+	// 安全中心链接会返回浏览器，生产仅允许 HTTPS；回环 HTTP 只服务本机开发。
 	if err != nil || securityCenter.Host == "" || securityCenter.User != nil || securityCenter.RawQuery != "" || securityCenter.Fragment != "" ||
 		(securityCenter.Scheme != "https" && !(securityCenter.Scheme == "http" && loopbackHostname(securityCenter.Hostname()))) {
 		return fmt.Errorf("PORTAL_ACCOUNT_SECURITY_CENTER_URL must use HTTPS, except HTTP is allowed for localhost or a loopback IP")
@@ -200,6 +204,7 @@ func (c Config) validate() error {
 		}
 	}
 	inviteScopes := strings.Fields(c.CRMInviteScope)
+	// Portal 反向调用 CRM 只需要验证邀请，不接受组合 scope，降低凭据泄漏后的可用权限面。
 	if len(inviteScopes) != 1 || inviteScopes[0] != "portal.invite.verify" {
 		return fmt.Errorf("PORTAL_CRM_INVITE_SCOPE must be portal.invite.verify")
 	}

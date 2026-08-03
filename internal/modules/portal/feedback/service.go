@@ -33,6 +33,8 @@ type CustomerActor struct {
 	TenantID, AccountID string
 	CustomerID          uint64
 }
+
+// OperatorActor 只代表租户内运营身份，不携带客户范围；机器鉴权层必须先授予管理权限。
 type OperatorActor struct{ TenantID, ActorID string }
 type CreateCommand struct{ Type, Title, Description, ProjectID, ExpectedContact, IdempotencyKey string }
 type MessageCommand struct{ Content, IdempotencyKey string }
@@ -82,6 +84,7 @@ func NewService(repo Repository, projects ProjectAccess, contacts ContactProtect
 }
 
 func (s *Service) Create(ctx context.Context, actor CustomerActor, command CreateCommand) (*CustomerFeedback, error) {
+	// 关联项目时先从可信投影验证客户归属；ExpectedContact 加密存储且只返回脱敏形式。
 	normalizeCreate(&command)
 	if !validCustomer(actor) || !validCreate(command) {
 		return nil, ErrValidation
@@ -126,9 +129,7 @@ func (s *Service) Create(ctx context.Context, actor CustomerActor, command Creat
 		return s.repo.CreateOutbox(tx, &Outbox{EventID: eventID, TenantID: actor.TenantID, EventType: "PORTAL_FEEDBACK_SUBMITTED", AggregateID: value.ID, Payload: payload, Status: "PENDING", CreatedAt: now})
 	})
 	if err != nil {
-		// A concurrent request may have committed the same unique idempotency
-		// key while this transaction was waiting. Resolve that race from the
-		// durable record instead of leaking a database duplicate error.
+		// 等待事务期间可能有并发请求提交同一幂等键；从持久化记录解析结果，不泄露数据库重复键错误。
 		if existing, findErr := s.repo.FindByCreateKey(ctx, actor, command.IdempotencyKey); findErr == nil {
 			if existing.CreateRequestHash != hash {
 				return nil, ErrIdempotencyConflict
@@ -173,6 +174,7 @@ func (s *Service) Get(ctx context.Context, actor CustomerActor, publicID string)
 }
 
 func (s *Service) AddCustomerMessage(ctx context.Context, actor CustomerActor, publicID string, command MessageCommand) (*CustomerTimeline, error) {
+	// 客户补充材料可把 NEED_CUSTOMER_INFO 原子转回处理中，消息、状态日志和事件必须一起提交。
 	command.Content, command.IdempotencyKey = strings.TrimSpace(command.Content), strings.TrimSpace(command.IdempotencyKey)
 	if !validCustomer(actor) || !validText(command.Content, 1, 5000) || !validKey(command.IdempotencyKey) {
 		return nil, ErrValidation
@@ -232,8 +234,7 @@ func (s *Service) Close(ctx context.Context, actor CustomerActor, publicID strin
 	if !validCustomer(actor) || publicID == "" || !validKey(command.IdempotencyKey) {
 		return nil, ErrValidation
 	}
-	// Resource visibility is intentionally resolved before replay lookup. A key
-	// must never become an oracle for feedback owned by another Portal account.
+	// 先确认资源可见性再查重放记录，避免幂等键成为探测其他 Portal 账号反馈单的侧信道。
 	value, err := s.repo.FindCustomer(ctx, actor, publicID)
 	if err != nil {
 		return nil, err
@@ -312,8 +313,7 @@ func (s *Service) Process(ctx context.Context, actor OperatorActor, publicID, ac
 		if lockErr != nil {
 			return lockErr
 		}
-		// Recheck after acquiring the aggregate lock. This closes the window
-		// between the optimistic replay check and a concurrent commit.
+		// 获取聚合锁后重新检查，关闭乐观重放查询与并发提交之间的竞态窗口。
 		if statusAction(action) {
 			if replay, replayErr := s.statusActionReplay(tx, locked, "OPERATOR", actor.ActorID, command.IdempotencyKey, actionHash); replayErr != nil {
 				return replayErr
@@ -530,9 +530,8 @@ func payloadHash(values ...string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// statusActionHash binds the durable key to the complete customer boundary,
-// aggregate, actor, action and canonical payload. The separate field checks in
-// statusActionReplay keep the conflict decision opaque to callers.
+// statusActionHash 将持久化键绑定到完整客户边界、聚合、操作者、动作及规范载荷。
+// statusActionReplay 的独立字段比较让冲突判断对调用方保持不透明。
 func statusActionHash(value *Feedback, actorType, actorID, action, content, reason string) string {
 	return payloadHash(
 		"portal-feedback-status-action-v1",

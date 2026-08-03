@@ -35,8 +35,7 @@ type MatrixView struct {
 	UpdatedAt  time.Time `json:"updated_at"`
 }
 
-// View deliberately excludes tenant/customer/account IDs, database keys,
-// idempotency hashes, audit actors and canonical snapshot bodies.
+// View 刻意排除租户/客户/账号 ID、数据库主键、幂等摘要、审计操作者和规范快照正文。
 type View struct {
 	ID            string          `json:"id"`
 	FilingNo      string          `json:"filing_no"`

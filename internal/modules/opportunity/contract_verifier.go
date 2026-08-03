@@ -34,8 +34,8 @@ type ContractVerifierOptions struct {
 	NonceReader                                       io.Reader
 }
 
-// HTTPContractVerifier is the CRM anti-corruption adapter for the contract
-// subsystem's customer-bound contract summary endpoint.
+// HTTPContractVerifier 是 CRM 调用合同子系统“客户归属合同摘要”接口的防腐层，
+// 只接收验证所需最小投影，不把合同内部模型引入商机模块。
 type HTTPContractVerifier struct {
 	endpoint    string
 	client      *http.Client

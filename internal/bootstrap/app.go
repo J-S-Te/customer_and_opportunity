@@ -34,6 +34,8 @@ type App struct {
 }
 
 func New(config Config) (*App, error) {
+	// 这里仅完成连接池装配，健康检查再执行真实 Ping；这样依赖未就绪会体现在健康状态，
+	// 而配置、密钥或协议适配器错误仍会让进程在开放端口前失败。
 	db, err := gorm.Open(mysql.Open(config.MySQLDSN), &gorm.Config{DisableAutomaticPing: true})
 	if err != nil {
 		return nil, err
@@ -43,9 +45,8 @@ func New(config Config) (*App, error) {
 		return nil, err
 	}
 	router := gin.New()
-	// RequestID must be outermost so both Recovery and AccessLog use the same
-	// trace. AccessLog wraps Recovery and therefore observes the status and
-	// bytes that were actually committed after a panic was handled.
+	// RequestID 必须位于最外层，使恢复与访问日志共享同一追踪号；访问日志包住恢复中间件，
+	// 因而能够记录 panic 被转换后实际写出的状态码和字节数。
 	router.Use(middleware.RequestID(), middleware.AccessLog(slog.Default(), "crm", nil), middleware.Recovery(slog.Default(), "crm"))
 	base := router.Group(strings.TrimRight(config.PathPrefix, "/"))
 	base.GET("/healthz", func(c *gin.Context) {
@@ -59,9 +60,13 @@ func New(config Config) (*App, error) {
 	var authMiddleware gin.HandlerFunc
 	var internalAuthMiddleware gin.HandlerFunc
 	if config.DevelopmentAuth {
+		// 开发认证只用于本地联调，并同时替代浏览器会话和内部机器令牌；配置校验确保正式环境
+		// 不会在缺少 OIDC/机器验签材料时静默降级到请求头身份。
 		authMiddleware = middleware.DevelopmentAuth(true)
 		internalAuthMiddleware = middleware.DevelopmentAuth(true)
 	} else {
+		// 浏览器和机器调用使用两条独立信任链：前者只认服务端会话 Cookie，后者只认平台
+		// 应用令牌。内部路由不会复用浏览器权限，避免用户会话越过系统间接口边界。
 		oidcClient, oidcErr := crmauth.NewPlatformOIDCClient(context.Background(), crmauth.OIDCOptions{
 			Issuer: config.OIDCIssuer, BackchannelBaseURL: config.OIDCBackchannelBaseURL,
 			ClientID: config.OIDCClientID, ClientSecret: config.OIDCClientSecret,
@@ -118,6 +123,8 @@ func New(config Config) (*App, error) {
 	workerReadiness := presale.NewGORMWorkerReadinessRepository(db)
 	api.GET("/capabilities", runtimeCapabilitiesHandler(config, workerReadiness, config.PresaleWorkerHeartbeatMaxAge))
 	var ownerCatalog ownerdirectory.Catalog = ownerdirectory.UnavailableCatalog{}
+	// 可选集成均采用显式的不可用适配器或启动时构造成功的真实适配器，不允许在请求期间
+	// 因空指针或默认放行而改变授权结果。
 	if config.OwnerDirectoryEnabled {
 		ownerClient, ownerErr := ownerdirectory.NewHTTPClient(context.Background(), ownerdirectory.HTTPOptions{
 			Endpoint: config.PlatformOwnerDirectoryURL, TokenURL: config.PlatformManagementTokenURL,
@@ -150,6 +157,8 @@ func New(config Config) (*App, error) {
 	customer.RegisterRoutes(api, customer.NewHandler(customerService))
 	var portalInviteHandler *portalinvite.Handler
 	if config.PortalInviteEnabled {
+		// 邀请流程跨越平台用户、应用角色和 Portal 映射三个资源域。各动作使用不同的最小
+		// OAuth scope，服务层通过持久化步骤和补偿任务处理无法跨库原子提交的部分成功。
 		platformProvisioner, provisionErr := portalinvite.NewHTTPPlatformProvisioner(context.Background(), portalinvite.PlatformProvisionerOptions{
 			ProvisionURL: config.PlatformExternalUserProvisionURL, RoleAssignURL: config.PlatformApplicationRoleAssignURL,
 			TokenURL: config.PlatformManagementTokenURL, ApplicationCode: config.PlatformPortalApplicationCode,
@@ -236,6 +245,8 @@ func New(config Config) (*App, error) {
 		opportunityService.UseExternalLaunchSigner(signer)
 	}
 	attachmentService := opportunity.NewAttachmentService(opportunity.NewGORMAttachmentRepository(db), opportunityRepo, auditWriter, opportunity.UnavailableAttachmentObjectStore{}, opportunity.UnavailableAttachmentScanner{}, 0)
+	// 对象存储和扫描器尚未接入时保留不可用实现，使上传能力失败关闭；不能仅因元数据表可写
+	// 就向客户端承诺附件已经安全落盘。
 	opportunityHandler := opportunity.NewHandler(opportunityService).UseStageAlerts(opportunity.NewStageAlertService(db)).UseAttachments(attachmentService)
 	opportunity.RegisterRoutes(api, opportunityHandler)
 	notification.RegisterRoutes(api, notification.NewHandler(notification.NewService(db)))
@@ -266,6 +277,7 @@ func New(config Config) (*App, error) {
 	opportunityPresales := opportunityPresaleHandler{opportunities: opportunityService, presales: presaleService}
 	api.GET("/opportunities/:id/presale-requests", middleware.RequirePermission("opportunity.read"), opportunityPresales.List)
 	internal := base.Group("/api/v1/internal", internalAuthMiddleware)
+	// 内部接口在独立路由组统一完成机器身份认证，具体处理器仍按 scope 和资源归属做二次约束。
 	if portalInviteHandler != nil {
 		portalinvite.RegisterInternalRoutes(internal, portalInviteHandler)
 	}
@@ -276,6 +288,7 @@ func New(config Config) (*App, error) {
 }
 
 func (a *App) Close(ctx context.Context) error {
+	// 先让 HTTP 在途请求收敛，再关闭共享连接池，避免请求持有的事务在优雅停机期间被截断。
 	shutdownErr := a.Server.Shutdown(ctx)
 	sqlDB, dbErr := a.DB.DB()
 	if dbErr == nil {

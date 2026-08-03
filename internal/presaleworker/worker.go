@@ -74,9 +74,7 @@ func (w *Worker) RunOnce(ctx context.Context) (int, error) {
 		if err = w.dispatch(ctx, events[i]); err != nil {
 			joined = errors.Join(joined, err)
 		}
-		// Refresh after every bounded external delivery. A heartbeat failure is
-		// surfaced for monitoring but never prevents this already-claimed batch
-		// from dispatching, so liveness bookkeeping cannot strand its events.
+		// 每次有界外部投递后刷新心跳；心跳失败会暴露给监控，但不阻断本批已领取事件，避免存活记录反向卡住任务。
 		if err = w.store.heartbeat(ctx, w.workerID, w.now()); err != nil {
 			joined = errors.Join(joined, err)
 		}
@@ -114,10 +112,12 @@ func (w *Worker) startApproval(ctx context.Context, event presale.OutboxEvent) e
 	if err != nil {
 		return err
 	}
+	// 远端 Start 以事件 ID 幂等；本地投影失败后重试会取得同一审批实例，再完成状态收敛。
 	return w.service.MarkApprovalStarted(ctx, event.TenantID, presale.ApprovalStartedInput{RequestID: requestID, EngineInstanceID: result.EngineInstanceID, EventSequence: result.EventSequence})
 }
 
 func (w *Worker) publishWorklog(ctx context.Context, event presale.OutboxEvent) error {
+	// 发送前先投影 SENDING，远端结果再落 SUCCESS/FAILURE；Outbox 仅在整个本地状态链完成后标记 SENT。
 	worklogID, err := aggregateID(event)
 	if err != nil {
 		return err

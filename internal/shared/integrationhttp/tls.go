@@ -1,6 +1,5 @@
-// Package integrationhttp builds the transport boundary shared by outbound
-// service integrations. It never permits insecure certificate verification and
-// keeps private client credentials in the process that owns the integration.
+// Package integrationhttp 构造出站服务集成共用的传输边界。它不允许跳过证书验证，并把客户端
+// 私钥留在拥有该集成的进程内。
 package integrationhttp
 
 import (
@@ -16,8 +15,7 @@ import (
 	"time"
 )
 
-// TLSOptions describes optional private trust roots and a client identity.
-// ClientCertFile and ClientKeyFile must always be configured as a pair.
+// TLSOptions 描述可选私有信任根和客户端身份；客户端证书与私钥必须成对配置。
 type TLSOptions struct {
 	RootCAFile     string
 	ClientCertFile string
@@ -26,7 +24,7 @@ type TLSOptions struct {
 	RequireMTLS    bool
 }
 
-// Validate checks configuration shape without reading secret files.
+// 只校验配置形状，不读取密钥文件；实际加载在启动构造 Transport 时完成并失败关闭。
 func (o TLSOptions) Validate() error {
 	for name, value := range map[string]string{
 		"root CA file": o.RootCAFile, "client certificate file": o.ClientCertFile,
@@ -48,9 +46,8 @@ func (o TLSOptions) Validate() error {
 	return nil
 }
 
-// ValidateEndpoints prevents TLS policy from being accidentally attached to a
-// clear-text or credential-bearing URL. Queries may be allowed by the caller;
-// userinfo and fragments are never valid service identities.
+// 防止把 TLS 策略误配到明文或 URL 内嵌凭据的端点。是否允许查询由调用方决定，但 userinfo 和
+// fragment 永远不是合法服务身份的一部分。
 func (o TLSOptions) ValidateEndpoints(rawURLs ...string) error {
 	if err := o.Validate(); err != nil {
 		return err
@@ -67,9 +64,8 @@ func (o TLSOptions) ValidateEndpoints(rawURLs ...string) error {
 	return nil
 }
 
-// NewTransport loads the current trust and client identity material. Callers
-// should build it once at process startup so invalid or unreadable secrets fail
-// the deployment before any business event is claimed.
+// 加载当前信任根和客户端身份材料。调用方应在启动时一次性构造，使无效或不可读密钥在领取任何
+// 业务事件前阻止部署。
 func NewTransport(o TLSOptions, dialTimeout time.Duration) (*http.Transport, error) {
 	if err := o.Validate(); err != nil {
 		return nil, err

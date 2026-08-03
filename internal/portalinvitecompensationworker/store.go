@@ -20,8 +20,7 @@ WHERE deleted_at IS NULL AND
   OR (status='PROCESSING' AND locked_until<?))
 ORDER BY created_at,id LIMIT ? FOR UPDATE SKIP LOCKED`
 
-// claim holds row locks only while a finite lease is established. Expired
-// PROCESSING rows are reclaimable, so a crashed replica cannot strand work.
+// 领取事务只在建立有限租约时持行锁；过期 PROCESSING 可被其他副本回收，进程崩溃不会永久挂起补偿。
 func (s *store) claim(ctx context.Context, workerID string, now time.Time, lease time.Duration, limit int) ([]portalinvite.CompensationTask, error) {
 	var claimed []portalinvite.CompensationTask
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -60,9 +59,7 @@ func (s *store) claim(ctx context.Context, workerID string, now time.Time, lease
 
 func (s *store) completeRole(ctx context.Context, task portalinvite.CompensationTask, workerID string, now time.Time) error {
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		// Role completion must make the next half-completed operation durable in
-		// the same transaction. Reusing the parent number produces a stable child
-		// key and makes a repeated transaction insert idempotent.
+		// 角色补偿完成时必须在同一事务持久化下一段映射补偿；复用父操作号生成稳定子键，使事务重放保持幂等。
 		nextTaskNo := task.TaskNo + "M"
 		if strings.HasSuffix(task.TaskNo, "R") {
 			nextTaskNo = strings.TrimSuffix(task.TaskNo, "R") + "M"
@@ -93,9 +90,7 @@ func (s *store) completeMapping(ctx context.Context, task portalinvite.Compensat
 			if link.PlatformUserID != task.PlatformUserID || (link.PortalAccountID != "" && link.PortalAccountID != mapping.PortalAccountID) {
 				return errLeaseLost
 			}
-			// DISABLED is a terminal administrative decision. A delayed mapping
-			// compensation may complete remotely because of transport ambiguity,
-			// but it must never resurrect the CRM access projection.
+			// DISABLED 是管理员终态。映射补偿可能因网络结果不确定而在远端迟到成功，但不得借此复活 CRM 访问投影。
 			if link.Status == "DISABLED" {
 				return errLeaseLost
 			}

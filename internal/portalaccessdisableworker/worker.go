@@ -63,15 +63,14 @@ func (w *Worker) RunOnce(ctx context.Context) (int, error) {
 	var joined error
 	for i := range operations {
 		operation := &operations[i]
+		// 稳定请求号贯穿本次恢复调用，便于远端幂等和审计串联；它不包含租户凭据或主体明文。
 		opCtx := requestctx.WithID(ctx, "portal-disable-worker:"+operation.OperationNo)
 		if !validOperation(operation, w.workerID, w.now()) {
 			joined = errors.Join(joined, w.store.failInvalid(opCtx, *operation, w.workerID, w.now()))
 			continue
 		}
 		if _, resumeErr := w.service.ResumeClaimed(opCtx, operation, w.workerID); resumeErr != nil {
-			// ResumeClaimed persists a bounded retry or DEAD_LETTER for remote
-			// failures. Returning only a generic poll error prevents credentials,
-			// subjects and upstream bodies from entering process logs.
+			// 服务层已把远端失败持久化为有限重试或死信；轮询层只返回固定错误，避免凭据、主体和上游响应进入日志。
 			joined = errors.Join(joined, errors.New("Portal access disable recovery step failed"))
 		}
 	}
@@ -79,6 +78,7 @@ func (w *Worker) RunOnce(ctx context.Context) (int, error) {
 }
 
 func validOperation(value *portalinvite.AccessDisableOperation, workerID string, now time.Time) bool {
+	// 恢复只能从协议允许的中间阶段继续，且必须持有本副本尚未过期的租约；异常行不能直接驱动远端撤权。
 	if value == nil || value.ID == 0 || strings.TrimSpace(value.TenantID) == "" || strings.TrimSpace(value.OperationNo) == "" ||
 		strings.TrimSpace(value.ActorID) == "" || value.CustomerID == 0 || value.IdentityLinkID == 0 || value.IdentityLinkVersion == 0 ||
 		value.ContactID == 0 || strings.TrimSpace(value.PlatformUserID) == "" || strings.TrimSpace(value.PortalAccountID) == "" ||

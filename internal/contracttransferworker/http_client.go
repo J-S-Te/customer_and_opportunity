@@ -41,6 +41,7 @@ type contractClient struct {
 }
 
 func newContractClient(cfg Config) (*contractClient, error) {
+	// OAuth 取令牌与业务投递共用受控 TLS 传输，但分别设置超时，避免认证端阻塞耗尽事件租约。
 	transport, err := integrationhttp.NewTransport(cfg.TLS, 2*time.Second)
 	if err != nil {
 		return nil, err
@@ -80,6 +81,7 @@ func (c *contractClient) deliver(ctx context.Context, command signedCommand) (de
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Accept", "application/json")
 	request.Header.Set("Idempotency-Key", command.EventID)
+	// EventID 绑定业务幂等，时间戳和一次性 nonce 用于接收端抵御请求重放；两者职责不能互相替代。
 	request.Header.Set("X-Integration-Timestamp", c.now().UTC().Format(time.RFC3339Nano))
 	request.Header.Set("X-Integration-Nonce", nonce)
 	response, err := c.client.Do(request)
@@ -94,6 +96,7 @@ func (c *contractClient) deliver(ctx context.Context, command signedCommand) (de
 		if requestID != "" {
 			summary += " request_id=" + requestID
 		}
+		// 除限流外的 4xx 表示命令本身不可恢复；5xx、429 和传输失败保留给 Worker 的退避重试。
 		if response.StatusCode >= 400 && response.StatusCode < 500 && response.StatusCode != http.StatusTooManyRequests {
 			return deliveryResult{}, permanentDeliveryError{summary: summary}
 		}
@@ -110,6 +113,7 @@ func (c *contractClient) deliver(ctx context.Context, command signedCommand) (de
 		} `json:"data"`
 	}
 	decoder := json.NewDecoder(io.LimitReader(response.Body, 1<<20))
+	// 不能只信任 HTTP 202：回包还必须确认同一个事件被接收，否则可能把代理或错误服务的响应记为成功。
 	if err = decoder.Decode(&envelope); err != nil || envelope.Code != "OK" || envelope.Data.IntakeID == "" || envelope.Data.EventID != command.EventID || envelope.Data.Status != "ACCEPTED" {
 		return deliveryResult{}, permanentDeliveryError{summary: "contract intake returned an invalid acceptance envelope"}
 	}
@@ -125,6 +129,7 @@ func integrationNonce() (string, error) {
 }
 
 func safeTransportError(err error) error {
+	// 对日志只暴露稳定分类，不透传可能包含目标地址、代理信息或底层网络细节的错误文本。
 	if errors.Is(err, context.Canceled) {
 		return context.Canceled
 	}

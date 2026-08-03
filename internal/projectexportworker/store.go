@@ -19,6 +19,7 @@ func NewGORMStore(db *gorm.DB) *GORMStore { return &GORMStore{db: db} }
 func (s *GORMStore) Claim(ctx context.Context, workerID string, now time.Time, lease time.Duration) (*projectexport.Job, error) {
 	var claimed *projectexport.Job
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// PENDING 或过期 GENERATING 均可领取；版本号和有限租约共同隔离崩溃恢复后的迟到渲染结果。
 		var job projectexport.Job
 		err := tx.Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"}).
 			Where("status=? OR (status=? AND locked_until<?)", projectexport.StatusPending, projectexport.StatusGenerating, now).
@@ -48,6 +49,7 @@ func (s *GORMStore) Claim(ctx context.Context, workerID string, now time.Time, l
 
 func (s *GORMStore) Complete(ctx context.Context, job *projectexport.Job, workerID, fileName string, pdf []byte, hash string, now time.Time) error {
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// PDF 二进制、摘要、元数据和成功事件原子提交，不会暴露“状态就绪但文件缺失”的导出记录。
 		result := tx.Model(&projectexport.Job{}).Where("id=? AND version=? AND status=? AND locked_by=? AND locked_until>?", job.ID, job.Version, projectexport.StatusGenerating, workerID, now).Updates(map[string]any{"status": projectexport.StatusReady, "file_name": fileName, "file_hash": hash, "file_size": len(pdf), "file_bytes": pdf, "failure_code": "", "locked_by": "", "locked_until": nil, "completed_at": now, "updated_at": now, "version": gorm.Expr("version+1")})
 		if result.Error != nil {
 			return result.Error
@@ -61,6 +63,7 @@ func (s *GORMStore) Complete(ctx context.Context, job *projectexport.Job, worker
 
 func (s *GORMStore) Fail(ctx context.Context, job *projectexport.Job, workerID, code string, now time.Time) error {
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// 失败同样要求版本匹配且租约有效，旧渲染器不能把新副本已完成的作业改回失败。
 		result := tx.Model(&projectexport.Job{}).Where("id=? AND version=? AND status=? AND locked_by=? AND locked_until>?", job.ID, job.Version, projectexport.StatusGenerating, workerID, now).Updates(map[string]any{"status": projectexport.StatusFailed, "failure_code": code, "locked_by": "", "locked_until": nil, "completed_at": now, "updated_at": now, "version": gorm.Expr("version+1")})
 		if result.Error != nil {
 			return result.Error

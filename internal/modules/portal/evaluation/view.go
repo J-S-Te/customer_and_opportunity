@@ -2,8 +2,7 @@ package evaluation
 
 import "time"
 
-// View deliberately excludes persistence IDs, tenant/customer/account scope,
-// audit actors and idempotency material.
+// View 刻意排除持久化主键、租户/客户/账号范围、审计操作者和幂等材料。
 type View struct {
 	ID                string    `json:"id"`
 	EvaluationNo      string    `json:"evaluation_no"`

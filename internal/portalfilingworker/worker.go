@@ -1,5 +1,4 @@
-// Package portalfilingworker delivers locally locked filing snapshots only
-// after a deployment supplies the signed public-security contract adapter.
+// Package portalfilingworker 只提交已经在本地锁定的备案快照；部署必须提供实现签名及验签协议的正式安全适配器。
 package portalfilingworker
 
 import (
@@ -24,10 +23,8 @@ const (
 
 var errLeaseLost = errors.New("Portal filing submission lease was lost")
 
-// SubmissionBundle is provider-neutral. SnapshotJSON is the exact immutable
-// canonical form encrypted by Portal; Materials contain only immutable CLEAN
-// object references and evidence. A provider adapter must transform this data
-// to its signed formal schema without weakening these checks.
+// SubmissionBundle 与具体备案机构无关。SnapshotJSON 是 Portal 加密保存的不可变规范快照；
+// Materials 只包含不可变且扫描结果为 CLEAN 的对象引用和证据，适配器转换正式报文时不得绕过这些约束。
 type SubmissionBundle struct {
 	EventID        string
 	TenantID       string
@@ -45,10 +42,8 @@ type MaterialEvidence struct {
 	ScannedAt                                                                 time.Time
 }
 
-// Receipt is returned only after the provider has accepted the submission.
-// Evidence is the canonical signed/verified receipt bytes. Before the receipt
-// crosses the Store boundary, the Worker replaces the plaintext with an
-// encrypted copy and its plaintext SHA-256 digest.
+// Receipt 仅在机构确认接收后返回。Evidence 是已验签的规范回执原文；进入 Store 前会被密文替换，
+// 并保留明文 SHA-256 用于完整性核验，数据库不会持久化回执明文。
 type Receipt struct {
 	ID, Authority  string
 	ReceivedAt     time.Time
@@ -59,8 +54,7 @@ type Receipt struct {
 
 type Provider interface {
 	Available() bool
-	// Submit must bind EventID to the exact bundle and return the same verified
-	// receipt on retry. Context cancellation must abort outstanding I/O.
+	// Submit 必须把 EventID 与完整报文绑定，并在重试时返回相同的已验证回执；上下文取消必须终止在途 I/O。
 	Submit(context.Context, SubmissionBundle) (Receipt, error)
 }
 
@@ -125,9 +119,7 @@ func (w *Worker) RunOnce(ctx context.Context) (int, error) {
 	}
 	processed := 0
 	var joined error
-	// Claim immediately before dispatching. Claiming a whole batch and then
-	// submitting it serially lets later rows lose their lease before their
-	// provider call even starts.
+	// 每次只在真正提交前领取一条；若整批先领取再串行发送，后排任务可能在开始远端调用前就失去租约。
 	for processed < w.batchSize {
 		events, err := w.store.Claim(ctx, w.workerID, w.now().UTC(), w.leaseDuration, 1)
 		if err != nil {
@@ -146,9 +138,7 @@ func (w *Worker) RunOnce(ctx context.Context) (int, error) {
 
 type GORMStore struct{ db *gorm.DB }
 
-// Activate moves only rows whose filing is still locally locked. The filing
-// status and outbox become SUBMITTING/PENDING atomically, so an administrator
-// cannot unlock a snapshot while a provider submission is in flight.
+// Activate 只激活仍处于本地锁定状态的备案，并原子推进备案与 Outbox；远端提交期间管理员不能解锁或改写快照。
 func (s *GORMStore) Activate(ctx context.Context, version string, now time.Time, limit int) (int64, error) {
 	var activated int64
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -223,8 +213,7 @@ func (w *Worker) dispatch(ctx context.Context, event filing.SubmissionOutbox) er
 	if event.Status != "PROCESSING" || event.LockedBy != w.workerID || event.LockedUntil == nil || !event.LockedUntil.After(now.Add(time.Second)) {
 		return errors.New("Portal filing submission event has no usable lease")
 	}
-	// Reserve one second for failure bookkeeping. The same deadline covers
-	// bundle loading, provider I/O, receipt protection and the local commit.
+	// 从租约中预留一秒用于失败落账；加载快照、远端调用、回执加密和本地提交共用其余期限。
 	workCtx, cancel := context.WithDeadline(ctx, event.LockedUntil.Add(-time.Second))
 	defer cancel()
 	bundle, err := w.store.LoadBundle(workCtx, w.protector, event)

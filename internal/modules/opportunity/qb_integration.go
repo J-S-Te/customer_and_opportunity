@@ -107,6 +107,8 @@ func (reader *HTTPQBStatusReader) LatestByOpportunity(ctx context.Context, oppor
 		return nil, errors.New("create quotation/bid status request failed")
 	}
 	request.Header.Set("Accept", "application/json")
+	// 时间戳与随机 nonce 由对端用于限制机器请求重放；业务 request ID 只承担链路追踪，
+	// 三者职责不同，不能互相替代。
 	request.Header.Set("X-Integration-Timestamp", reader.now().UTC().Format(time.RFC3339Nano))
 	if requestID := strings.TrimSpace(requestctx.ID(ctx)); requestID != "" {
 		if !validQBRequestID(requestID) {
@@ -153,6 +155,8 @@ func (reader *HTTPQBStatusReader) LatestByOpportunity(ctx context.Context, oppor
 }
 
 func validExternalSnapshot(snapshot ExternalStatusSnapshot) bool {
+	// 回读接口只允许报价/投标来源字段；合同号和输单原因属于 CRM 终态命令，
+	// 若由外部状态接口注入会绕过对应状态机和权限校验。
 	if snapshot.Type != "报价" && snapshot.Type != "投标" || !statusMatchesExternalType(snapshot.Type, snapshot.Status) || strings.TrimSpace(snapshot.SourceID) != snapshot.SourceID || snapshot.SourceID == "" || len([]byte(snapshot.SourceID)) > 64 || snapshot.ChangedAt.IsZero() {
 		return false
 	}

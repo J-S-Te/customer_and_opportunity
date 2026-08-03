@@ -16,8 +16,7 @@ type store struct{ db *gorm.DB }
 
 func newStore(db *gorm.DB) *store { return &store{db: db} }
 
-// seedCustomers discovers enabled Portal identity mappings. Its INSERT IGNORE
-// makes tenant/customer discovery repeatable and does not disturb cursors.
+// 从已启用的 Portal 身份映射发现同步边界；INSERT IGNORE 只补缺失游标，不会重置已有客户的增量位置。
 func (s *store) seedCustomers(ctx context.Context, tenantID string, now time.Time) error {
 	return s.db.WithContext(ctx).Exec(`INSERT IGNORE INTO portal_project_sync_states
 (tenant_id,customer_id,sync_cursor,next_run_at,last_error_summary,locked_by,created_at,updated_at,version)
@@ -27,8 +26,7 @@ WHERE tenant_id=? AND status='ACTIVE' AND deleted_at IS NULL
 GROUP BY tenant_id,customer_id`, now, now, now, tenantID).Error
 }
 
-// claim holds a short transaction and never performs HTTP while locks exist.
-// SKIP LOCKED allows multiple replicas without synchronizing in-process.
+// 领取只用短事务建立租约，持锁期间不发 HTTP；SKIP LOCKED 让多副本直接通过数据库分片，无需进程内协调。
 func (s *store) claim(ctx context.Context, tenantID, workerID string, now time.Time, lease time.Duration) (*syncState, error) {
 	var claimed *syncState
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -57,6 +55,7 @@ ORDER BY s.next_run_at,s.customer_id LIMIT 1 FOR UPDATE SKIP LOCKED`, tenantID, 
 }
 
 func (s *store) applyPage(ctx context.Context, state *syncState, workerID string, page sourcePage, now time.Time, done bool, syncInterval, leaseDuration time.Duration) (int, error) {
+	// 项目快照、子项替换和游标推进必须原子提交；否则游标前移会让失败页永久漏同步。
 	updated := 0
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var current syncState
@@ -105,6 +104,7 @@ func (s *store) applyPage(ctx context.Context, state *syncState, workerID string
 }
 
 func (s *store) failed(ctx context.Context, state *syncState, workerID string, now time.Time, retryInterval time.Duration, summary string) error {
+	// 写回条件包含版本和所有者，上一任 Worker 的迟到失败不能覆盖新领取者的进度。
 	result := s.db.WithContext(ctx).Model(&syncState{}).
 		Where("id=? AND version=? AND locked_by=?", state.ID, state.Version, workerID).
 		Updates(map[string]any{"locked_by": "", "locked_until": nil, "next_run_at": now.Add(retryInterval), "last_error_summary": sanitize(summary), "updated_at": now, "version": gorm.Expr("version+1")})

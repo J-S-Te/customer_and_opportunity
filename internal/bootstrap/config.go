@@ -13,6 +13,7 @@ import (
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/integrationhttp"
 )
 
+// 本地会话最长只缓存授权十五分钟；实际过期时间还会受平台令牌有效期和服务端重验约束。
 const maxOIDCSessionTTL = 15 * time.Minute
 
 type Config struct {
@@ -113,6 +114,8 @@ type Config struct {
 }
 
 func LoadConfig() (Config, error) {
+	// 配置在进程开放监听端口前一次性解析并校验。任何布尔值、时长或密钥格式错误都失败退出，
+	// 避免运行中根据环境变量变化形成同一副本内不一致的安全策略。
 	developmentAuth, err := strconv.ParseBool(valueOrDefault("DEV_AUTH_ENABLED", "false"))
 	if err != nil {
 		return Config{}, fmt.Errorf("DEV_AUTH_ENABLED: %w", err)
@@ -129,9 +132,8 @@ func LoadConfig() (Config, error) {
 	if err != nil {
 		return Config{}, fmt.Errorf("PORTAL_INVITE_PEPPER_BASE64: %w", err)
 	}
-	// A separately rotated invite pepper is recommended. Reusing the existing
-	// secret HMAC material is a backward-compatible secure fallback for current
-	// deployments; an empty or public constant is never accepted.
+	// 邀请摘要建议使用独立轮换的 pepper；为兼容既有部署，可回退到已有秘密 HMAC 材料，
+	// 但绝不接受空值或公开常量。
 	if len(invitePepper) == 0 {
 		invitePepper = append([]byte(nil), hmacKey...)
 	}
@@ -520,6 +522,8 @@ func LoadConfig() (Config, error) {
 }
 
 func (c Config) validateOIDC() error {
+	// OIDC、浏览器 Origin 和机器令牌材料作为一个生产认证契约整体校验，防止只配置登录
+	// 却留下内部接口无验签，或 Cookie 在非回环明文 HTTP 上传输。
 	required := map[string]string{"OIDC_ISSUER": c.OIDCIssuer, "OIDC_CLIENT_ID": c.OIDCClientID, "OIDC_CLIENT_SECRET": c.OIDCClientSecret, "OIDC_REDIRECT_URI": c.OIDCRedirectURI, "OIDC_TENANT_ID": c.OIDCTenantID, "OIDC_ROLE_CONFIG_HASH": c.OIDCRoleConfigHash, "OIDC_SESSION_COOKIE_NAME": c.OIDCSessionCookieName, "MACHINE_TOKEN_ISSUER": c.MachineTokenIssuer, "MACHINE_TOKEN_AUDIENCE": c.MachineTokenAudience, "MACHINE_TOKEN_PUBLIC_KEY_PATH": c.MachineTokenPublicKeyPath}
 	for key, value := range required {
 		if strings.TrimSpace(value) == "" {
@@ -549,6 +553,8 @@ func (c Config) validateOIDC() error {
 		return fmt.Errorf("OIDC_SESSION_COOKIE_SECURE may be false only for a loopback HTTP APP_PUBLIC_ORIGIN")
 	}
 	if c.OIDCBackchannelBaseURL != "" {
+		// 后通道地址仅替换容器内网络目的地，令牌中的 issuer 仍必须匹配公开地址；因此这里只
+		// 接受纯 origin，禁止路径、查询和凭据改变 Discovery/JWKS 的协议语义。
 		parsed, err := url.ParseRequestURI(c.OIDCBackchannelBaseURL)
 		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || parsed.User != nil || (parsed.Path != "" && parsed.Path != "/") || parsed.RawQuery != "" || parsed.Fragment != "" {
 			return fmt.Errorf("OIDC_BACKCHANNEL_BASE_URL must be an HTTP(S) origin")
@@ -590,6 +596,7 @@ func contains(values []string, expected string) bool {
 }
 
 func validateHTTPOrigin(key, value string) error {
+	// 服务根地址用于拼接固定管理端点，禁止携带路径和查询，避免客户端凭据被发送到意外位置。
 	parsed, err := url.ParseRequestURI(value)
 	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || parsed.User != nil || (parsed.Path != "" && parsed.Path != "/") || parsed.RawQuery != "" || parsed.Fragment != "" {
 		return fmt.Errorf("%s must be an HTTP(S) origin", key)

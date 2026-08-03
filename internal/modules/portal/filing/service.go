@@ -80,6 +80,7 @@ type UnlockCommand struct {
 type InternalActor struct{ TenantID, ActorID string }
 
 func (s *Service) Create(ctx context.Context, actor Actor, command CreateCommand) (*View, error) {
+	// 创建键绑定账号与项目；项目可访问性从可信投影确认，不能由请求中的客户标识决定。
 	command.ProjectID, command.IdempotencyKey = strings.TrimSpace(command.ProjectID), strings.TrimSpace(command.IdempotencyKey)
 	if !validActor(actor) || len(command.ProjectID) > 64 || !validIdempotencyKey(command.IdempotencyKey) {
 		return nil, ErrValidation
@@ -180,6 +181,7 @@ func (s *Service) Get(ctx context.Context, actor Actor, publicID string) (*View,
 }
 
 func (s *Service) SaveSection(ctx context.Context, actor Actor, publicID, code string, command SaveSectionCommand) (*SectionView, error) {
+	// 先按 schema 校验明文，再加密保存；幂等账本记录规范请求摘要而非敏感正文。
 	publicID, code, command.IdempotencyKey = strings.TrimSpace(publicID), strings.TrimSpace(code), strings.TrimSpace(command.IdempotencyKey)
 	if !validActor(actor) || !validPublicID(publicID) || !isSectionCode(code) || !validIdempotencyKey(command.IdempotencyKey) || len(command.Data) == 0 {
 		return nil, ErrValidation
@@ -379,6 +381,7 @@ func (s *Service) Validate(ctx context.Context, actor Actor, publicID string) (V
 }
 
 func (s *Service) Submit(ctx context.Context, actor Actor, publicID string, command SubmitCommand) (*View, error) {
+	// 提交在同一事务内校验聚合、生成规范快照、锁定草稿并写 outbox，保证投递引用永远指向已提交版本。
 	publicID, command.IdempotencyKey = strings.TrimSpace(publicID), strings.TrimSpace(command.IdempotencyKey)
 	if !validActor(actor) || !validPublicID(publicID) || !validIdempotencyKey(command.IdempotencyKey) {
 		return nil, ErrValidation
@@ -493,6 +496,7 @@ func (s *Service) Submit(ctx context.Context, actor Actor, publicID string, comm
 }
 
 func (s *Service) Unlock(ctx context.Context, actor InternalActor, publicID string, command UnlockCommand) (*View, error) {
+	// 解锁是机器授权的内部动作，只开放后续草稿修改；历史提交快照和回执保持不可变。
 	actor.TenantID, actor.ActorID, publicID, command.Reason, command.IdempotencyKey = strings.TrimSpace(actor.TenantID), strings.TrimSpace(actor.ActorID), strings.TrimSpace(publicID), strings.TrimSpace(command.Reason), strings.TrimSpace(command.IdempotencyKey)
 	if actor.TenantID == "" || actor.ActorID == "" || command.CustomerID == 0 || !validPublicID(publicID) || len([]rune(command.Reason)) < 2 || len([]rune(command.Reason)) > 1000 || !validIdempotencyKey(command.IdempotencyKey) {
 		return nil, ErrValidation
@@ -838,8 +842,7 @@ func sectionStep(code string) uint8 {
 	return 1
 }
 
-// Keep deterministic issue order even if callers construct repository results
-// in arbitrary order.
+// 即使仓储结果顺序不稳定，也固定校验问题排序，保证响应摘要和客户端展示可重复。
 func sortIssues(issues []ValidationIssue) {
 	sort.SliceStable(issues, func(i, j int) bool {
 		return fmt.Sprint(issues[i].Path, issues[i].Code) < fmt.Sprint(issues[j].Path, issues[j].Code)

@@ -257,6 +257,7 @@ func (sequence) TableName() string { return "crm_biz_sequences" }
 func (r *GORMRepository) NextNumber(ctx context.Context, tenantID, date string) (string, error) {
 	db := database.FromContext(ctx, r.db)
 	row := sequence{TenantID: tenantID, BusinessDate: date, BusinessType: "CUSTOMER", CurrentValue: 1}
+	// LAST_INSERT_ID(expr) 绑定当前数据库连接返回本次原子增量值，避免先读后写在并发创建时发出重复编号。
 	result := db.Exec(`INSERT INTO crm_biz_sequences (tenant_id,business_date,business_type,current_value)
 		VALUES (?,?,?,LAST_INSERT_ID(1)) ON DUPLICATE KEY UPDATE current_value=LAST_INSERT_ID(current_value+1)`, row.TenantID, row.BusinessDate, row.BusinessType)
 	if result.Error != nil {
@@ -304,6 +305,8 @@ func (r *GORMRepository) Create(ctx context.Context, customer *Customer) error {
 }
 
 func scopedCustomer(db *gorm.DB, principal auth.Principal) *gorm.DB {
+	// 租户条件始终存在；组织范围必须使用令牌中经平台确认的组织集合，空集合按无权限处理，
+	// 不能退化为租户全量或信任请求参数中的组织标识。
 	db = db.Where("crm_customers.tenant_id = ? AND crm_customers.deleted_at IS NULL", principal.TenantID)
 	switch principal.ScopeMode {
 	case auth.ScopeAll:
@@ -518,6 +521,8 @@ func buildCustomerListQuery(db *gorm.DB, principal auth.Principal, query ListQue
 			AND won.deleted_at IS NULL AND won.opp_status = 'CLOSED' AND won.current_stage = '已签约'
 		)`)
 	case QuickFilterFollowupDue:
+		// 仅检查每个客户时间线上最新一条跟进；历史记录中的 next_follow_at 到期，
+		// 若已有更新跟进覆盖，不能继续把客户标成待跟进。
 		db = db.Where(`EXISTS (
 			SELECT 1 FROM crm_customer_followups due
 			WHERE due.tenant_id = crm_customers.tenant_id AND due.customer_id = crm_customers.id

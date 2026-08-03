@@ -1,5 +1,4 @@
-// Package platformcatalog publishes an application-owned authorization catalog
-// to the base platform with a dedicated OAuth client-credentials identity.
+// Package platformcatalog 使用专用的 OAuth 客户端凭据，把应用自有授权目录发布到基础平台。
 package platformcatalog
 
 import (
@@ -20,9 +19,8 @@ import (
 
 const syncScope = "authorization.catalog.sync"
 
-// Manifest is the application-owned role and permission catalog. Machine-only
-// integration scopes are intentionally excluded: they are assigned to OAuth
-// clients, not to browser users.
+// Manifest 是应用自有的角色与权限目录。机器集成 scope 有意排除在外：它们授予 OAuth 客户端，
+// 不能混入浏览器用户角色。
 type Manifest struct {
 	Version     string
 	Permissions []Permission
@@ -43,8 +41,7 @@ type Policy struct {
 	MaxEffectiveRoles int
 }
 
-// Options identifies the platform endpoint and the application-bound catalog
-// publisher credential created during subsystem onboarding.
+// Options 标识平台端点及子系统接入时创建、与应用绑定的目录发布凭据。
 type Options struct {
 	Enabled                                        bool
 	BaseURL, ApplicationID, ClientID, ClientSecret string
@@ -86,9 +83,8 @@ type tokenResponse struct {
 	Scope       string `json:"scope"`
 }
 
-// Publish validates and publishes the manifest. When publication is enabled,
-// any error is returned to the caller so the service can fail startup rather
-// than accept Claims from a stale or incompatible platform catalog.
+// 启用同步后，目录校验、取令牌或发布任一步失败都会返回启动方；服务应失败退出，不能在平台
+// 仍使用旧目录时继续解释新版本 Claims。
 func Publish(ctx context.Context, manifest Manifest, options Options) error {
 	if !options.Enabled {
 		return nil
@@ -105,8 +101,7 @@ func Publish(ctx context.Context, manifest Manifest, options Options) error {
 	if client == nil {
 		client = &http.Client{Timeout: 10 * time.Second}
 	}
-	// OAuth publisher credentials and bearer tokens must never cross an HTTP
-	// redirect boundary, even when a caller injects a custom client.
+	// 发布凭据和 Bearer Token 不得跨越 HTTP 重定向边界，即使调用方注入了自定义客户端也一样。
 	clientCopy := *client
 	clientCopy.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	client = &clientCopy
@@ -138,8 +133,7 @@ func Publish(ctx context.Context, manifest Manifest, options Options) error {
 	return nil
 }
 
-// ClaimsRoleConfigHash returns the opaque compatibility hash published to the
-// platform and expected in this application's OIDC Claims.
+// 返回发布给平台并要求出现在 OIDC Claims 中的不透明兼容哈希，用于绑定角色到权限的解释版本。
 func ClaimsRoleConfigHash(manifest Manifest) (string, error) {
 	payload, err := normalizeManifest(manifest)
 	if err != nil {
@@ -148,9 +142,8 @@ func ClaimsRoleConfigHash(manifest Manifest) (string, error) {
 	return payload.ClaimsRoleConfigHash, nil
 }
 
-// CatalogChecksum returns the deterministic checksum of the complete catalog
-// definition sent to the platform. It is separate from the Claims
-// compatibility hash, which only tracks role-to-permission mappings.
+// 完整目录校验和覆盖展示元数据和策略；它与 Claims 兼容哈希分离，后者只跟踪会改变授权解释的
+// 角色—权限映射。
 func CatalogChecksum(manifest Manifest) (string, error) {
 	payload, err := normalizeManifest(manifest)
 	if err != nil {
@@ -159,9 +152,7 @@ func CatalogChecksum(manifest Manifest) (string, error) {
 	return payload.Checksum, nil
 }
 
-// HasPermission and HasRole let authentication validators consume the same
-// catalog that is published to the platform, preventing separate allowlists
-// from drifting apart.
+// 认证校验与发布流程复用同一目录，避免本地允许列表和平台目录各自维护后发生漂移。
 func HasPermission(manifest Manifest, expected string) bool {
 	for _, item := range manifest.Permissions {
 		if item.Code == expected {
@@ -180,8 +171,7 @@ func HasRole(manifest Manifest, expected string) bool {
 	return false
 }
 
-// ValidateClaimsRoleConfigHash verifies that the runtime OIDC configuration
-// expects the exact mapping published by the application binary.
+// 校验运行时 OIDC 配置期望的映射与当前二进制内置目录完全一致，滚动发布中的不兼容副本会拒绝启动。
 func ValidateClaimsRoleConfigHash(manifest Manifest, configured string) error {
 	expected, err := ClaimsRoleConfigHash(manifest)
 	if err != nil {
@@ -256,9 +246,8 @@ func normalizeManifest(manifest Manifest) (catalogPayload, error) {
 	}
 	catalogSum := sha256.Sum256(catalogEncoded)
 	payload.Checksum = "sha256:" + hex.EncodeToString(catalogSum[:])
-	// Claims compatibility is bound to stable role codes and their permission
-	// mappings. Chinese display names and descriptions are presentation metadata
-	// and must not invalidate every active session when copy is edited.
+	// Claims 兼容性只绑定稳定角色码及权限映射；中文名称和说明属于展示元数据，文案调整不应使
+	// 所有活动会话失效。
 	type claimsRole struct {
 		Code        string   `json:"code"`
 		Permissions []string `json:"permissions"`

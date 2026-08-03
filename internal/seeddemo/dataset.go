@@ -1,7 +1,5 @@
-// Package seeddemo provides a repeatable demo dataset for the customer and
-// opportunity subsystem. The people, customers and opportunities reuse the
-// sample identities and business names already present in the prototype and
-// acceptance test cases so local UAT screens remain recognizable.
+// Package seeddemo 提供可重复执行的客户与商机演示数据。人员、客户和商机沿用原型与验收用例
+// 中的稳定身份和业务名称，使本地 UAT 页面在多次初始化后仍可识别。
 package seeddemo
 
 const (
@@ -10,9 +8,8 @@ const (
 	DefaultActorName = "演示数据初始化"
 )
 
-// Person is one internal demo actor. Sub is a platform OIDC subject and OrgID
-// is one of that subject's authorized organization memberships; the owner
-// directory contract requires the pair to be valid.
+// Person 表示内部演示操作者：Sub 是平台 OIDC subject，OrgID 必须属于该主体的有效组织任职；
+// 所有者目录会对这两个值成对校验。
 type Person struct {
 	Sub     string
 	Name    string
@@ -20,7 +17,7 @@ type Person struct {
 	OrgName string
 }
 
-// People keeps demo owners stable and referenced by key, never by raw name.
+// 演示所有者以稳定键引用，不用可变显示名称建立关系。
 func People() map[string]Person {
 	return map[string]Person{
 		"陈浩然": {Sub: "oidc-sub-chen-haoran", Name: "陈浩然", OrgID: "org-demo-east1", OrgName: "华东一区"},

@@ -49,6 +49,7 @@ func (w *Worker) Run(ctx context.Context) error {
 }
 
 func (w *Worker) RunOnce(ctx context.Context) (int, error) {
+	// 调度状态与执行任务分离：先为到期租户补幂等任务，再由多副本通过租约领取，避免轮询器重复创建作业。
 	now := w.now()
 	if err := w.store.Schedule(ctx, now, w.cfg.SyncInterval); err != nil {
 		return 0, err
@@ -59,6 +60,7 @@ func (w *Worker) RunOnce(ctx context.Context) (int, error) {
 	}
 	var joined error
 	for _, job := range jobs {
+		// 远端全量快照可能耗时，调用前后各续租一次；Apply 仍会在事务内最终复核租约。
 		if renewErr := w.store.Renew(ctx, job, w.cfg.WorkerID, w.now(), w.cfg.LeaseDuration); renewErr != nil {
 			joined = errors.Join(joined, renewErr)
 			continue
@@ -84,6 +86,7 @@ func (w *Worker) RunOnce(ctx context.Context) (int, error) {
 }
 
 func validateSnapshot(tenant string, snapshot SourceSnapshot) error {
+	// 仅接受与本地任务租户一致的完整快照；空或部分响应不能触发“未出现人员全部停用”的破坏性对账。
 	if !snapshot.Full || snapshot.TenantID == "" || snapshot.TenantID != tenant || len(snapshot.Engineers) == 0 {
 		return errors.New("PMS technician snapshot lacks a matching tenant-scoped full revision")
 	}

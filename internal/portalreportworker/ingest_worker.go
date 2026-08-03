@@ -63,6 +63,7 @@ func (w *IngestWorker) dispatch(ctx context.Context, job report.IngestJob) error
 	}
 	var descriptor report.FileDescriptor
 	decoder := json.NewDecoder(strings.NewReader(string(raw)))
+	// 严格 JSON 解码并校验密文所绑定的结构摘要，避免未知字段或替换后的描述符驱动受信文件服务。
 	decoder.DisallowUnknownFields()
 	if err = decoder.Decode(&descriptor); err != nil {
 		return w.fail(ctx, job, errors.New("Portal report ingest descriptor is invalid"))
@@ -73,8 +74,8 @@ func (w *IngestWorker) dispatch(ctx context.Context, job report.IngestJob) error
 	if reportDescriptorHash(descriptor) != job.DescriptorHash {
 		return w.fail(ctx, job, errors.New("Portal report ingest descriptor binding failed"))
 	}
-	// Bound the provider call inside the database lease. Implementations must
-	// honor cancellation; a stable eventID makes a lease replay idempotent.
+	// 这里按“完整租约时长减一秒”设置相对调用预算，并不重新读取 locked_until 计算真实剩余租约；
+	// 适配器仍须响应取消，稳定 EventID 则用于让超时或租约接管后的重复摄取保持幂等。
 	providerTimeout := w.leaseDuration - time.Second
 	providerCtx, cancel := context.WithTimeout(ctx, providerTimeout)
 	defer cancel()
@@ -103,8 +104,7 @@ func (w *IngestWorker) fail(ctx context.Context, job report.IngestJob, cause err
 }
 
 func reportDescriptorHash(value report.FileDescriptor) string {
-	// Exported comparison remains intentionally unavailable; JSON re-encoding is
-	// canonical for this fixed struct and mirrors the module hash calculation.
+	// 固定结构重新编码后的 JSON 是模块内部约定的规范形式，与任务创建端使用同一摘要算法。
 	raw, _ := json.Marshal(value)
 	sum := sha256.Sum256(raw)
 	return base64.RawURLEncoding.EncodeToString(sum[:])

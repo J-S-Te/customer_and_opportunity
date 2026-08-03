@@ -217,6 +217,7 @@ var filingSchemas = map[string]sectionSchema{
 func withFormat(rule fieldRule, format string) fieldRule { rule.format = format; return rule }
 
 func parseAndValidateSection(code string, raw []byte) ([]byte, []ValidationIssue, error) {
+	// 使用受控 schema 解析后重新编码规范 JSON，使幂等摘要不受字段顺序和多余空白影响。
 	schema, ok := filingSchemas[code]
 	if !ok {
 		return nil, nil, fmt.Errorf("unknown section code")
@@ -321,6 +322,7 @@ func validateField(key string, value any, rule fieldRule) *ValidationIssue {
 }
 
 func crossFieldIssues(code string, data map[string]any) []ValidationIssue {
+	// 跨字段规则表达单字段类型系统无法覆盖的业务不变量，结果仍并入统一、稳定排序的问题列表。
 	var issues []ValidationIssue
 	if code == SectionClassification || code == SectionClassificationReport {
 		business, bOK := integerValue(data["business_information_level"])

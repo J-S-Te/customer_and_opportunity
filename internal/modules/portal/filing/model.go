@@ -21,9 +21,7 @@ const (
 	MaterialScanFailed     = "SCAN_FAILED"
 )
 
-// Filing is the mutable head of one customer-scoped filing. Submitted content
-// is never read from this mutable head; each submission has an immutable
-// SubmissionSnapshot instead.
+// Filing 是客户范围内备案的可变头记录；已提交内容不再从这里读取，而由每次提交生成的不可变 SubmissionSnapshot 固化。
 type Filing struct {
 	ID                   uint64         `gorm:"primaryKey"`
 	TenantID             string         `gorm:"size:64;not null;index"`
@@ -52,8 +50,7 @@ type Filing struct {
 
 func (Filing) TableName() string { return "portal_filings" }
 
-// Section contains only the current validated-shape draft. Every replacement
-// emits an append-only Action record with hash and encrypted result metadata.
+// Section 只保存当前已通过结构校验的草稿；每次替换都会追加带摘要和加密结果元数据的 Action。
 type Section struct {
 	ID               uint64    `gorm:"primaryKey;autoIncrement"`
 	TenantID         string    `gorm:"size:64;not null;uniqueIndex:uq_portal_filing_section,priority:1"`
@@ -70,8 +67,7 @@ type Section struct {
 
 func (Section) TableName() string { return "portal_filing_sections" }
 
-// MatrixSelection has exactly one row per matrix code. A revoked selection is
-// retained with Selected=false so its optimistic version never resets.
+// MatrixSelection 每个矩阵代码固定一行；取消选择仅置为 false，保留乐观锁版本，防止版本重置后的旧写入复活。
 type MatrixSelection struct {
 	ID         uint64    `gorm:"primaryKey;autoIncrement"`
 	TenantID   string    `gorm:"size:64;not null;uniqueIndex:uq_portal_filing_matrix,priority:1"`
@@ -88,8 +84,7 @@ type MatrixSelection struct {
 
 func (MatrixSelection) TableName() string { return "portal_filing_matrix" }
 
-// SubmissionSnapshot is immutable application data. No repository update or
-// delete method exists for it; an unlock creates a later snapshot on resubmit.
+// SubmissionSnapshot 是不可变申请数据，仓储不提供更新或删除；解锁后重新提交会创建更晚的新快照。
 type SubmissionSnapshot struct {
 	ID              uint64    `gorm:"primaryKey;autoIncrement"`
 	TenantID        string    `gorm:"size:64;not null;uniqueIndex:uq_portal_filing_submission,priority:1"`
@@ -104,10 +99,8 @@ type SubmissionSnapshot struct {
 
 func (SubmissionSnapshot) TableName() string { return "portal_filing_submission_snapshots" }
 
-// SubmissionOutbox contains only a stable reference to the immutable Portal
-// snapshot. It is not a police-system wire payload. Until a signed external
-// contract is configured, WAITING_CONTRACT is an intentional fail-closed state
-// and no worker may claim the row for delivery.
+// SubmissionOutbox 只保存不可变 Portal 快照的稳定引用，不是公安系统线协议载荷。
+// 外部签名契约未配置前，WAITING_CONTRACT 是有意的失败关闭状态，worker 不得领取投递。
 type SubmissionOutbox struct {
 	ID               uint64     `gorm:"primaryKey;autoIncrement"`
 	EventID          string     `gorm:"size:64;not null;uniqueIndex:uq_portal_filing_submission_event,priority:2"`
@@ -129,9 +122,7 @@ type SubmissionOutbox struct {
 
 func (SubmissionOutbox) TableName() string { return "portal_filing_submission_outbox" }
 
-// SubmissionReceipt is immutable proof returned by a configured public-
-// security submission provider. A locally locked snapshot never creates this
-// row; only the delivery worker may persist it after provider verification.
+// SubmissionReceipt 是已配置公安提交方返回的不可变凭证；本地锁定快照不会生成它，只有 worker 验证供应方响应后才能持久化。
 type SubmissionReceipt struct {
 	ID                     uint64    `gorm:"primaryKey;autoIncrement"`
 	TenantID               string    `gorm:"size:64;not null;uniqueIndex:uq_portal_filing_receipt_submission,priority:1"`
@@ -148,9 +139,8 @@ type SubmissionReceipt struct {
 
 func (SubmissionReceipt) TableName() string { return "portal_filing_submission_receipts" }
 
-// Material stores an encrypted immutable object reference and scanner evidence;
-// file bytes never enter MySQL. One row per material code prevents an older
-// clean version from being confused with a newly uploaded unscanned version.
+// Material 保存加密的不可变对象引用和扫描证据，文件字节不进入 MySQL。
+// 每个材料代码只有一行，避免旧的安全版本与新上传但未扫描版本混淆。
 type Material struct {
 	ID                 uint64     `gorm:"primaryKey;autoIncrement"`
 	TenantID           string     `gorm:"size:64;not null;uniqueIndex:uq_portal_filing_material_public,priority:1;uniqueIndex:uq_portal_filing_material_code,priority:1;uniqueIndex:uq_portal_filing_material_create,priority:1"`
@@ -180,8 +170,7 @@ type Material struct {
 
 func (Material) TableName() string { return "portal_filing_materials" }
 
-// Action is an append-only audit and idempotency ledger. ResponseCipher holds
-// the exact minimized successful response encrypted under the Portal data key.
+// Action 是只追加的审计和幂等账本；ResponseCipher 使用 Portal 数据密钥保存精确、最小化的成功响应。
 type Action struct {
 	ID             uint64    `gorm:"primaryKey;autoIncrement"`
 	TenantID       string    `gorm:"size:64;not null;uniqueIndex:uq_portal_filing_action,priority:1"`

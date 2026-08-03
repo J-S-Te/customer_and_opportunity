@@ -79,8 +79,7 @@ type FileDescriptor struct {
 	Size      int64
 }
 
-// IngestResult contains only metadata produced by the trusted Portal-owned
-// ingestor. Encryption key references are never accepted from a callback.
+// IngestResult 只包含 Portal 自有可信入库器产生的元数据；回调不能提供加密密钥引用。
 type IngestResult struct {
 	ObjectKeyCipher     []byte
 	ObjectVersion       string
@@ -103,8 +102,7 @@ type DescriptorProtector interface {
 	Decrypt(context.Context, []byte) ([]byte, error)
 }
 type FileIngestor interface {
-	// eventID is a stable idempotency identity and must be bound to the exact
-	// descriptor by every provider implementation.
+	// eventID 是稳定幂等身份，每个供应方实现都必须把它绑定到精确文件描述符。
 	Ingest(context.Context, string, FileDescriptor) (IngestResult, error)
 }
 type Clock interface{ Now() time.Time }
@@ -152,8 +150,7 @@ type Detail struct {
 	Events  []StatusEvent
 }
 
-// NotificationView deliberately excludes tenant/customer/account identity,
-// encrypted email and object-storage metadata.
+// NotificationView 刻意排除租户、客户、账号身份、加密邮箱和对象存储元数据。
 type NotificationView struct {
 	ID         uint64     `json:"id"`
 	RequestID  uint64     `json:"request_id"`
@@ -212,9 +209,7 @@ func validNotificationActor(actor Actor) bool {
 		validBoundedText(strings.TrimSpace(actor.AccountID), maxAccountIDBytes)
 }
 
-// GetDetail reads the aggregate and its append-only timeline through the same
-// tenant/customer scope. Status updates and their event are committed in one
-// transaction; both detail reads use the same transaction handle as well.
+// GetDetail 在同一租户/客户范围读取聚合与只追加时间线；状态及事件同事务提交，详情读取也共用事务句柄。
 func (s *Service) GetDetail(ctx context.Context, actor Actor, id uint64) (*Detail, error) {
 	if strings.TrimSpace(actor.TenantID) == "" || actor.CustomerID == 0 || id == 0 {
 		return nil, ErrNotFound
@@ -250,16 +245,14 @@ func NewService(repo Repository, projects ProjectAccess, emails EmailProtector, 
 	return &Service{repo: repo, projects: projects, emails: emails, ingest: ingest, clock: clock, ids: ids}
 }
 
-// UseWorkerReadiness installs persisted liveness evidence for the independent
-// delivery worker. Configuration alone must never enable new submissions.
+// UseWorkerReadiness 安装独立投递 worker 的持久化存活证据；仅有配置不能开启新申请准入。
 func (s *Service) UseWorkerReadiness(readiness workerruntime.Readiness, maxAge time.Duration) *Service {
 	s.readiness, s.workerMaxAge = readiness, maxAge
 	return s
 }
 
 func (s *Service) deliveryWorkerReady(ctx context.Context) bool {
-	// Embedders that do not install admission control keep the historical
-	// service behavior. The production Portal bootstrap always installs it.
+	// 未安装准入控制的领域嵌入保持既有行为；生产 Portal 启动流程始终安装该检查。
 	if s.readiness == nil {
 		return true
 	}
@@ -271,6 +264,7 @@ func (s *Service) deliveryWorkerReady(ctx context.Context) bool {
 }
 
 func (s *Service) Create(ctx context.Context, actor Actor, cmd CreateCommand) (*Request, error) {
+	// 项目归属、worker 存活和邮箱加密都在创建持久化任务前完成；浏览器不能直接指定下游审批身份。
 	actor.TenantID = strings.TrimSpace(actor.TenantID)
 	actor.AccountID = strings.TrimSpace(actor.AccountID)
 	cmd.ProjectID = strings.TrimSpace(cmd.ProjectID)
@@ -331,8 +325,7 @@ func (s *Service) Create(ctx context.Context, actor Actor, cmd CreateCommand) (*
 		if e := s.repo.CreateStatusEvent(tx, statusEvent(value, "REPORT_SUBMITTED", 1, "", StatusSubmitted, "CUSTOMER", actor.AccountID, "CREATE", cmd.IdempotencyKey, hash, requestctx.ID(tx), now)); e != nil {
 			return e
 		}
-		// Create assigns the database ID, so the outbox payload must be encoded
-		// inside the transaction after the insert.
+		// 数据库 ID 由 Create 分配，因此 outbox 载荷必须在事务内完成插入后编码。
 		payload, marshalErr := json.Marshal(map[string]any{
 			"request_id": value.ID, "request_no": value.RequestNo, "customer_id": value.CustomerID,
 			"project_id": value.ProjectID, "report_type": value.ReportType, "reason": value.Reason,
@@ -345,9 +338,7 @@ func (s *Service) Create(ctx context.Context, actor Actor, cmd CreateCommand) (*
 	if err == nil {
 		return value, nil
 	}
-	// A concurrent request using the same key can win the database unique
-	// constraint between the fast lookup and insert. Return that committed
-	// aggregate only when its canonical request hash matches.
+	// 并发请求可能在快速查询与插入间赢得唯一键；仅当规范请求摘要一致时返回已提交聚合。
 	if existing, findErr := s.repo.FindByIdempotencyKey(ctx, actor.TenantID, actor.CustomerID, cmd.IdempotencyKey); findErr == nil {
 		if !sameCreateBinding(existing, actor, cmd) || existing.RequestHash != hash {
 			return nil, ErrIdempotencyConflict
@@ -357,9 +348,7 @@ func (s *Service) Create(ctx context.Context, actor Actor, cmd CreateCommand) (*
 	return value, err
 }
 
-// MarkApprovalStarted moves the local projection only after the project
-// service has durably accepted the idempotent submission. Replays with the
-// same downstream identity are safe; a different identity is a conflict.
+// MarkApprovalStarted 仅在项目服务持久接受幂等申请后推进本地投影；相同下游身份可重放，不同身份视为冲突。
 func (s *Service) MarkApprovalStarted(ctx context.Context, tenantID string, requestID uint64, downstreamRequestID string) error {
 	tenantID, downstreamRequestID = strings.TrimSpace(tenantID), strings.TrimSpace(downstreamRequestID)
 	if tenantID == "" || requestID == 0 || downstreamRequestID == "" {
@@ -391,6 +380,7 @@ func (s *Service) MarkApprovalStarted(ctx context.Context, tenantID string, requ
 }
 
 func (s *Service) ApplyCallback(ctx context.Context, cb Callback) error {
+	// 回调状态机由版本和幂等键共同约束；对象引用只先加密入队，不在回调事务中执行网络下载或扫描。
 	cb.TenantID = strings.TrimSpace(cb.TenantID)
 	cb.ProjectID = strings.TrimSpace(cb.ProjectID)
 	cb.DownstreamRequestID = strings.TrimSpace(cb.DownstreamRequestID)
@@ -421,9 +411,7 @@ func (s *Service) ApplyCallback(ctx context.Context, cb Callback) error {
 		if value.CustomerID != cb.CustomerID || value.ProjectID != cb.ProjectID || value.DownstreamRequestID == "" || value.DownstreamRequestID != cb.DownstreamRequestID {
 			return ErrInvalidCallback
 		}
-		// The event history retains a digest for every accepted callback key,
-		// including callbacks older than last_callback_key. Exact replays are
-		// no-ops; reusing any prior key with another payload is always a conflict.
+		// 事件历史保留每个已接收回调键的摘要，包括早于 last_callback_key 的版本；精确重放为空操作，换载荷复用旧键始终冲突。
 		source := sourceHash("CALLBACK", cb.IdempotencyKey)
 		accepted, findErr := s.repo.FindStatusEventBySource(tx, cb.TenantID, value.ID, source)
 		if findErr == nil {
@@ -501,9 +489,7 @@ func (s *Service) ApplyCallback(ctx context.Context, cb Callback) error {
 	})
 }
 
-// CompleteIngest atomically publishes only evidence returned by the trusted
-// ingestor. Object retrieval, scanning and encryption happen before this
-// transaction and therefore never extend callback or database lock duration.
+// CompleteIngest 原子发布可信入库器返回的证据；对象获取、扫描和加密在事务前完成，不延长回调或数据库锁时间。
 func (s *Service) CompleteIngest(ctx context.Context, job IngestJob, descriptor FileDescriptor, ingested IngestResult) error {
 	if job.ID == 0 || job.RequestID == 0 || !validBoundedText(job.EventID, 64) || descriptorHash(descriptor) != job.DescriptorHash {
 		return ErrInvalidCallback
@@ -559,9 +545,8 @@ func (s *Service) CompleteIngest(ctx context.Context, job IngestJob, descriptor 
 	})
 }
 
-// MarkIngestDeadLetter makes terminal operational failure visible on the
-// aggregate without publishing a file or notification. It is exact-replay
-// safe and records only the stable job identity, never provider error text.
+// MarkIngestDeadLetter 在聚合上暴露终止性运维失败，但不发布文件或通知。
+// 精确重放安全，且只记录稳定任务身份，不保存供应方错误正文。
 func (s *Service) MarkIngestDeadLetter(ctx context.Context, job IngestJob) error {
 	if job.ID == 0 || job.RequestID == 0 || !validBoundedText(job.EventID, 64) {
 		return ErrInvalidCallback

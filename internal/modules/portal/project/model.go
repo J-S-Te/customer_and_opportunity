@@ -19,9 +19,7 @@ type Snapshot struct {
 	Delayed              bool       `gorm:"not null;index"`
 	ManagerName          string     `gorm:"column:manager_name_snapshot;size:128"`
 	ManagerContactMasked string     `gorm:"size:128"`
-	// ManagerPortalAccountID is an authoritative station-message recipient
-	// account supplied by the project source. Name/person/contact fields are
-	// display-only and must never be promoted to this identity.
+	// ManagerPortalAccountID 是项目源提供的权威站内信收件账号；姓名、人员和联系方式只用于展示，不能提升为投递身份。
 	ManagerPortalAccountID string    `gorm:"size:128;not null;default:''"`
 	SourceUpdatedAt        time.Time `gorm:"precision:3;not null"`
 	SyncedAt               time.Time `gorm:"precision:3;not null"`
@@ -78,9 +76,7 @@ type Bundle struct {
 	Team       []TeamMember
 }
 
-// Detail is the bounded customer-facing project aggregate. Activities are
-// deliberately excluded because their history can grow without limit and is
-// exposed only through the paginated activities endpoint.
+// Detail 是有界的客户项目聚合；活动历史可能无限增长，故只通过独立分页接口暴露，不嵌入详情。
 type Detail struct {
 	Snapshot   Snapshot
 	Milestones []Milestone

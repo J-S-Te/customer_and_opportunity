@@ -33,9 +33,7 @@ type Repository interface {
 	FindInviteByID(context.Context, string, uint64) (*Invite, error)
 }
 
-// AccessDisableRepository is separated from invitation persistence so the
-// existing invite lifecycle and its test doubles do not acquire access-disable
-// authority implicitly.
+// AccessDisableRepository 与邀请持久化分离，避免邀请生命周期及其测试替身隐式获得停用访问的权限。
 type AccessDisableRepository interface {
 	WithTransaction(context.Context, func(context.Context) error) error
 	LockCustomer(context.Context, string, uint64) error
@@ -98,8 +96,7 @@ func (r *GORMRepository) UpsertLink(ctx context.Context, value *IdentityLink) er
 	if current.CustomerID != value.CustomerID || current.ContactID != value.ContactID || current.PortalAccountID != value.PortalAccountID {
 		return ErrVersionConflict
 	}
-	// DISABLED is terminal. Re-enabling access requires a new, explicit business
-	// workflow; an older invitation saga must never resurrect the mapping.
+	// DISABLED 是终态；重新开放访问必须启动新的显式业务流程，旧邀请 Saga 不能复活该映射。
 	if current.Status == "DISABLED" {
 		return ErrVersionConflict
 	}
@@ -136,9 +133,8 @@ func (r *GORMRepository) FindByTokenHashForUpdate(ctx context.Context, hash stri
 	return mapNotFound(&value, err)
 }
 
-// FindIdentityLinkForInviteForUpdate binds activation to every immutable
-// identity value captured by the invitation. A customer-level lookup alone is
-// insufficient because an old callback must never activate a replacement link.
+// FindIdentityLinkForInviteForUpdate 用邀请冻结的全部不可变身份字段定位并加锁映射；
+// 仅按客户查询不够严格，旧回调绝不能激活后续替换的新映射。
 func (r *GORMRepository) FindIdentityLinkForInviteForUpdate(ctx context.Context, invite *Invite) (*IdentityLink, error) {
 	var value IdentityLink
 	err := r.tx(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).Where(
@@ -297,10 +293,8 @@ func (r *GORMRepository) FindAccessDisableOperationForUpdate(ctx context.Context
 	return &value, err
 }
 
-// ClaimAccessDisableOperation establishes a finite owner lease before an API
-// retry performs either remote step. The background worker uses the same lease
-// columns through a SKIP LOCKED batch claim, so the two execution paths cannot
-// intentionally dispatch the same operation concurrently.
+// API 重试执行远程步骤前必须领取有限期租约；后台任务也通过相同租约字段和 SKIP LOCKED 批量领取，
+// 两条执行路径不会主动并发派发同一停用操作。
 func (r *GORMRepository) ClaimAccessDisableOperation(ctx context.Context, value *AccessDisableOperation, owner string, now, until time.Time) error {
 	result := r.tx(ctx).Model(&AccessDisableOperation{}).
 		Where(`id=? AND tenant_id=? AND version=? AND deleted_at IS NULL AND stage IN (?,?) AND (

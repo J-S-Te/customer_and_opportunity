@@ -73,6 +73,7 @@ func (a *App) Run(ctx context.Context) error {
 func (a *App) RunOnce(ctx context.Context) (int, error) {
 	processed := 0
 	for processed < a.config.BatchSize {
+		// 每次领取使用独立随机 token，避免同 WorkerID 的旧进程在重启后提交迟到结果。
 		token, err := a.newClaimToken(a.config.WorkerID)
 		if err != nil {
 			return processed, err
@@ -136,6 +137,7 @@ type eventPayload struct {
 func (a *App) process(ctx context.Context, candidate presale.OutboxEvent, token string) error {
 	now := a.now().UTC()
 	return a.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// 进度作者必须在事件发生时确有任职，接收人也必须与申请人或对应分配记录吻合，不能直接信任 Outbox JSON。
 		var outbox presale.OutboxEvent
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 			Where("id=? AND event_type=? AND status=? AND locked_by=? AND locked_until>=?", candidate.ID, presale.ProgressNotificationOutboxEventType, statusProcessing, token, now).
@@ -268,6 +270,7 @@ func (a *App) retry(ctx context.Context, event presale.OutboxEvent, token string
 }
 
 func (a *App) finish(tx *gorm.DB, event presale.OutboxEvent, token string, now time.Time, status string, retry uint8, summary string, next *time.Time) error {
+	// 随机 token 与租约到期时间共同构成 fencing 条件，防止旧领取者覆盖新副本的处理结果。
 	updates := map[string]any{"status": status, "retry_count": retry, "next_retry_at": next, "locked_by": "", "locked_until": nil, "last_error_summary": sanitize(summary)}
 	if status == statusSent {
 		updates["sent_at"] = now

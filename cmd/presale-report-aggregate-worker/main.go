@@ -30,6 +30,7 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 	if *runOnce {
+		// 单次模式供发布任务和人工补算使用：沿用同一幂等聚合路径，完成一轮后主动退出。
 		if err = app.RunOnce(ctx); err != nil {
 			log.Fatal(err)
 		}

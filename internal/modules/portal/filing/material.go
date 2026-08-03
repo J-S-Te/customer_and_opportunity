@@ -54,8 +54,7 @@ type MaterialObjectMetadata struct {
 	SizeBytes                       uint64
 }
 
-// MaterialObjectStore is provider-neutral and must bind every operation to an
-// immutable object version. The API accepts no arbitrary callback URL.
+// MaterialObjectStore 与供应方无关，每个操作都必须绑定不可变对象版本；API 不接受任意回调 URL。
 type MaterialObjectStore interface {
 	Available() bool
 	CreateUpload(context.Context, string, string, uint64, string, string) (string, time.Time, error)
@@ -112,8 +111,7 @@ func NewMaterialService(repo Repository, protector MaterialObjectProtector, stor
 	return &MaterialService{repo: repo, protector: protector, store: store, scanner: scanner, clock: clock, ids: ids}
 }
 
-// RuntimeAvailable reports the local injection state of all upload-path
-// dependencies. It performs no object-store or scanner network probe.
+// RuntimeAvailable 仅报告上传链路依赖的本地注入状态，不对对象存储或扫描器发起网络探测。
 func (s *MaterialService) RuntimeAvailable() bool {
 	return s != nil && s.protector != nil && s.store != nil && s.scanner != nil && s.store.Available() && s.scanner.Available()
 }
@@ -167,11 +165,8 @@ func (s *MaterialService) CreateUpload(ctx context.Context, actor Actor, filingP
 			if !isDuplicateMaterialCreate(err) {
 				return nil, err
 			}
-			// A concurrent insert can win either the actor-bound idempotency key
-			// or the filing material-code constraint after both requests passed
-			// the reads above. MySQL waits for the winning transaction before it
-			// returns 1062, so re-read and validate the committed winner instead
-			// of exposing a database error or creating another object reference.
+			// 两个请求完成前置读取后，并发插入可能赢得账号幂等键或材料代码唯一约束。
+			// MySQL 会等待获胜事务后返回 1062，因此重新读取并核验已提交结果，不暴露驱动错误或创建第二个对象引用。
 			material, err = s.recoverDuplicateMaterialCreate(ctx, actor, filing.ID, command, name, mediaType, digest, createKeyHash, requestHash)
 			if err != nil {
 				return nil, err
@@ -204,8 +199,7 @@ func (s *MaterialService) recoverDuplicateMaterialCreate(ctx context.Context, ac
 	if !errors.Is(err, ErrMaterialNotFound) {
 		return nil, err
 	}
-	// The remaining declared unique key is the generated public ID. Treat its
-	// collision as a stable conflict and never leak the driver's duplicate text.
+	// 剩余唯一键是生成的公开 ID；碰撞作为稳定冲突处理，不泄露驱动重复键文本。
 	return nil, ErrVersionConflict
 }
 

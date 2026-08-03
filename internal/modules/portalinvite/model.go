@@ -55,10 +55,8 @@ const (
 	OperationStatusCompleted      = "COMPLETED"
 )
 
-// ProvisionOperation is the durable saga record for generating an invitation.
-// ContactSnapshotCipher is the immutable input for safe retries; TokenCipher
-// exists only so an exact completed idempotency replay can return the original
-// one-time URL without persisting the token in plaintext.
+// ProvisionOperation 是生成邀请的持久化 Saga。ContactSnapshotCipher 冻结安全重试所需输入；
+// TokenCipher 仅用于已完成的精确幂等重放返回原一次性链接，令牌明文不落库。
 type ProvisionOperation struct {
 	database.Model
 	OperationNo           string     `gorm:"size:32;not null"`
@@ -93,10 +91,8 @@ const (
 	DisableStatusDeadLetter     = "DEAD_LETTER"
 )
 
-// AccessDisableOperation is a durable, forward-only saga. Portal mapping
-// disable happens first so local sessions are closed before the platform role
-// revoke is attempted. The same business idempotency key is used on every
-// retry, while transport nonces remain unique per request.
+// AccessDisableOperation 是只向前推进的持久化 Saga。先停用门户映射以关闭本地会话，
+// 再撤销平台角色；每次重试沿用同一业务幂等键，但传输 nonce 每个请求都必须唯一。
 type AccessDisableOperation struct {
 	database.Model
 	OperationNo         string     `gorm:"size:32;not null"`
@@ -133,9 +129,8 @@ const (
 	CompensationMapping    = "PROVISION_PORTAL_MAPPING"
 )
 
-// CompensationTask records an externally visible half-completion. AccountNo
-// freezes the minimum Portal mapping input at task creation; the worker must
-// not rebuild an idempotent retry from mutable customer/contact PII.
+// CompensationTask 记录已经对外产生影响但尚未收敛的半完成状态。AccountNo 在任务创建时冻结
+// 门户映射所需最小输入，任务不能从后续可变的客户/联系人敏感数据重建重试。
 type CompensationTask struct {
 	database.Model
 	TaskNo           string     `gorm:"size:32;not null;uniqueIndex"`

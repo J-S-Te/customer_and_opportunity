@@ -30,6 +30,7 @@ func main() {
 	}()
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
+	// Run 以取消上下文结束领取循环；context.Canceled 是正常停机，不应被容器判定为任务失败。
 	if err = app.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 		logger.Error("worker stopped", "error", err)
 		os.Exit(1)

@@ -94,6 +94,8 @@ func (s *Service) MarkRead(ctx context.Context, id uint64) error {
 	if result.RowsAffected == 1 {
 		return nil
 	}
+	// 更新 0 行既可能是越权/不存在，也可能是并发请求已将同一通知标为已读。
+	// 在相同个人收件箱边界内重读状态，使“标记已读”保持幂等且不泄露其他人的通知。
 	var status string
 	err = personalInboxQuery(s.db.WithContext(ctx), principal).Select("status").
 		Where("id=?", id).

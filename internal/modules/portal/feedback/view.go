@@ -2,9 +2,7 @@ package feedback
 
 import "time"
 
-// CustomerFeedback is the only feedback aggregate representation returned to
-// a browser session. Persistence IDs, tenant/customer/account identifiers,
-// ciphertext, idempotency material and audit actors are deliberately absent.
+// CustomerFeedback 是浏览器会话可见的唯一反馈聚合表示，刻意移除主键、租户/客户/账号标识、密文、幂等材料和审计操作者。
 type CustomerFeedback struct {
 	ID                    string     `json:"id"`
 	FeedbackNo            string     `json:"feedback_no"`

@@ -31,6 +31,8 @@ type App struct {
 }
 
 func New(ctx context.Context, config Config) (*App, error) {
+	// Portal 在开放端口前真实探测数据库并构造所有信任边界；认证、密钥或机器验签材料有误时
+	// 直接失败，避免部分路由在不完整安全配置下运行。
 	db, err := gorm.Open(mysql.Open(config.MySQLDSN), &gorm.Config{DisableAutomaticPing: true})
 	if err != nil {
 		return nil, fmt.Errorf("open Portal database: %w", err)
@@ -68,7 +70,11 @@ func New(ctx context.Context, config Config) (*App, error) {
 		return nil, err
 	}
 	accountService := account.NewService(account.NewGORMRepository(db), oidcAdapter, inviteClient, protector, account.SystemClock{}, account.CryptoRandom{}, config.RoleConfigHash, config.SessionTTL)
+	// 登录事务、访问令牌和会话均保存在数据库并加密；账号服务通过 UserInfo 周期性重验当前
+	// 权限，避免仅依赖首次登录时的 ID Token 快照。
 	projectService := project.NewService(project.NewGORMRepository(db), unavailableProjectSource{})
+	// 尚未接入的项目源、文件读取和恶意文件扫描均使用失败关闭适配器。读模型可以继续提供
+	// 已同步数据，但不能伪装实时同步或安全下载能力可用。
 	workerReadiness := workerruntime.NewRepository(db)
 	projectExportService := projectexport.NewService(projectexport.NewGORMRepository(db), projectService, systemClock{}, requestIDGenerator{}, 15*time.Minute).
 		UseWorkerReadiness(workerReadiness, workerruntime.HeartbeatMaxAge)
@@ -100,6 +106,7 @@ func New(ctx context.Context, config Config) (*App, error) {
 }
 
 func (a *App) Close(ctx context.Context) error {
+	// HTTP 停机与连接池关闭的错误都要保留，便于编排器区分在途请求超时和数据库释放失败。
 	shutdownErr := a.Server.Shutdown(ctx)
 	sqlDB, err := a.DB.DB()
 	if err == nil {
@@ -111,6 +118,7 @@ func (a *App) Close(ctx context.Context) error {
 type projectAccess struct{ projects *project.Service }
 
 func (a projectAccess) Accessible(ctx context.Context, tenant string, customer uint64, projectID string) (bool, error) {
+	// 项目可见性必须通过租户、客户和项目三元组查询；仅持有 projectID 不构成客户访问权。
 	_, err := a.projects.Get(ctx, project.Scope{TenantID: tenant, CustomerID: customer}, projectID)
 	if errors.Is(err, project.ErrNotFound) {
 		return false, nil
@@ -138,6 +146,7 @@ func (p emailProtector) Encrypt(_ context.Context, value string) ([]byte, error)
 type contactProtector struct{ codec *AEADCodec }
 
 func (p contactProtector) Encrypt(_ context.Context, value string) ([]byte, string, error) {
+	// 密文用于服务端处理，掩码仅供界面展示；空值也加密，从存储形态上不泄露“是否填写”。
 	value = strings.TrimSpace(value)
 	cipher, err := p.codec.Encrypt([]byte(value))
 	if err != nil {

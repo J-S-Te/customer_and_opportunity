@@ -1,8 +1,5 @@
-// Command seed-demo-data inserts the demo customer and opportunity dataset into
-// the CRM schema using the same repositories, encryption codec and audit writer
-// as the production server. It is idempotent: rows already present under the
-// same tenant and normalized names are skipped, and all creates use stable
-// actor-bound idempotency keys. It never deletes or rewrites existing rows.
+// Command seed-demo-data 通过与生产服务相同的仓储、加密和审计能力写入 CRM 演示数据。任务按
+// 租户及规范化名称幂等匹配，并使用绑定操作者的稳定幂等键；不会删除或覆写已有记录。
 package main
 
 import (

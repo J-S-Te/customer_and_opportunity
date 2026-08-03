@@ -42,11 +42,9 @@ type ProjectRecipient struct{ ProjectID, ManagerName, ManagerPortalAccountID str
 type SendCommand struct{ Content, IdempotencyKey string }
 type CreateCommand struct{ IdempotencyKey string }
 type ReadCommand struct {
-	// MessageCursors contains only recipient messages that the client actually
-	// rendered. Per-message receipts preserve unread holes across bounded pages.
+	// MessageCursors 只包含客户端实际展示的收件消息；逐条回执保留有限分页之间的未读空洞。
 	MessageCursors []string
-	// LegacyThroughMessageCursor is accepted as one exact message receipt for
-	// the previous client. It no longer advances across intermediate messages.
+	// LegacyThroughMessageCursor 兼容旧客户端，但只确认对应的一条消息，不再跨越中间消息推进。
 	LegacyThroughMessageCursor string
 }
 type Clock interface{ Now() time.Time }
@@ -90,6 +88,7 @@ func NewService(repo Repository, clock Clock, ids IDGenerator) *Service {
 }
 
 func (s *Service) Create(ctx context.Context, actor CustomerActor, projectID string, command CreateCommand) (*Conversation, error) {
+	// 会话收件账号每次都从可信项目源解析；前端提交的名称或人员信息不能决定投递对象。
 	command.IdempotencyKey = strings.TrimSpace(command.IdempotencyKey)
 	if !validCustomer(actor) || !validOpaque(projectID, 64) || !validKey(command.IdempotencyKey) {
 		return nil, ErrValidation
@@ -125,8 +124,7 @@ func (s *Service) Create(ctx context.Context, actor CustomerActor, projectID str
 	}
 	value := &Conversation{PublicID: publicID, TenantID: actor.TenantID, CustomerID: actor.CustomerID, ProjectID: projectID, CustomerAccountID: actor.AccountID, ManagerAccountIDSnapshot: recipient.ManagerPortalAccountID, ManagerNameSnapshot: strings.TrimSpace(recipient.ManagerName), CreateIdempotencyKey: command.IdempotencyKey, CreateRequestHash: hash, CreatedAt: now, UpdatedAt: now, Version: 1}
 	err = s.repo.WithTransaction(ctx, func(tx context.Context) error {
-		// Re-resolve the source-owned recipient while the write is executing. A
-		// changed or missing mapping must never create a thread for a stale name.
+		// 在写事务中再次解析源系统拥有的收件人；映射已变更或缺失时不能为旧展示名创建会话。
 		current, findErr := s.repo.LockProjectRecipient(tx, actor.TenantID, actor.CustomerID, projectID)
 		if findErr != nil {
 			return findErr
@@ -250,6 +248,7 @@ func (s *Service) ReadManager(ctx context.Context, actor ManagerActor, publicID 
 }
 
 func (s *Service) markRead(ctx context.Context, value *Conversation, readerType, readerAccountID string, command ReadCommand, authorized func(context.Context, *Conversation) error) (*ReadState, error) {
+	// 先锁定并重新授权会话，再只为当前读者收到且实际展示的消息写入逐条回执。
 	cursors := make([]string, 0, len(command.MessageCursors)+1)
 	if legacy := strings.TrimSpace(command.LegacyThroughMessageCursor); legacy != "" {
 		if len(command.MessageCursors) != 0 {
@@ -323,8 +322,7 @@ func (s *Service) send(ctx context.Context, value *Conversation, senderType, sen
 	now := s.clock.Now().UTC()
 	var detail *Detail
 	err := s.repo.WithTransaction(ctx, func(tx context.Context) error {
-		// The conversation row serializes the rate window. The actor-specific
-		// authorization below also locks the current identity/recipient source.
+		// 会话行串行化发送频率窗口；随后按操作者类型重新校验当前身份及收件人来源。
 		locked, lockErr := s.repo.FindForUpdate(tx, value.TenantID, value.ID)
 		if lockErr != nil {
 			return lockErr

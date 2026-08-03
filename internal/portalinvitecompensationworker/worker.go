@@ -84,11 +84,13 @@ func (w *Worker) dispatch(ctx context.Context, task portalinvite.CompensationTas
 	}
 	switch task.TaskType {
 	case portalinvite.CompensationRole:
+		// 先完成平台角色，再由 Store 在同一落账事务派生映射任务，保证补偿链可从数据库恢复。
 		if err := w.roles.AssignPortalRole(ctx, task); err != nil {
 			return w.fail(ctx, task, failure{code: "PLATFORM_ROLE_ASSIGN_UNAVAILABLE", summary: "platform role assignment is unavailable"})
 		}
 		return w.store.completeRole(ctx, task, w.workerID, w.now())
 	case portalinvite.CompensationMapping:
+		// 远端以稳定任务身份保证幂等；本地只在仍持租约时接受结果，拒绝旧副本迟到提交。
 		mapping, err := w.mappings.ProvisionMapping(ctx, task)
 		if err != nil {
 			return w.fail(ctx, task, failure{code: "PORTAL_MAPPING_RETRY_FAILED", summary: "Portal mapping retry failed"})
@@ -130,8 +132,7 @@ type failure struct{ code, summary string }
 var retryDelays = [...]time.Duration{time.Minute, 5 * time.Minute, 15 * time.Minute, time.Hour, 3 * time.Hour, 6 * time.Hour}
 
 func failurePlan(now time.Time, completedAttempts uint8) (string, *time.Time) {
-	// The initial execution can be followed by at most six retries: failures one
-	// through six wait; the seventh failed attempt is retained as a dead letter.
+	// 首次执行后最多再退避六次；第七次失败保留为死信，避免永久故障无限占用轮询容量。
 	if completedAttempts > 0 && int(completedAttempts) <= len(retryDelays) {
 		next := now.Add(retryDelays[completedAttempts-1])
 		return portalinvite.CompensationRetryWait, &next

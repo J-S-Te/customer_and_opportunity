@@ -11,9 +11,7 @@ import (
 
 const PresaleDeliveryWorkerType = "presale_delivery"
 
-// WorkerHeartbeat is liveness evidence written by an independently deployed
-// worker. A main-process configuration flag is deliberately not sufficient to
-// establish delivery readiness.
+// WorkerHeartbeat 是独立部署 worker 写入的活性证据；仅有主进程配置开关不能证明投递链路可用。
 type WorkerHeartbeat struct {
 	ID          uint64    `gorm:"primaryKey;autoIncrement"`
 	WorkerType  string    `gorm:"size:64;not null;uniqueIndex:uq_crm_worker_heartbeat"`
@@ -25,9 +23,8 @@ type WorkerHeartbeat struct {
 
 func (WorkerHeartbeat) TableName() string { return "crm_worker_heartbeats" }
 
-// WorkerReadiness is the small admission-control boundary used by the domain.
-// Implementations must return true when any instance of workerType has fresh
-// persisted evidence; errors must never be interpreted as available.
+// 领域层只依赖这一最小准入接口：任一同类型实例存在新鲜持久化心跳才算可用，
+// 查询错误不得解释为可用。
 type WorkerReadiness interface {
 	HasFreshHeartbeat(ctx context.Context, workerType string, notBefore time.Time) (bool, error)
 }

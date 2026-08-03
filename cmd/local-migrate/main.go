@@ -1,7 +1,5 @@
-// Command local-migrate applies the repository-owned CRM or Portal migration
-// plan to a local development database. Production releases must continue to
-// use the release platform and the statement-level controls documented in
-// migrations/README.md.
+// Command local-migrate 只向本地开发数据库应用仓库维护的 CRM 或 Portal 迁移计划；生产发布仍须
+// 使用发布平台及 migrations/README.md 规定的语句级控制。
 package main
 
 import (
@@ -95,10 +93,8 @@ PRIMARY KEY (schema_name, migration_file)
 			fatalf("read migration %s: %v", entry.File, readErr)
 		}
 		fmt.Printf("apply %s (%d/%d)\n", entry.File, entry.Position, len(plan.Entries))
-		// MySQL DDL auto-commits, so the metadata row cannot make a complete
-		// migration file atomic. The local runner therefore records only after
-		// successful execution and fails closed on a rerun after partial DDL;
-		// production uses the stricter statement-level release process.
+		// MySQL DDL 会自动提交，元数据行无法让整个迁移文件原子化。本地执行器仅在全部成功后记录，
+		// 部分 DDL 成功后的重跑会失败关闭；生产使用更严格的语句级发布流程。
 		if _, err = db.ExecContext(ctx, string(contents)); err != nil {
 			fatalf("apply migration %s: %v", entry.File, err)
 		}

@@ -183,11 +183,9 @@ type Service struct {
 	launches   *ExternalLaunchSigner
 	owners     ownerdirectory.Catalog
 	now        func() time.Time
-	// createTransaction is injectable only for direct service tests. Production
-	// always installs the shared GORM transaction boundary in NewService.
+	// 仅在服务单元测试中注入；生产构造始终使用共享 GORM 事务边界。
 	createTransaction func(context.Context, func(context.Context) error) error
-	// contractTransferTransaction mirrors the production transaction boundary
-	// and keeps focused command tests independent from a live MySQL connection.
+	// 转合同命令保持与生产相同的事务语义，同时让聚焦测试无需连接真实 MySQL。
 	contractTransferTransaction func(context.Context, func(context.Context) error) error
 }
 
@@ -253,8 +251,7 @@ func (s *Service) Create(ctx context.Context, input CreateRequest) (*Response, e
 	model := &Opportunity{Name: input.Name, CustomerID: input.CustomerID, Type: input.Type, Source: input.Source, ExpectedAmount: amount, ExpectedSignDate: signDate, RequirementSummary: input.RequirementSummary, SystemCount: input.SystemCount, PainPoints: input.PainPoints, CompetitorInfo: input.CompetitorInfo, OwnerUserID: input.OwnerUserID, OwnerOrgID: input.OwnerOrgID, CurrentStage: StageInitial, Status: StatusFollowing, TerminalPendingType: PendingNone, StageChangedAt: s.now()}
 	model.TenantID, model.CreatedBy, model.UpdatedBy, model.Version = principal.TenantID, principal.UserID, principal.UserID, 1
 	err = s.runCreateTransaction(ctx, func(txCtx context.Context) error {
-		// Authorization deliberately precedes replay lookup. A caller cannot use
-		// a guessed key to probe a customer that is inactive or outside scope.
+		// 先证明客户授权范围，再查询重放记录，避免调用方通过猜测幂等键探测已停用或范围外客户。
 		visible, visibleErr := s.repo.CustomerVisible(txCtx, principal, input.CustomerID)
 		if visibleErr != nil {
 			return visibleErr
@@ -415,8 +412,7 @@ func (s *Service) resolveCreateRace(ctx context.Context, principal auth.Principa
 	return replayed, nil
 }
 
-// replayResultError exits a transaction without committing any new work while
-// carrying an already committed replay response to the caller.
+// replayResultError 用于终止当前事务且不提交新工作，同时把此前已提交的重放响应带回调用方。
 type replayResultError struct{ Response *Response }
 
 func (e *replayResultError) Error() string { return "opportunity creation replay" }
@@ -427,9 +423,8 @@ func createReplayResult(_ context.Context, response *Response) error {
 
 func isDuplicateCreateError(err error) bool {
 	var mysqlErr *mysqlDriver.MySQLError
-	// A duplicate opportunity number or another business unique key is not an
-	// idempotency race. Recover only the named replay-coordinate collision; a
-	// generic translated duplicate has discarded too much evidence to trust.
+	// 商机编号或其他业务唯一键冲突不等于幂等并发。只对明确的重放坐标索引做恢复；
+	// 通用重复错误已经丢失关键证据，不能安全地当成同请求胜出记录。
 	return errors.As(err, &mysqlErr) && mysqlErr.Number == 1062 &&
 		strings.Contains(mysqlErr.Message, "uq_opportunity_create_idem")
 }
@@ -738,9 +733,8 @@ func (s *Service) ApplyExternalStatus(ctx context.Context, input ExternalStatusR
 		return nil, err
 	}
 	if err = s.persistExternalStage(ctx, principal, model, before, model.Version, log, snapshot); err != nil {
-		// A same-payload callback can race before either request observes the
-		// durable snapshot. The optimistic stage update serializes the writers;
-		// after losing that race, recover only an exact database-bound replay.
+		// 相同载荷的回调可能在双方看到持久化快照前并发；阶段乐观锁负责串行写入，
+		// 失败方只能恢复与数据库精确绑定的重放结果。
 		winner, findErr := s.repo.FindExternalLink(ctx, principal.TenantID, input.OpportunityID, input.SourceID, input.Status)
 		if findErr == nil && winner != nil {
 			if validateExternalReplay(winner, input, amount) != nil {
@@ -961,9 +955,7 @@ func (s *Service) ContractTransfer(ctx context.Context, id uint64, input Contrac
 		return nil, apperror.New(422, "CRM_OPPORTUNITY_CHANGE_REASON_REQUIRED", "change reason is required")
 	}
 	requestHash := contractTransferRequestHash(input.Version, reason)
-	// Scope visibility is deliberately proven before the actor-bound replay
-	// coordinate is queried, preventing a guessed key from becoming an IDOR
-	// oracle even after the original opportunity changes.
+	// 查询操作者绑定的重放坐标前先证明商机仍在数据范围内，避免原商机变化后猜测键成为 IDOR 探针。
 	if _, err = s.repo.FindByID(ctx, principal, id); err != nil {
 		return nil, err
 	}
@@ -994,9 +986,8 @@ func (s *Service) ContractTransfer(ctx context.Context, id uint64, input Contrac
 		if lockErr != nil {
 			return lockErr
 		}
-		// A concurrent exact request may have inserted its replay while this
-		// transaction waited for the opportunity row lock. Re-read under the
-		// lock before evaluating current state or creating a second event.
+		// 当前事务等待商机行锁期间，相同请求可能已经提交重放记录；持锁后必须重新读取，
+		// 再判断现态或创建事件，避免重复转合同。
 		prior, findErr = s.repo.FindChangeIdempotencyForUpdate(txCtx, principal.TenantID, id, "CONTRACT_TRANSFER", principal.UserID, key)
 		if findErr != nil {
 			return findErr

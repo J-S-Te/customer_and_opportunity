@@ -19,8 +19,8 @@ type ContactInput struct {
 	IsRegistration bool   `json:"is_registration"`
 }
 
-// UpdateContactInput uses pointers for sensitive values so an omitted value keeps
-// the existing ciphertext. A present empty email clears it; phone cannot be empty.
+// UpdateContactInput 用指针区分敏感字段“未提交”和“提交空值”：未提交沿用原密文，
+// 显式空邮箱表示清除，而电话不允许清空。
 type UpdateContactInput struct {
 	ID             uint64  `json:"id"`
 	Name           string  `json:"name" binding:"required,max=100"`
@@ -44,8 +44,7 @@ type CreateRequest struct {
 	IdempotencyKey          string         `json:"-"`
 }
 
-// UpdateRequest replaces the editable customer master data and contact set.
-// Version makes concurrent edits explicit; Reason is persisted in the audit trail.
+// UpdateRequest 全量替换可编辑主数据和联系人集合；Version 显式处理并发编辑，Reason 写入审计链路。
 type UpdateRequest struct {
 	Name                    string               `json:"name" binding:"required,max=200"`
 	UnifiedCreditCode       *string              `json:"unified_credit_code" binding:"omitempty,max=64"`
@@ -239,9 +238,8 @@ type ChangeLogResponse struct {
 	OccurredAt time.Time       `json:"occurred_at"`
 }
 
-// OpportunitySummary deliberately omits requirement text, pain points,
-// competitor intelligence and contract/loss details from the customer query
-// surface. Those fields remain on the opportunity detail permission boundary.
+// OpportunitySummary 有意省略需求正文、痛点、竞品情报以及合同/输单详情；
+// 这些信息仍受商机详情权限边界保护，不能因查询客户历史而一并泄露。
 type OpportunitySummary struct {
 	ID             uint64    `json:"id"`
 	OpportunityNo  string    `json:"opportunity_no"`

@@ -33,9 +33,8 @@ type document struct {
 	Components map[string]any            `yaml:"components"`
 }
 
-// Check compares an OpenAPI document with the Gin calls that are reachable
-// from one production bootstrap. It deliberately parses the route source
-// rather than maintaining a second handwritten route list.
+// 将 OpenAPI 与生产装配可达的 Gin 路由调用对照。通过解析实际路由源码避免维护第二份手写列表，
+// 同时校验 operationId 和路径参数，防止接口可访问但文档遗漏或含幽灵接口。
 func Check(repositoryRoot, application, specPath string) error {
 	files, err := routeFiles(repositoryRoot, application)
 	if err != nil {
@@ -99,6 +98,8 @@ func sourceRoutes(files []sourceFile) (map[string]struct{}, error) {
 				prefixes[receiver] = prefix
 			}
 			ast.Inspect(function.Body, func(node ast.Node) bool {
+				// 路由注册中常用字面量切片循环批量挂载方法；这里对有限字符串表达式求值，遇到动态
+				// 计算则失败为“未发现”，避免静态检查器臆测运行时路径。
 				rangeStatement, ok := node.(*ast.RangeStmt)
 				if !ok {
 					if call, callOK := node.(*ast.CallExpr); callOK {
@@ -300,8 +301,7 @@ func validatePathParameters(routePath string, operation map[string]any) error {
 		if matched {
 			continue
 		}
-		// Reusable parameter names can describe their semantic type while the
-		// actual placeholder is the common id used by the handler.
+		// 可复用参数可以用语义名称描述类型，而处理器路由常统一使用 id；两者只在明确映射时兼容。
 		if match[1] == "id" && (declared["ID"] || declared["NumericID"] || declared["CustomerID"] || declared["OpportunityID"]) {
 			continue
 		}

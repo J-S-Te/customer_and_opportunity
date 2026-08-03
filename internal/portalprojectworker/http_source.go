@@ -30,9 +30,8 @@ type httpSource struct {
 	pageSize    int
 }
 
-// newHTTPSource follows the base platform's deployed client_credentials
-// contract: client_secret_basic, with only grant_type and scope in the form.
-// It deliberately does not send a non-standard audience parameter.
+// 机器认证遵循基础平台的 client_credentials 契约：使用 client_secret_basic，表单仅携带 grant_type 和 scope，
+// 不发送平台协议未定义的 audience 参数。
 func newHTTPSource(ctx context.Context, cfg Config) (*httpSource, error) {
 	transport, err := integrationhttp.NewTransport(cfg.TLS, 3*time.Second)
 	if err != nil {
@@ -53,6 +52,7 @@ func newHTTPSourceWithTransport(ctx context.Context, cfg Config, transport http.
 }
 
 func (s *httpSource) changed(ctx context.Context, tenantID string, customerID uint64, cursor string) (sourcePage, error) {
+	// 租户和客户来自本地已授权同步状态，源端响应随后仍需通过结构和游标校验，不能反向改写同步边界。
 	endpoint, err := url.Parse(s.endpoint)
 	if err != nil {
 		return sourcePage{}, errors.New("project snapshot endpoint is invalid")
@@ -74,6 +74,7 @@ func (s *httpSource) changed(ctx context.Context, tenantID string, customerID ui
 		return sourcePage{}, err
 	}
 	request.Header.Set("X-Integration-Nonce", nonce)
+	// HTTP Client 禁止自动重定向，避免 Bearer Token 被带到配置端点之外的主机。
 	response, err := s.client.Do(request)
 	if err != nil {
 		return sourcePage{}, safeIntegrationTransportError(err)
@@ -160,6 +161,7 @@ type teamPayload struct {
 }
 
 func (p projectPagePayload) toPage() (sourcePage, error) {
+	// 页内项目必须唯一，游标长度也受限；配合 changed 的单调性检查，防止恶意响应制造无限同步循环。
 	if len(p.NextCursor) > 1024 {
 		return sourcePage{}, errors.New("cursor is too long")
 	}

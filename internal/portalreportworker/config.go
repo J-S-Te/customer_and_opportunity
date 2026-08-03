@@ -12,8 +12,7 @@ import (
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/integrationhttp"
 )
 
-// Config is intentionally independent from portal-server. The worker gets a
-// dedicated OAuth client with only report.request.write.
+// 报告 Worker 不复用 Portal Server 配置，专用 OAuth 客户端只授予 report.request.write。
 type Config struct {
 	MySQLDSN            string
 	WorkerID            string

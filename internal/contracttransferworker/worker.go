@@ -74,6 +74,8 @@ type deliveryClient interface {
 }
 
 type transferStore interface {
+	// 领取、权威状态复核与最终落账被拆成独立阶段：网络调用期间不持有数据库事务，
+	// 最终写回再用每次领取生成的 fencing token 拒绝租约过期后的迟到结果。
 	claimOne(context.Context, time.Time, time.Duration, string) (opportunity.OutboxEvent, bool, error)
 	authoritativeCommand(context.Context, opportunity.OutboxEvent, time.Time, string) (signedCommand, string, error)
 	finish(context.Context, opportunity.OutboxEvent, time.Time, string, string, string, string) error
@@ -103,7 +105,7 @@ func New(config Config) (*App, error) {
 	}, nil
 }
 
-// mysqlDialector is isolated for tests that construct App with a mock DB.
+// 将 Dialector 留作可替换依赖，使测试能够验证领取和落账事务，而无需启动真实 MySQL。
 var mysqlDialector = func(dsn string) gorm.Dialector { return mysql.Open(dsn) }
 
 func (a *App) Close() error {
@@ -135,6 +137,7 @@ func (a *App) Run(ctx context.Context) error {
 func (a *App) RunOnce(ctx context.Context) (int, error) {
 	processed := 0
 	for processed < a.config.BatchSize {
+		// token 按“本次领取”生成而不是按进程固定，避免同一 WorkerID 重启后接受旧进程的迟到写回。
 		token, err := a.claimToken(a.config.WorkerID)
 		if err != nil {
 			return processed, err
@@ -167,6 +170,7 @@ LIMIT 1 FOR UPDATE SKIP LOCKED`
 func (s *gormTransferStore) claimOne(ctx context.Context, now time.Time, lease time.Duration, token string) (opportunity.OutboxEvent, bool, error) {
 	var result opportunity.OutboxEvent
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// SKIP LOCKED 让多个副本并行领取不同事件；这里只建立有限租约，绝不在行锁内调用合同系统。
 		if err := tx.Raw(claimSQL(), eventType, statusPending, statusRetryWait, now, statusProcessing, now).Scan(&result).Error; err != nil {
 			return err
 		}
@@ -201,6 +205,7 @@ func (a *App) process(ctx context.Context, event opportunity.OutboxEvent, token 
 		return a.store.retry(ctx, event, now, token, "CRM authority read failed")
 	}
 	if permanentReason != "" {
+		// 事件身份或商机终态已经不成立时，重试不会改变结果，直接进入死信便于人工审计。
 		return a.store.finish(ctx, event, now, token, statusDeadLetter, "", permanentReason)
 	}
 	result, err := a.client.deliver(ctx, command)
@@ -236,8 +241,7 @@ func (s *gormTransferStore) authoritativeCommand(ctx context.Context, event oppo
 		if state.DeletedAt != nil || state.Version != payload.EventVersion || state.CurrentStage != opportunity.StageSigned || state.Status != opportunity.StatusClosed || state.ContractRef == "" || state.TerminalPendingType != opportunity.PendingNone {
 			return permanentValidationError{"authoritative opportunity no longer matches accepted signed state"}
 		}
-		// Payload display fields are intentionally ignored. Only the event identity
-		// and occurrence timestamp are retained; business values come from CRM.
+		// Outbox 载荷中的展示字段可能已经陈旧，只保留事件身份和发生时间；合同指令中的业务值全部取自锁定后的 CRM 权威行。
 		command = signedCommand{EventID: locked.EventID, TenantID: state.TenantID, OpportunityID: state.ID, EventVersion: state.Version, OpportunityNo: state.OpportunityNo, CustomerID: state.CustomerID, ContractRef: state.ContractRef, ExpectedAmount: normalizeAmount(state.ExpectedAmount), OccurredAt: locked.CreatedAt.UTC(), SourceRequestID: ""}
 		return nil
 	})
@@ -254,6 +258,7 @@ func (e permanentValidationError) Error() string { return e.reason }
 
 func (s *gormTransferStore) finish(ctx context.Context, event opportunity.OutboxEvent, now time.Time, token, status, intakeID, summary string) error {
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// 尝试记录与 Outbox 终态在同一事务提交，避免出现“已发送但无审计记录”或相反的半完成状态。
 		attempt := event.RetryCount + 1
 		if err := tx.Create(&attemptRecord{TenantID: event.TenantID, SourceEventID: event.EventID, AttemptNo: attempt, Result: status, ContractIntakeID: intakeID, ResponseCode: status, ErrorSummary: sanitize(summary), AttemptedAt: now}).Error; err != nil {
 			return err
@@ -280,6 +285,7 @@ func (s *gormTransferStore) retry(ctx context.Context, event opportunity.OutboxE
 	}
 	next := now.Add(retryDelays[attempt-1])
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// 重试次数和下一次可见时间一起推进；超过有限退避表后转死信，防止永久故障形成热循环。
 		if err := tx.Create(&attemptRecord{TenantID: event.TenantID, SourceEventID: event.EventID, AttemptNo: attempt, Result: statusRetryWait, ResponseCode: "RETRY", ErrorSummary: sanitize(summary), AttemptedAt: now}).Error; err != nil {
 			return err
 		}
@@ -294,9 +300,7 @@ func (s *gormTransferStore) retry(ctx context.Context, event opportunity.OutboxE
 	})
 }
 
-// integrationClaimToken is a per-claim fencing token. The worker identifier is
-// hashed for diagnostics while 256 random bits make separate processes safe
-// even when their configured WorkerID (for example, a pod hostname) collides.
+// 领取令牌同时保留 WorkerID 的不可逆诊断指纹和 256 位随机量；即使不同副本误配了相同主机名，也不会共享写回资格。
 func integrationClaimToken(workerID string) (string, error) {
 	random := make([]byte, 32)
 	if _, err := rand.Read(random); err != nil {

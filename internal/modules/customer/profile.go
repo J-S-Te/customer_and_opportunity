@@ -70,6 +70,8 @@ func (s *Service) ReplaceStakeholders(ctx context.Context, customerID uint64, in
 	if s.profile == nil {
 		return nil, ErrProfileUnavailable
 	}
+	// 干系人采用整组替换而非逐条补丁：先锁定父客户并核对版本，再重建子项、提升父版本、
+	// 写变更日志和审计。任一步失败都会回滚，防止子项集合与客户版本分离。
 	var response StakeholderCollectionResponse
 	err = database.WithTransaction(ctx, s.db, func(txCtx context.Context) error {
 		customer, lockErr := s.profile.LockActiveCustomerForProfile(txCtx, principal, customerID)
@@ -108,6 +110,8 @@ func (s *Service) ReplaceStakeholders(ctx context.Context, customerID uint64, in
 }
 
 func (s *Service) buildStakeholders(tenantID, actorID string, customerID uint64, inputs []StakeholderInput, existing []Stakeholder) ([]Stakeholder, error) {
+	// 可选敏感字段区分“未提交”和“显式提交”：nil 沿用旧密文与掩码，非 nil 才重新加密；
+	// 空字符串表示明确清空。客户端不能把掩码文本回传成新的联系方式。
 	byID := make(map[uint64]Stakeholder, len(existing))
 	for _, item := range existing {
 		byID[item.ID] = item
@@ -191,6 +195,7 @@ func (s *Service) ReplaceInformationSystems(ctx context.Context, customerID uint
 	if input.Version == 0 || input.Reason == "" || utf8.RuneCountInString(input.Reason) > 500 || len(input.Items) > maxInformationSystems {
 		return nil, ErrInvalidSystems
 	}
+	// 信息系统同样按有序集合整体替换；父客户行锁和乐观版本阻止两个编辑者用旧快照互相覆盖。
 	models, err := buildInformationSystems(principal.TenantID, principal.UserID, customerID, input.Items)
 	if err != nil {
 		return nil, err
@@ -229,6 +234,8 @@ func (s *Service) ReplaceInformationSystems(ctx context.Context, customerID uint
 }
 
 func validateStakeholderInputs(items []StakeholderInput) error {
+	// 掩码只用于展示，不是可写格式；包含星号的联系方式必须由用户重新输入完整值，
+	// 否则可能把掩码永久加密保存并丢失原始联系方式。
 	for _, item := range items {
 		name, role := strings.TrimSpace(item.Name), strings.TrimSpace(item.RoleTitle)
 		influence := strings.ToUpper(strings.TrimSpace(item.Influence))
@@ -255,6 +262,8 @@ func validateStakeholderInputs(items []StakeholderInput) error {
 }
 
 func buildInformationSystems(tenantID, actorID string, customerID uint64, inputs []InformationSystemInput) ([]InformationSystem, error) {
+	// 等保级别和备案状态使用封闭枚举，测评日期必须是规范 YYYY-MM-DD；SortOrder 直接取
+	// 请求数组顺序，使整组替换后展示顺序具有确定性。
 	models := make([]InformationSystem, 0, len(inputs))
 	for index, item := range inputs {
 		name := strings.TrimSpace(item.Name)

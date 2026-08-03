@@ -10,8 +10,8 @@ type IdentityStatus string
 
 const (
 	// 身份映射先保持待激活，只有完成 OIDC 主体校验与邀请消费后才可建立会话。
-	IdentityPending  IdentityStatus = "PENDING"
-	IdentityActive   IdentityStatus = "ACTIVE"
+	IdentityPending IdentityStatus = "PENDING"
+	IdentityActive  IdentityStatus = "ACTIVE"
 	// 禁用态是不可登录边界；切换状态时仓储会同步撤销该主体的活动会话。
 	IdentityDisabled IdentityStatus = "DISABLED"
 )

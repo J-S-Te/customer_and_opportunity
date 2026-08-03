@@ -75,12 +75,12 @@ func (a *App) Run(ctx context.Context) error {
 	}()
 	processingCtx, stopProcessing := context.WithCancel(ctx)
 	results := make(chan error, 2)
+	// 审批投递和文件摄取共享实例心跳但独立轮询；任一循环退出都会取消并等待另一循环，避免残留孤儿协程。
 	go func() { results <- a.worker.Run(processingCtx) }()
 	go func() { results <- a.ingest.Run(processingCtx, a.pollInterval) }()
 	err := <-results
 	stopProcessing()
-	// Join the sibling loop before the heartbeat is removed. No Portal work may
-	// continue under this instance identity after its liveness evidence ends.
+	// 删除心跳前必须等待兄弟循环退出；实例存活证据消失后，不能再以该 WorkerID 继续处理 Portal 任务。
 	otherErr := <-results
 	if errors.Is(err, context.Canceled) {
 		return otherErr
@@ -106,5 +106,6 @@ func (workerClock) Now() time.Time { return time.Now().UTC() }
 type unavailableFileIngestor struct{}
 
 func (unavailableFileIngestor) Ingest(context.Context, string, report.FileDescriptor) (report.IngestResult, error) {
+	// 默认实现故意失败关闭：未配置可信对象存储、病毒扫描和加密链路时，绝不把描述符误记为已摄取。
 	return report.IngestResult{}, errors.New("trusted report object-storage, scanning and encryption provider is not configured")
 }

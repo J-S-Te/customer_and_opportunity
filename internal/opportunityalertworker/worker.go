@@ -100,9 +100,8 @@ type alertIdentity struct {
 	RecipientID      string
 }
 
-// Scan owns the tenant-independent scanner lease for one cycle. Candidate
-// pagination is deterministic and every decision is repeated while the target
-// opportunity row is locked, so stale outer rows never create notifications.
+// 一次扫描只由持有全局租约的副本执行。外层分页只是候选集，每条告警是否仍成立都会在锁住商机行后重新计算，
+// 因而扫描期间发生的阶段、负责人或规则变化不会从陈旧快照生成通知。
 func (a *App) Scan(ctx context.Context) error {
 	now := a.now().UTC()
 	acquired, err := a.acquireLease(ctx, now)
@@ -166,6 +165,7 @@ func (a *App) acquireLease(ctx context.Context, now time.Time) (bool, error) {
 			Select("owner_id,lease_until").Where("job_name=?", leaseName).Take(&lease).Error; err != nil {
 			return err
 		}
+		// 同一实例可以续占；其他实例只能接管已过期租约，数据库行锁保证不会出现两个扫描所有者。
 		if lease.OwnerID == a.workerID || !lease.LeaseUntil.After(now) {
 			if err := tx.Table("crm_opportunity_alert_job_leases").Where("job_name=?", leaseName).
 				Updates(map[string]any{"owner_id": a.workerID, "lease_until": now.Add(a.leaseDuration), "updated_at": now}).Error; err != nil {
@@ -179,6 +179,7 @@ func (a *App) acquireLease(ctx context.Context, now time.Time) (bool, error) {
 }
 
 func leaseRenewSQL() string {
+	// 强制续租时间单调递增，避免极短测试时钟或数据库时间精度导致“值未变化”而误判丢租约。
 	return `UPDATE crm_opportunity_alert_job_leases
 		SET lease_until=GREATEST(DATE_ADD(lease_until,INTERVAL 1000 MICROSECOND),?),updated_at=?
 		WHERE job_name=? AND owner_id=? AND lease_until>=?`
@@ -227,8 +228,7 @@ func (a *App) scanOne(ctx context.Context, candidate scanOpportunity, now time.T
 		for _, rule := range rules {
 			identity, due, eligible := desiredAlertIdentity(current, rule, now)
 			if !eligible {
-				// Owner is the only recipient that this service can resolve from
-				// authoritative local data. Missing owners fail closed.
+				// 当前只能从本地权威商机解析负责人；没有负责人时失败关闭，不能猜测接收者或扩大通知范围。
 				continue
 			}
 			desired[identity] = true
@@ -284,6 +284,7 @@ func createAlert(tx *gorm.DB, current scanOpportunity, rule stageRule, due time.
 		return result.Error
 	}
 	if result.RowsAffected == 0 {
+		// 告警身份由商机、阶段、规则版本和接收人共同唯一；重复扫描命中已有行时不重复产生 Outbox。
 		return nil
 	}
 	payload, err := json.Marshal(map[string]any{
@@ -347,6 +348,7 @@ func cancelOpportunityAlerts(tx *gorm.DB, tenant string, opportunityID uint64, n
 }
 
 func cancelActiveByID(tx *gorm.DB, alertID uint64, now time.Time) error {
+	// 告警和尚未投递的站内信在同一事务取消，避免规则撤销后仍把旧消息推进为未读。
 	if err := tx.Model(&opportunity.StageAlert{}).Where("id=? AND status IN ('PENDING','UNREAD')", alertID).
 		Updates(map[string]any{"status": opportunity.StageAlertCancelled, "updated_at": now, "updated_by": workerActor, "version": gorm.Expr("version+1")}).Error; err != nil {
 		return err
@@ -395,6 +397,7 @@ func (a *App) deliverSiteMessages(ctx context.Context, now time.Time) error {
 		}
 		processed := 0
 		err := a.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			// 站内信在同一数据库中投影，不涉及远程 I/O；因此可在短事务中原子推进告警和 Outbox 状态。
 			var events []opportunity.OutboxEvent
 			if err := tx.Raw(`SELECT * FROM crm_outbox_events WHERE event_type=? AND status=? ORDER BY created_at,id LIMIT ? FOR UPDATE SKIP LOCKED`, stageAlertEventType, statusOutboxPending, a.batchSize).Scan(&events).Error; err != nil {
 				return err

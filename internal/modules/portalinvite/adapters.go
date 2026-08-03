@@ -28,9 +28,8 @@ import (
 
 const maxIntegrationResponseBytes = 64 << 10
 
-// CustomerAdapter is an anti-corruption adapter for CM-004. It applies the
-// same principal scope as customer reads and returns only the unique
-// registration-contact projection; it never exposes a customer GORM model.
+// CustomerAdapter 是 CM-004 的防腐层：沿用客户读取的数据范围，只返回唯一注册联系人投影，
+// 不向门户邀请模块暴露客户 GORM 模型。
 type CustomerAdapter struct {
 	db    *gorm.DB
 	codec *security.SensitiveCodec
@@ -106,9 +105,7 @@ func scopedContactQuery(db *gorm.DB, principal auth.Principal, customerID uint64
 	return query
 }
 
-// UnavailablePlatformProvisioner rejects CM-004 before any local token is
-// minted. The platform management OpenAPI is not yet delivered, so inventing
-// paths or a synthetic OIDC subject would violate the identity boundary.
+// 平台外部身份合同未配置时，在生成本地令牌前就拒绝邀请；不能虚构接口路径或 OIDC 主体绕过身份边界。
 type UnavailablePlatformProvisioner struct{}
 
 func (UnavailablePlatformProvisioner) ProvisionExternalUser(context.Context, ContactIdentity) (ProvisionedIdentity, error) {
@@ -151,9 +148,8 @@ type PortalProvisionerOptions struct {
 	NonceReader                                       io.Reader
 }
 
-// NewHTTPPortalProvisioner builds the CRM's dedicated Portal mapping caller.
-// The platform token endpoint contract is client_secret_basic with only the
-// standard client_credentials grant and one fixed scope.
+// 门户映射使用 CRM 专用机器身份，令牌合同固定为 client_secret_basic、
+// 标准 client_credentials 授权和单一最小 scope。
 func NewHTTPPortalProvisioner(ctx context.Context, options PortalProvisionerOptions) (*HTTPPortalProvisioner, error) {
 	for name, value := range map[string]string{"endpoint": options.Endpoint, "token URL": options.TokenURL, "client ID": options.ClientID, "client secret": options.ClientSecret} {
 		if strings.TrimSpace(value) == "" || value != strings.TrimSpace(value) {
@@ -294,8 +290,7 @@ func (a *HTTPPortalProvisioner) ProvisionMapping(ctx context.Context, contact Co
 	return a.ProvisionMappingIdempotent(ctx, contact, identity, portalMappingIdempotencyKey(contact, identity))
 }
 
-// ProvisionMappingIdempotent is used by the compensation worker. The task
-// number is an opaque, stable key; no customer identity is exposed in headers.
+// 补偿任务以不透明且稳定的任务编号作为幂等键，不在请求头暴露客户身份信息。
 func (a *HTTPPortalProvisioner) ProvisionMappingIdempotent(ctx context.Context, contact ContactIdentity, identity ProvisionedIdentity, idempotencyKey string) (PortalMapping, error) {
 	if a == nil || a.endpoint == "" || a.client == nil || !validPortalMappingIdentity(contact, identity) {
 		return PortalMapping{}, errors.New("Portal provision machine client is not configured")

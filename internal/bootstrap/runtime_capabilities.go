@@ -15,10 +15,8 @@ const (
 	capabilityModeCallbackOnly = "CALLBACK_ONLY"
 )
 
-// RuntimeCapability describes only whether this process has a production
-// adapter configured. It is neither authorization nor a remote health probe;
-// every business endpoint still performs its own permission and dependency
-// checks when an operation is executed.
+// RuntimeCapability 只描述当前进程是否装配了生产适配器。它既不是授权结论，也不是远端
+// 健康探测；每个业务接口执行时仍需独立校验权限和依赖状态。
 type RuntimeCapability struct {
 	Available  bool   `json:"available"`
 	Mode       string `json:"mode"`
@@ -48,9 +46,8 @@ func runtimeCapabilities(config Config) RuntimeCapabilities {
 		"qb_active_query":          qbStatus,
 		"qb_launch_quotation":      configuredCapability(config.QBLaunchEnabled, "QB_LAUNCH_NOT_CONFIGURED"),
 		"qb_launch_bid":            configuredCapability(config.QBLaunchEnabled, "QB_LAUNCH_NOT_CONFIGURED"),
-		// The current bootstrap intentionally injects unavailable trust-boundary
-		// adapters. Keep these values explicit until production implementations
-		// are wired into this process.
+		// 当前装配对尚未落地的信任边界显式注入不可用适配器；在生产实现接入前保持失败关闭，
+		// 不能因为前端展示了能力入口就推断后端依赖可用。
 		"customer_import_scan":            configuredCapability(false, "CUSTOMER_IMPORT_SCANNER_NOT_CONFIGURED"),
 		"opportunity_attachment_upload":   configuredCapability(false, "ATTACHMENT_STORAGE_OR_SCANNER_NOT_CONFIGURED"),
 		"opportunity_attachment_download": configuredCapability(false, "ATTACHMENT_STORAGE_NOT_CONFIGURED"),

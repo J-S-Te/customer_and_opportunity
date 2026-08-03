@@ -1,6 +1,5 @@
-// Command authz-catalog prints the Claims compatibility hash compiled into an
-// application binary. Operators use it when configuring the OIDC client and
-// can compare it with the base-platform catalog metadata before deployment.
+// Command authz-catalog 输出编译进应用二进制的 Claims 兼容哈希；运维可据此配置 OIDC 客户端，
+// 并在部署前与基础平台目录元数据核对。
 package main
 
 import (

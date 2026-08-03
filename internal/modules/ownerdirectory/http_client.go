@@ -60,6 +60,7 @@ func NewHTTPClient(ctx context.Context, options HTTPOptions) (*HTTPClient, error
 	tokenClient := &http.Client{Transport: transport, Timeout: 5 * time.Second, CheckRedirect: rejectRedirect}
 	tokenContext := context.WithValue(ctx, oauth2.HTTPClient, tokenClient)
 	credentials := clientcredentials.Config{ClientID: options.ClientID, ClientSecret: options.ClientSecret, TokenURL: options.TokenURL, Scopes: []string{ownerDirectoryScope}, AuthStyle: oauth2.AuthStyleInHeader}
+	// 获取令牌和访问目录共用经过 TLS 约束的传输层，并禁止重定向；凭据不能被 3xx 带到未配置主机。
 	client := &http.Client{Transport: &oauth2.Transport{Source: credentials.TokenSource(tokenContext), Base: transport}, Timeout: 10 * time.Second, CheckRedirect: rejectRedirect}
 	return &HTTPClient{endpoint: options.Endpoint, client: client}, nil
 }
@@ -104,6 +105,8 @@ func (client *HTTPClient) List(ctx context.Context, query Query) (Page, error) {
 		Data      Page   `json:"data"`
 	}
 	decoder := json.NewDecoder(bytes.NewReader(raw))
+	// 平台目录是授权决策输入，响应必须严格匹配合同且只能包含一个 JSON 值，
+	// 避免字段漂移或尾随内容被静默忽略。
 	decoder.DisallowUnknownFields()
 	if err = decoder.Decode(&envelope); err != nil || envelope.Code != "OK" {
 		return Page{}, ErrUnavailable

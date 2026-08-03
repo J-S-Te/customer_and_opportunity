@@ -154,9 +154,7 @@ func (a *App) scanRequest(ctx context.Context, request scanRequest, now time.Tim
 		if terminal(locked.Status) {
 			return cancelPending(tx, locked, now)
 		}
-		// Recompute the transition basis while holding the request lock. The
-		// outer scan projection is only a candidate list and is never trusted for
-		// timing decisions after concurrent state changes.
+		// 外层扫描只提供候选；锁住请求后重新计算状态时点，避免并发审批或执行进度变化生成陈旧告警。
 		if err := loadStatusEnteredAt(tx, &locked); err != nil {
 			return err
 		}
@@ -245,11 +243,8 @@ func evaluate(rule presale.AlertRule, request scanRequest, assignees []string, n
 	}
 }
 
-// Management recipients are resolved from active, locally persisted CRM OIDC
-// sessions whose roles were signed by the base platform. These are CRM user
-// roles, not PMS personnel-pool roles. The approval engine does not currently
-// expose the actual task assignee, so this deliberately does not claim to
-// notify the current approver.
+// 管理角色接收人来自本地仍有效的 CRM OIDC 会话，其角色由基础平台签发；这不是 PMS 人员池角色。
+// 当前审批引擎不提供实际任务办理人，因此这里只通知可证明的 CRM 管理角色，不声称覆盖当前审批人。
 func roleRecipientsPlaceholder(role string) []recipientTarget {
 	return []recipientTarget{{Kind: recipientRoleScope, ID: role}}
 }
@@ -275,9 +270,7 @@ func resolveRecipientTargets(tx *gorm.DB, tenant string, candidates []recipientT
 			return nil, fmt.Errorf("unsupported CRM management recipient role %q", candidate.ID)
 		}
 		var values []string
-		// CRM management roles are signed OIDC user roles, not PMS personnel-pool
-		// roles. The local active-session projection is the only currently
-		// available authoritative mapping from those roles to CRM user IDs.
+		// 本地有效会话是当前唯一能把基础平台签发的 CRM 管理角色映射到用户 ID 的权威投影。
 		if err := tx.Table("crm_oidc_sessions").Distinct("platform_user_id").
 			Where("tenant_id=? AND platform_user_id<>'' AND revoked_at IS NULL AND expires_at>? AND JSON_CONTAINS(roles_json,JSON_QUOTE(?),'$')", tenant, now, candidate.ID).
 			Pluck("platform_user_id", &values).Error; err != nil {
@@ -314,6 +307,7 @@ func createAlert(tx *gorm.DB, request scanRequest, rule presale.AlertRule, basis
 		return result.Error
 	}
 	if result.RowsAffected == 0 {
+		// 请求、规则版本和接收人共同构成唯一身份；周期扫描命中已有告警时不重复创建 Outbox。
 		return nil
 	}
 	payload, err := json.Marshal(map[string]any{"alert_id": alert.ID, "request_id": request.ID, "request_no": request.RequestNo, "alert_type": rule.Type, "recipient_kind": recipient.Kind, "recipient_id": recipient.ID, "due_at": due, "basis_at": basis, "path": "/customer-opportunity/presale?request_id=" + strconv.FormatUint(request.ID, 10)})

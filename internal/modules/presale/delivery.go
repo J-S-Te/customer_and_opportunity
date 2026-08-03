@@ -16,17 +16,16 @@ var retryDelays = [...]time.Duration{
 	6 * time.Hour,
 }
 
-// MarkDeliverySending is called by the outbox worker after it atomically claims
-// an event. It only updates local delivery projection; it does not call PMS.
+// Outbox worker 原子领取事件后先把本地投递投影切为 SENDING；此处不直接调用 PMS。
+// 分离“领取/状态记录”和“外部调用”，便于 worker 在租约过期后安全恢复。
 func (s *Service) MarkDeliverySending(ctx context.Context, tenant string, worklogID uint64) error {
 	return s.repo.WithTransaction(ctx, func(tx context.Context) error {
 		worklog, err := s.repo.FindWorklogForUpdate(tx, tenant, worklogID)
 		if err != nil {
 			return err
 		}
-		// A lease may expire after the worker has changed the projection but
-		// before it has acknowledged the outbox event. Reclaiming that event is
-		// therefore allowed to resume from SENDING.
+		// worker 可能已更新投影却尚未确认 Outbox 就失去租约，因此重新领取同一事件时
+		// 允许从 SENDING 继续，SUCCESS 也按幂等完成处理。
 		if worklog.PushStatus == PushSending || worklog.PushStatus == PushSuccess {
 			return nil
 		}
@@ -37,8 +36,7 @@ func (s *Service) MarkDeliverySending(ctx context.Context, tenant string, worklo
 	})
 }
 
-// DeliveryRetryAt is the single retry policy shared by the domain projection
-// and outbox worker. The attempt number is one-based.
+// 领域投影与 Outbox worker 共用同一退避表；attempt 从 1 开始，超出表长即进入死信。
 func DeliveryRetryAt(now time.Time, attempt uint8) (*time.Time, bool) {
 	if attempt == 0 || int(attempt) > len(retryDelays) {
 		return nil, false
@@ -47,8 +45,7 @@ func DeliveryRetryAt(now time.Time, attempt uint8) (*time.Time, bool) {
 	return &next, true
 }
 
-// MarkDeliverySuccess records a successful real PMS response. Repeated success
-// acknowledgements are idempotent.
+// 只有真实 PMS 成功响应才能落为 SUCCESS；重复成功确认不重复累计尝试次数。
 func (s *Service) MarkDeliverySuccess(ctx context.Context, tenant string, worklogID uint64, responseCode string) error {
 	return s.repo.WithTransaction(ctx, func(tx context.Context) error {
 		worklog, err := s.repo.FindWorklogForUpdate(tx, tenant, worklogID)
@@ -69,8 +66,8 @@ func (s *Service) MarkDeliverySuccess(ctx context.Context, tenant string, worklo
 	})
 }
 
-// MarkDeliveryFailure records a sanitized failure and computes deterministic
-// retry timing. Infrastructure may add bounded jitter before scheduling.
+// 失败原因先去除换行并截断再持久化，避免日志注入和无限增长；
+// 领域层给出确定性退避时间，基础设施调度时可额外加入有界抖动。
 func (s *Service) MarkDeliveryFailure(ctx context.Context, tenant string, worklogID uint64, causeSummary, responseCode string) error {
 	return s.repo.WithTransaction(ctx, func(tx context.Context) error {
 		worklog, err := s.repo.FindWorklogForUpdate(tx, tenant, worklogID)

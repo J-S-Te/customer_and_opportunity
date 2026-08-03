@@ -26,6 +26,7 @@ func NewStore(db *gorm.DB, codec *security.SensitiveCodec, ids func() string) *S
 
 func (s *Store) Schedule(ctx context.Context, now time.Time, interval time.Duration) error {
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// 从多个业务表发现租户，并保证每个租户同一时刻最多存在一个未终结同步任务。
 		if err := tx.Exec(`INSERT INTO crm_presale_engineer_sync_states
 (tenant_id,created_by,updated_by,created_at,updated_at,version,next_sync_at,last_job_no,last_person_count)
 SELECT tenants.tenant_id,'system','system',?,?,1,?,'',0 FROM (
@@ -92,6 +93,7 @@ func (s *Store) Renew(ctx context.Context, job presale.EngineerSyncJob, worker s
 
 func (s *Store) Apply(ctx context.Context, job presale.EngineerSyncJob, worker string, snapshot SourceSnapshot, now time.Time, interval time.Duration) error {
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// 锁住作业后原子执行全量镜像：更新出现的人员、停用缺失人员、推进租户游标并完成作业。
 		var locked presale.EngineerSyncJob
 		if err := tx.Raw(`SELECT * FROM crm_presale_engineer_sync_jobs WHERE id=? AND tenant_id=? AND status='PROCESSING' AND locked_by=? AND locked_until>=? FOR UPDATE`, job.ID, job.TenantID, worker, now).Scan(&locked).Error; err != nil {
 			return err
@@ -151,9 +153,7 @@ func (s *Store) Fail(ctx context.Context, job presale.EngineerSyncJob, worker st
 		status = "DEAD_LETTER"
 	}
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		// A failed fetch/apply may return after the lease has expired. In that
-		// case the old worker must not overwrite a task that another instance is
-		// now entitled to reclaim.
+		// 远端读取或应用失败返回时租约可能已过期；旧副本不得覆盖已经具备接管资格的新副本。
 		result := tx.Model(&presale.EngineerSyncJob{}).
 			Where("id=? AND tenant_id=? AND status='PROCESSING' AND locked_by=? AND locked_until>=?", job.ID, job.TenantID, worker, now).
 			Updates(map[string]any{"status": status, "retry_count": attempt, "next_retry_at": next, "locked_by": "", "locked_until": nil, "last_error": sanitize(message), "finished_at": now, "updated_at": now})

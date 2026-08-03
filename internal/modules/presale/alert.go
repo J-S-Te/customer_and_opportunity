@@ -77,6 +77,8 @@ func (s *AlertService) UpdateRule(ctx context.Context, actor Actor, alertType Al
 	var output AlertRule
 	err := database.WithTransaction(ctx, s.db, func(txCtx context.Context) error {
 		tx := database.FromContext(txCtx, s.db)
+		// 规则当前值与版本历史同事务写入；首次创建约定客户端版本为 1，
+		// 后续更新同时校验行版本并递增配置版本，避免并发管理员互相覆盖。
 		var current AlertRule
 		err := tx.Where("tenant_id=? AND type=? AND deleted_at IS NULL", actor.TenantID, alertType).Take(&current).Error
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -164,9 +166,8 @@ func (s *AlertService) MarkRead(ctx context.Context, actor Actor, id uint64) err
 	return ErrInvalidTransition
 }
 
-// Alert recipients use explicit namespaces. Personal alert reads deliberately
-// ignore SELF/ORG/ALL and only union the authenticated OIDC subject with the
-// separately signed PMS person binding when that binding is non-empty.
+// 个人预警读取使用显式身份命名空间，不沿用报表的 SELF/ORG/ALL 范围。
+// 查询只合并已认证 OIDC 用户与单独签名的 PMS 人员绑定，避免同值 ID 在不同系统间误匹配。
 func alertRecipientPredicate(actor Actor) string {
 	if strings.TrimSpace(actor.PersonID) == "" {
 		return "(recipient_kind=? AND recipient_id=?)"

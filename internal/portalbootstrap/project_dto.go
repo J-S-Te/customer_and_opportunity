@@ -42,8 +42,8 @@ type projectTeamResponse struct {
 type projectBundleResponse struct {
 	Snapshot   projectSnapshotResponse    `json:"snapshot"`
 	Milestones []projectMilestoneResponse `json:"milestones"`
-	// Activities remains an empty compatibility field. Complete history is
-	// available only from GET /projects/{projectID}/activities.
+	// Activities 保留为空的兼容字段；完整历史只能通过独立活动接口分页读取，避免项目列表携带
+	// 无界历史数据。
 	Activities []projectActivityResponse `json:"activities"`
 	Team       []projectTeamResponse     `json:"team"`
 }

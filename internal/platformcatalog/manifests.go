@@ -1,8 +1,7 @@
 package platformcatalog
 
-// CRMManifest is the browser-user authorization catalog enforced by the CRM
-// API and its embedded presale module. Application-only integration scopes are
-// registered on dedicated OAuth clients and must not be assigned to these roles.
+// CRM 目录描述浏览器用户在客户、商机及内嵌售前模块中的权限。仅供系统集成的 scope 应注册在
+// 专用 OAuth 客户端上，不能授予这些人员角色。
 func CRMManifest() Manifest {
 	permissions := []Permission{
 		permission("customer.read", "查看客户", "customer", "read", "LOW"),
@@ -67,9 +66,8 @@ func CRMManifest() Manifest {
 	return Manifest{Version: "crm-2026.08.02-v6", Permissions: permissions, Roles: roles, Policy: Policy{MaxEffectiveRoles: 3}}
 }
 
-// PortalManifest is independent from CRM even though both applications are
-// delivered from the same repository. Portal sessions accept exactly one
-// external-customer role and always enforce the local CUSTOMER data scope.
+// Portal 与 CRM 虽由同一仓库交付，授权目录仍相互独立。Portal 会话只接受一个外部客户角色，
+// 并始终叠加本地 CUSTOMER 数据范围，角色本身不能扩大客户边界。
 func PortalManifest() Manifest {
 	permissions := []Permission{
 		permission("project.read", "查看本人项目", "project", "read", "LOW"),

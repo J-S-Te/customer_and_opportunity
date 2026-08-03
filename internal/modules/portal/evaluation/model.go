@@ -11,8 +11,7 @@ const (
 	lowScoreRule    = "LOW_SCORE_V1"
 )
 
-// ServiceEvaluation is the immutable source record for one customer's project
-// evaluation. PublicID, rather than the database ID, is exposed to browsers.
+// ServiceEvaluation 是客户对项目的一次不可变评价源记录；浏览器只看到 PublicID，不暴露数据库主键。
 type ServiceEvaluation struct {
 	ID                   uint64         `gorm:"primaryKey" json:"-"`
 	TenantID             string         `gorm:"size:64;not null;uniqueIndex:uq_portal_evaluation_no,priority:1;uniqueIndex:uq_portal_evaluation_project,priority:1;uniqueIndex:uq_portal_evaluation_idempotency,priority:1" json:"-"`
@@ -42,8 +41,7 @@ type ServiceEvaluation struct {
 
 func (ServiceEvaluation) TableName() string { return "portal_service_evaluations" }
 
-// AuditLog is append-only. ActorID is retained for audit but never returned by
-// a Portal customer response.
+// AuditLog 只追加；ActorID 用于审计，但不会出现在 Portal 客户响应中。
 type AuditLog struct {
 	ID           uint64    `gorm:"primaryKey;autoIncrement"`
 	TenantID     string    `gorm:"size:64;not null;index"`
@@ -67,8 +65,7 @@ type Alert struct {
 
 func (Alert) TableName() string { return "portal_evaluation_alerts" }
 
-// Notification is a Portal-owned internal work projection. It does not imply
-// delivery to an external IM, mail or management platform.
+// Notification 是 Portal 自有的内部待办投影，不表示外部 IM、邮件或管理平台已经接收通知。
 type Notification struct {
 	ID           uint64     `gorm:"primaryKey;autoIncrement"`
 	TenantID     string     `gorm:"size:64;not null;index;uniqueIndex:uq_portal_evaluation_notice,priority:1"`

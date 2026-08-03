@@ -102,6 +102,7 @@ func (a *App) RunOnce(ctx context.Context) (int, error) {
 func (a *App) claim(ctx context.Context, now time.Time) ([]opportunity.OutboxEvent, error) {
 	var result []opportunity.OutboxEvent
 	err := a.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// SKIP LOCKED 分片领取，过期 PROCESSING 可被回收；领取事务只写有限租约，不执行通知投影。
 		var events []opportunity.OutboxEvent
 		if err := tx.Raw(claimSQL(), ownerChangeEventType, statusPending, statusRetryWait, now, statusProcessing, now, a.batchSize).Scan(&events).Error; err != nil {
 			return err
@@ -170,6 +171,7 @@ type ownerSnapshot struct {
 func (a *App) process(ctx context.Context, event opportunity.OutboxEvent) error {
 	now := a.now().UTC()
 	return a.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// 锁定 Outbox 后重新读取商机和审计证据，防止排队期间再次转移负责人而发送过时消息。
 		var locked opportunity.OutboxEvent
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id=? AND event_type=? AND status=? AND locked_by=? AND locked_until>=?", event.ID, ownerChangeEventType, statusProcessing, a.workerID, now).Take(&locked).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -212,6 +214,7 @@ func (a *App) process(ctx context.Context, event opportunity.OutboxEvent) error 
 }
 
 func cancelObsoleteUnread(tx *gorm.DB, tenantID string, opportunityID, currentVersion uint64, currentSourceEventID string, now time.Time) error {
+	// 一次新交接提交后，旧版本给交接双方的未读消息都应失效，不能因队列延迟继续展示。
 	return tx.Model(&notification.Notification{}).
 		Where(obsoleteUnreadWhere(), tenantID, opportunityID, notification.TypeOpportunityOwnerChanged, notification.StatusUnread, currentVersion, currentSourceEventID).
 		Updates(map[string]any{"status": notification.StatusCancelled, "updated_at": now, "updated_by": workerActor, "version": gorm.Expr("version+1")}).Error
@@ -222,6 +225,7 @@ func obsoleteUnreadWhere() string {
 }
 
 func notificationConflictClause() clause.OnConflict {
+	// 同一租户的源事件只允许一条通知投影；事件重领时复用既有结果。
 	return clause.OnConflict{Columns: []clause.Column{{Name: "tenant_id"}, {Name: "source_event_id"}}, DoNothing: true}
 }
 
@@ -262,8 +266,7 @@ func validateAgainstDatabase(tx *gorm.DB, event opportunity.OutboxEvent, payload
 	if json.Unmarshal(audit.BeforeJSON, &before) != nil || json.Unmarshal(audit.AfterJSON, &after) != nil {
 		return false, "invalid owner change audit snapshot", nil
 	}
-	// Once a later owner transfer commits, both messages from an older transfer
-	// are stale. This prevents queue delay from surfacing an obsolete handover.
+	// 审计流水是负责人变更的权威证据；存在更晚的成功变更时，本事件即使载荷自洽也必须取消。
 	var later int64
 	err = tx.Table("crm_audit_events").Where("tenant_id=? AND module='opportunity' AND operation=? AND resource_type='opportunity' AND resource_id=? AND result='SUCCESS' AND id>?", event.TenantID, ownerChangeOperation, event.AggregateID, audit.ID).Count(&later).Error
 	if err != nil {
@@ -323,6 +326,7 @@ func (a *App) finish(tx *gorm.DB, event opportunity.OutboxEvent, now time.Time, 
 }
 
 func (a *App) finishWithRetry(tx *gorm.DB, event opportunity.OutboxEvent, now time.Time, status string, next *time.Time, retry uint8, summary string) error {
+	// 仅当前领取者能推进状态；已被其他副本接管的事件会以丢失租约失败，拒绝迟到覆盖。
 	updates := map[string]any{"status": status, "retry_count": retry, "next_retry_at": next, "locked_by": "", "locked_until": nil, "last_error_summary": sanitize(summary)}
 	if status == statusSent {
 		updates["sent_at"] = now

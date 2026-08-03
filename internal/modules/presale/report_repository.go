@@ -8,6 +8,8 @@ import (
 )
 
 func (r *GORMRepository) ReportSummary(ctx context.Context, scope ReportScope, query ReportQuery) (ReportSummary, error) {
+	// 工时口径统一排除删除和作废记录，时间窗口采用 [From, To)；后续汇总、趋势和分布
+	// 都复用同一范围构造器，避免同一筛选条件在不同图表中产生不同统计结果。
 	worklogWhere, worklogArgs := reportWorklogWhere(scope, query, "w", "r", "o")
 	result := ReportSummary{WorkHours: "0.00"}
 	if err := database.FromContext(ctx, r.db).Raw(`SELECT
@@ -31,6 +33,8 @@ func (r *GORMRepository) ReportSummary(ctx context.Context, scope ReportScope, q
 		return ReportSummary{}, err
 	}
 
+	// “覆盖商机”要求窗口结束前已存在售前申请，且在窗口开始前没有进入终态；因此它表示
+	// 统计窗口内仍有效的售前覆盖，而不是历史上只要创建过申请就永久计入覆盖。
 	opportunityWhere, opportunityArgs := reportOpportunityWhere(scope, query, "o")
 	coverageWhere, coverageArgs := reportCoverageRequestWhere(scope, query, "coverage_request")
 	if err := database.FromContext(ctx, r.db).Raw(`SELECT
@@ -67,6 +71,8 @@ func (r *GORMRepository) ReportSummary(ctx context.Context, scope ReportScope, q
 }
 
 func reportCoverageRequestWhere(scope ReportScope, query ReportQuery, request string) (string, []any) {
+	// 全租户、组织和个人三类范围由上层可信主体解析后传入。个人范围只允许本人申请或
+	// 以 PMS 人员身份参与的申请；人员筛选还必须落在同一 [From, To) 工时窗口内。
 	where, args := "1=1", make([]any, 0, 4)
 	if !scope.All && len(scope.OrganizationIDs) == 0 {
 		where += ` AND (` + request + `.applicant_id=? OR EXISTS (SELECT 1 FROM crm_presale_assignments coverage_assignment
@@ -99,6 +105,8 @@ func (r *GORMRepository) ReportTrend(ctx context.Context, scope ReportScope, que
 
 func (r *GORMRepository) ReportDistribution(ctx context.Context, scope ReportScope, query ReportQuery, dimension string) ([]ReportDistributionRow, error) {
 	where, args := reportWorklogWhere(scope, query, "w", "r", "o")
+	// SELECT 和 GROUP BY 无法使用占位符，因此动态 SQL 只能从这组内部固定映射取值；
+	// 外部 dimension 未命中白名单时直接拒绝，不能拼接到 SQL 中。
 	selects := map[string]string{
 		"PERSON": `w.person_id AS dimension_id, w.person_name_snapshot AS dimension_name,
 			w.department_snapshot AS department`,
@@ -128,6 +136,8 @@ func (r *GORMRepository) ReportDistribution(ctx context.Context, scope ReportSco
 }
 
 func reportWorklogWhere(scope ReportScope, query ReportQuery, worklog, request, opportunity string) (string, []any) {
+	// 表别名仅由本文件中的固定调用点传入；所有业务筛选值仍通过参数绑定，避免把组织、
+	// 人员或商机标识直接拼入 SQL。
 	where := worklog + ".tenant_id=? AND " + worklog + ".deleted_at IS NULL AND " + worklog + ".voided_at IS NULL AND " + worklog + ".work_start>=? AND " + worklog + ".work_start<?"
 	args := []any{scope.TenantID, query.From, query.To}
 	where, args = appendReportScope(where, args, scope, worklog, opportunity)
@@ -138,6 +148,8 @@ func reportWorklogWhere(scope ReportScope, query ReportQuery, worklog, request, 
 func reportRequestWhere(scope ReportScope, query ReportQuery, request, opportunity string) (string, []any) {
 	where := request + ".tenant_id=? AND " + request + ".deleted_at IS NULL"
 	args := []any{scope.TenantID}
+	// 组织范围以商机权威 owner_org_id 为准；个人范围同时覆盖 CRM 申请人和 PMS 当前执行人，
+	// 不把前端提交的组织或人员标识当成授权依据。
 	if scope.All {
 	} else if len(scope.OrganizationIDs) > 0 {
 		where += " AND " + opportunity + ".owner_org_id IN ?"
@@ -153,6 +165,8 @@ func reportRequestWhere(scope ReportScope, query ReportQuery, request, opportuni
 }
 
 func reportOpportunityWhere(scope ReportScope, query ReportQuery, opportunity string) (string, []any) {
+	// 商机分母也必须服从同一数据范围：个人只能看到其在窗口内有效参与的售前申请所覆盖
+	// 的商机，不能因为报表查询绕过普通申请列表的资源边界。
 	where, args := "1=1", make([]any, 0, 8)
 	if scope.All {
 	} else if len(scope.OrganizationIDs) > 0 {

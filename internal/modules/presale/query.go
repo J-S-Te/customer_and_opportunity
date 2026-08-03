@@ -29,9 +29,8 @@ func requestScope(actor Actor) RequestQueryScope {
 	if scope.All {
 		return scope
 	}
-	// Non-manager views are a union of the authenticated user's application
-	// ownership and authoritative PMS person assignment. Assignment roles are
-	// PMS business roles, so they must not be guessed from CRM OIDC role names.
+	// 非管理角色的可见集合是“本人申请”与“可信 PMS 人员分派”的并集。
+	// 分派角色属于 PMS 业务事实，不能从 CRM 的 OIDC 角色名称推断。
 	if actor.HasRole("sales") {
 		scope.ApplicantID = actor.UserID
 	}
@@ -41,8 +40,7 @@ func requestScope(actor Actor) RequestQueryScope {
 	return scope
 }
 
-// ListRequests applies the TS-007 role scope before any caller-supplied
-// filters. A filter can narrow this scope but can never expand it.
+// 列表先应用服务端授权范围，再叠加调用者筛选条件；筛选只能收窄，不能扩大数据范围。
 func (s *Service) ListRequests(ctx context.Context, actor Actor, query RequestListQuery) (RequestListPage, error) {
 	if !actor.Can("presale.read") {
 		return RequestListPage{}, ErrForbidden
@@ -61,8 +59,8 @@ func (s *Service) ListRequests(ctx context.Context, actor Actor, query RequestLi
 	return page, nil
 }
 
-// Board uses the exact ListRequests query boundary for each finite status lane.
-// It is deliberately bounded per lane and never accepts a caller-provided scope.
+// 看板的每个状态泳道复用列表的授权和筛选边界，并限制单泳道条数，
+// 不接受客户端范围参数，也不会为看板一次性加载全部任务。
 func (s *Service) Board(ctx context.Context, actor Actor, query RequestListQuery, columnLimit int) (RequestBoardView, error) {
 	if !actor.Can("presale.read") {
 		return RequestBoardView{}, ErrForbidden
@@ -101,8 +99,8 @@ func (s *Service) Board(ctx context.Context, actor Actor, query RequestListQuery
 	return RequestBoardView{Columns: columns, ColumnLimit: columnLimit}, nil
 }
 
-// FilterOptions derives bounded options only from locally authoritative rows
-// that survive the caller's server-side scope and the shared request filters.
+// 筛选选项只从调用者当前可见的结果关系中提取，并设定上限；
+// 不可见申请中的人员、商机或推送状态不会通过下拉选项泄露。
 func (s *Service) FilterOptions(ctx context.Context, actor Actor, query RequestListQuery) (RequestFilterOptions, error) {
 	if !actor.Can("presale.read") {
 		return RequestFilterOptions{}, ErrForbidden
@@ -166,8 +164,8 @@ func invalidHalfOpenRange(from, to *time.Time) bool {
 	return from != nil && to != nil && !from.Before(*to)
 }
 
-// RequestDetail performs the resource-level scope check before loading child
-// projections, preventing tenant-local IDOR on guessed request identifiers.
+// 详情在读取任职、工时和预警等子投影前先校验父申请的数据范围，
+// 防止通过猜测租户内 ID 绕过资源级授权。
 func (s *Service) RequestDetail(ctx context.Context, actor Actor, id uint64) (RequestDetailView, error) {
 	if !actor.Can("presale.read") {
 		return RequestDetailView{}, ErrForbidden
@@ -209,8 +207,7 @@ func (s *Service) RequestDetail(ctx context.Context, actor Actor, id uint64) (Re
 	}, nil
 }
 
-// Worklogs returns only explicit public DTOs and checks the parent request's
-// resource scope before querying its children.
+// 工时列表先校验父申请，再返回显式 DTO，避免子资源接口成为绕过申请范围的入口。
 func (s *Service) Worklogs(ctx context.Context, actor Actor, requestID uint64) ([]WorklogView, error) {
 	if !actor.Can("presale.read") {
 		return nil, ErrForbidden
@@ -233,9 +230,8 @@ func (s *Service) Worklogs(ctx context.Context, actor Actor, requestID uint64) (
 	return views, nil
 }
 
-// ListForOpportunity is the public TS-010 query boundary for bootstrap's
-// opportunity route adapter. Bootstrap must first validate opportunity scope;
-// this method then applies the independent presale scope.
+// 商机路由由上层先校验商机访问权，此处返回不含敏感字段的售前摘要；
+// 每条摘要仍单独计算能否进入详情，历史执行人只凭真实分派关系获得该能力。
 func (s *Service) ListForOpportunity(ctx context.Context, actor Actor, opportunityID uint64, page, pageSize int) (OpportunityPresalePage, error) {
 	requests, err := s.repo.ListOpportunityRequests(ctx, actor.TenantID, opportunityID, page, pageSize, s.clock.Now())
 	if err != nil {

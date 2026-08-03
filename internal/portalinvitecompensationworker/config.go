@@ -13,9 +13,7 @@ import (
 
 const requiredPortalScope = "portal.identity_mapping.provision"
 
-// Config is intentionally independent from crm-server. The worker owns a
-// dedicated CRM database connection and a least-privilege CRM-to-Portal OAuth
-// client; browser and Portal-to-CRM credentials are never reused.
+// Worker 使用独立 CRM 数据库连接和最小权限的 CRM→Portal OAuth 客户端；浏览器凭据及 Portal→CRM 凭据不得复用。
 type Config struct {
 	MySQLDSN      string
 	WorkerID      string

@@ -43,9 +43,7 @@ func (c *SensitiveCodec) Encrypt(plaintext string) ([]byte, error) {
 	return c.aead.Seal(nonce, nonce, []byte(plaintext), nil), nil
 }
 
-// Decrypt reverses Encrypt for trusted service-layer adapters. Callers must not
-// include the returned plaintext in API DTOs, errors, logs, metrics or audit
-// payloads.
+// 解密仅供可信服务层适配器使用；返回明文不得进入 API DTO、错误、日志、指标或审计载荷。
 func (c *SensitiveCodec) Decrypt(ciphertext []byte) (string, error) {
 	if len(ciphertext) == 0 {
 		return "", nil

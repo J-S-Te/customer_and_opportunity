@@ -62,16 +62,14 @@ type Service struct {
 	workerMaxAge time.Duration
 }
 
-// UseWorkerReadiness requires recent persisted liveness from the independently
-// deployed renderer before accepting a new export job.
+// UseWorkerReadiness 要求独立渲染 worker 最近有持久化心跳，才允许创建新导出任务。
 func (s *Service) UseWorkerReadiness(readiness workerruntime.Readiness, maxAge time.Duration) *Service {
 	s.readiness, s.workerMaxAge = readiness, maxAge
 	return s
 }
 
 func (s *Service) workerReady(ctx context.Context) bool {
-	// The production Portal bootstrap always installs readiness. Keeping the
-	// zero-value optional preserves domain-only embedders and existing tests.
+	// 生产 Portal 总会安装准入检查；允许零值仅为兼容领域嵌入与既有测试。
 	if s.readiness == nil {
 		return true
 	}
@@ -108,9 +106,8 @@ type Download struct {
 	complete                 func(context.Context, bool, string) error
 }
 
-// Complete records only what the HTTP server observed while writing the body.
-// The grant is consumed atomically before streaming, so this event must never
-// be interpreted as proof that a remote client received the complete file.
+// Complete 只记录 HTTP 服务写响应体时观察到的结果。
+// 下载凭据在流传输前已原子消费，因此成功事件不等价于远端完整收到文件。
 func (d *Download) Complete(ctx context.Context, success bool, reason string) error {
 	if d == nil || d.complete == nil {
 		return nil
@@ -120,8 +117,7 @@ func (d *Download) Complete(ctx context.Context, success bool, reason string) er
 
 func (s *Service) Create(ctx context.Context, actor Actor, projectID, idempotencyKey string) (CreateResult, error) {
 	idempotencyKey = strings.TrimSpace(idempotencyKey)
-	// projectID is an opaque upstream identifier. Whitespace is significant and
-	// must not be normalized into another project's ID.
+	// projectID 是上游不透明标识，空白具有语义，不能规范化成另一个项目 ID。
 	if !validActor(actor) || strings.TrimSpace(projectID) == "" || len(projectID) > 64 || idempotencyKey == "" || len(idempotencyKey) > 128 || s.repo == nil || s.projects == nil || s.clock == nil || s.ids == nil {
 		return CreateResult{}, ErrInvalidRequest
 	}
@@ -177,6 +173,7 @@ func (s *Service) Status(ctx context.Context, actor Actor, publicID string) (Sta
 }
 
 func (s *Service) CreateGrant(ctx context.Context, actor Actor, publicID string) (GrantResult, error) {
+	// 只为 READY 且属于当前账号的任务签发一次性短效凭据，数据库仅保存令牌摘要。
 	if !validActor(actor) || strings.TrimSpace(publicID) == "" || s.clock == nil || s.ids == nil {
 		return GrantResult{}, ErrNotFound
 	}
@@ -201,6 +198,7 @@ func (s *Service) CreateGrant(ctx context.Context, actor Actor, publicID string)
 }
 
 func (s *Service) Download(ctx context.Context, actor Actor, publicID, token string) (Download, error) {
+	// 凭据在返回文件字节前原子消费；并发请求中只有一个能进入传输阶段。
 	publicID, token = strings.TrimSpace(publicID), strings.TrimSpace(token)
 	if !validActor(actor) || publicID == "" || len(token) < 32 || len(token) > 256 || s.clock == nil {
 		return Download{}, ErrInvalidGrant

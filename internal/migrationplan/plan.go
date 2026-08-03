@@ -1,7 +1,5 @@
-// Package migrationplan defines the application-owned order of CRM and Portal
-// migration files. It is deliberately not a DDL runner: production execution,
-// statement checkpoints and online-schema-change policy remain owned by the
-// release platform.
+// Package migrationplan 固化 CRM 与 Portal 迁移文件的应用级顺序，但不执行 DDL；生产执行、
+// 语句检查点和在线变更策略仍由发布平台负责。
 package migrationplan
 
 import (
@@ -77,9 +75,8 @@ func Files(schema Schema) ([]string, error) {
 	return append([]string(nil), files...), nil
 }
 
-// Build reads every declared migration and fails if the directory has an
-// undeclared up migration. This forces each new file to be assigned to exactly
-// one schema before a release manifest can be generated.
+// 读取已声明迁移，并在目录存在未归属的 up 文件时失败；每个新迁移必须先唯一分配给 CRM 或
+// Portal，才能生成发布清单。
 func Build(directory string, schema Schema) (Plan, error) {
 	files, err := Files(schema)
 	if err != nil {
@@ -145,7 +142,7 @@ func allDeclared() (map[string]Schema, error) {
 	return declared, nil
 }
 
-// CombinedChecksum binds schema, order, file name, size and individual digest.
+// 组合校验和同时绑定 schema、顺序、文件名、大小和单文件摘要，防止仅内容相同却调换执行顺序。
 func CombinedChecksum(plan Plan) string {
 	lines := make([]string, 0, len(plan.Entries)+1)
 	lines = append(lines, string(plan.Schema))
@@ -156,7 +153,7 @@ func CombinedChecksum(plan Plan) string {
 	return "sha256:" + hex.EncodeToString(digest[:])
 }
 
-// DeclaredFiles returns a stable cross-schema view for diagnostics/tests.
+// 返回跨 schema 的稳定排序视图，供诊断和测试核对，不代表实际执行顺序。
 func DeclaredFiles() []string {
 	declared, err := allDeclared()
 	if err != nil {

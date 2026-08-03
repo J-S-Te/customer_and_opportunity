@@ -261,10 +261,30 @@ func (r *GORMRepository) TouchSession(ctx context.Context, tenantID, sessionHash
 	if result.Error != nil {
 		return result.Error
 	}
-	if result.RowsAffected != 1 {
+	if result.RowsAffected == 1 {
+		return nil
+	}
+	if result.RowsAffected > 1 {
 		return ErrInvalidLoginState
 	}
-	return nil
+
+	// Portal 会话使用 DATETIME(3)，并发请求可能写入同一毫秒值，MySQL 会报告零变更行，即使记录仍满足活动会话条件。
+	// 判定 Cookie 失效前重新检查这些条件，否则同页并发请求会返回 401，多个浏览器页签反复发起 OIDC 跳转。
+	var active struct {
+		SessionIDHash string `gorm:"column:session_id_hash"`
+	}
+	err := activeSessionQuery(r.tx(ctx), tenantID, sessionHash, seenAt).Take(&active).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return ErrInvalidLoginState
+	}
+	return err
+}
+
+func activeSessionQuery(db *gorm.DB, tenantID, sessionHash string, now time.Time) *gorm.DB {
+	return db.Table((Session{}).TableName()).
+		Clauses(clause.Locking{Strength: "UPDATE"}).
+		Select("session_id_hash").
+		Where("tenant_id = ? AND session_id_hash = ? AND revoked_at IS NULL AND expires_at > ? AND absolute_expiry > ? AND deleted_at IS NULL", tenantID, sessionHash, now, now)
 }
 func (r *GORMRepository) MarkLinkVerified(ctx context.Context, tenantID string, id, revision uint64, now time.Time) error {
 	result := r.tx(ctx).Model(&IdentityLink{}).

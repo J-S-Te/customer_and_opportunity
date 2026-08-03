@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -16,14 +17,7 @@ import (
 // supplied disposable MySQL schema. It exercises the real GORM transaction;
 // the normal unit suite skips it instead of silently emulating MySQL behavior.
 func TestDisableLinkTransactionAndBusinessIdempotency(t *testing.T) {
-	dsn := os.Getenv("PORTAL_ACCOUNT_TEST_MYSQL_DSN")
-	if dsn == "" {
-		t.Skip("PORTAL_ACCOUNT_TEST_MYSQL_DSN is not configured")
-	}
-	db, err := gorm.Open(mysql.Open(dsn), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("open disposable MySQL schema: %v", err)
-	}
+	db := openPortalAccountTestDatabase(t)
 	for _, model := range []any{&identityDisableOperation{}, &AuthEvent{}, &Session{}, &IdentityLink{}} {
 		_ = db.Migrator().DropTable(model)
 	}
@@ -32,17 +26,17 @@ func TestDisableLinkTransactionAndBusinessIdempotency(t *testing.T) {
 			_ = db.Migrator().DropTable(model)
 		}
 	})
-	if err = db.AutoMigrate(&IdentityLink{}, &Session{}, &AuthEvent{}, &identityDisableOperation{}); err != nil {
+	if err := db.AutoMigrate(&IdentityLink{}, &Session{}, &AuthEvent{}, &identityDisableOperation{}); err != nil {
 		t.Fatalf("create disposable schema: %v", err)
 	}
 
 	now := time.Date(2026, 8, 2, 9, 0, 0, 0, time.UTC)
 	link := IdentityLink{Model: newModel("tenant-a", "seed", now.Add(-time.Hour)), AccountNo: "PA-1", PlatformUserID: "subject-a", CustomerID: 7, Status: IdentityActive}
-	if err = db.Create(&link).Error; err != nil {
+	if err := db.Create(&link).Error; err != nil {
 		t.Fatalf("seed identity link: %v", err)
 	}
 	session := Session{Model: newModel("tenant-a", "subject-a", now.Add(-time.Hour)), PublicID: "session-public", SessionIDHash: "session-hash", PlatformUserID: "subject-a", CustomerID: 7, AuthzRevision: 1, RoleConfigHash: "catalog", Roles: []string{"portal_customer"}, Permissions: []string{"project.read"}, AccessTokenCipher: []byte("cipher"), AuthorizationCheckedAt: now, ExpiresAt: now.Add(time.Hour), AbsoluteExpiry: now.Add(time.Hour), LastSeenAt: now}
-	if err = db.Create(&session).Error; err != nil {
+	if err := db.Create(&session).Error; err != nil {
 		t.Fatalf("seed session: %v", err)
 	}
 	repo := NewGORMRepository(db)
@@ -51,14 +45,14 @@ func TestDisableLinkTransactionAndBusinessIdempotency(t *testing.T) {
 
 	// Removing the audit sink forces the final insert to fail. Identity/session
 	// changes and the operation ledger must all roll back with that failure.
-	if err = db.Migrator().DropTable(&AuthEvent{}); err != nil {
+	if err := db.Migrator().DropTable(&AuthEvent{}); err != nil {
 		t.Fatalf("drop audit table: %v", err)
 	}
-	if _, err = repo.DisableLink(ctx, command, now); err == nil {
+	if _, err := repo.DisableLink(ctx, command, now); err == nil {
 		t.Fatal("disable unexpectedly succeeded without the required audit sink")
 	}
 	assertDisableDatabaseState(t, db, link.ID, session.ID, IdentityActive, false, 0, 0)
-	if err = db.AutoMigrate(&AuthEvent{}); err != nil {
+	if err := db.AutoMigrate(&AuthEvent{}); err != nil {
 		t.Fatalf("restore audit table: %v", err)
 	}
 
@@ -96,6 +90,78 @@ func TestDisableLinkTransactionAndBusinessIdempotency(t *testing.T) {
 	if _, err = repo.DisableLink(ctx, wrongActor, now); !errors.Is(err, ErrIdentityDisabled) {
 		t.Fatalf("different client cannot replay an already-disabled mapping: error=%v", err)
 	}
+}
+
+func TestTouchSessionAcceptsMySQLNoChangeAndRejectsInactiveRows(t *testing.T) {
+	db := openPortalAccountTestDatabase(t)
+	if strings.Contains(strings.ToLower(os.Getenv("PORTAL_ACCOUNT_TEST_MYSQL_DSN")), "clientfoundrows=true") {
+		t.Fatal("PORTAL_ACCOUNT_TEST_MYSQL_DSN must use clientFoundRows=false to exercise MySQL zero-change semantics")
+	}
+	_ = db.Migrator().DropTable(&Session{})
+	t.Cleanup(func() { _ = db.Migrator().DropTable(&Session{}) })
+	if err := db.AutoMigrate(&Session{}); err != nil {
+		t.Fatalf("create disposable session table: %v", err)
+	}
+
+	now := time.Date(2026, 8, 3, 9, 10, 11, 123_000_000, time.UTC)
+	session := Session{
+		Model:                  newModel("tenant-a", "subject-a", now),
+		PublicID:               "touch-public",
+		SessionIDHash:          "touch-session-hash",
+		PlatformUserID:         "subject-a",
+		CustomerID:             7,
+		AuthzRevision:          1,
+		RoleConfigHash:         "catalog",
+		Roles:                  []string{"portal_customer"},
+		Permissions:            []string{"project.read"},
+		AccessTokenCipher:      []byte("cipher"),
+		AuthorizationCheckedAt: now,
+		ExpiresAt:              now.Add(time.Hour),
+		AbsoluteExpiry:         now.Add(time.Hour),
+		LastSeenAt:             now,
+	}
+	if err := db.Create(&session).Error; err != nil {
+		t.Fatalf("seed session: %v", err)
+	}
+	repo := NewGORMRepository(db)
+	noChange := db.Model(&Session{}).
+		Where("tenant_id = ? AND session_id_hash = ?", "tenant-a", session.SessionIDHash).
+		Updates(map[string]any{"last_seen_at": now, "updated_at": now, "authorization_checked_at": now})
+	if noChange.Error != nil {
+		t.Fatalf("verify MySQL changed-row behavior: %v", noChange.Error)
+	}
+	if noChange.RowsAffected != 0 {
+		t.Fatalf("no-change UPDATE affected %d rows; test database must use MySQL changed-row semantics (clientFoundRows=false)", noChange.RowsAffected)
+	}
+
+	// Every value in the UPDATE already equals its DATETIME(3) database value,
+	// so MySQL reports zero changed rows. The authoritative recheck must still
+	// accept the active session, including on a repeated sibling request.
+	for attempt := 0; attempt < 2; attempt++ {
+		if err := repo.TouchSession(context.Background(), "tenant-a", session.SessionIDHash, now, now); err != nil {
+			t.Fatalf("TouchSession() attempt %d rejected an active no-change row: %v", attempt+1, err)
+		}
+	}
+
+	if err := db.Model(&Session{}).Where("id = ?", session.ID).Update("revoked_at", now).Error; err != nil {
+		t.Fatalf("revoke session: %v", err)
+	}
+	if err := repo.TouchSession(context.Background(), "tenant-a", session.SessionIDHash, now, now); !errors.Is(err, ErrInvalidLoginState) {
+		t.Fatalf("TouchSession() revoked error = %v, want ErrInvalidLoginState", err)
+	}
+}
+
+func openPortalAccountTestDatabase(t *testing.T) *gorm.DB {
+	t.Helper()
+	dsn := os.Getenv("PORTAL_ACCOUNT_TEST_MYSQL_DSN")
+	if dsn == "" {
+		t.Skip("PORTAL_ACCOUNT_TEST_MYSQL_DSN is not configured")
+	}
+	db, err := gorm.Open(mysql.Open(dsn), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open disposable MySQL schema: %v", err)
+	}
+	return db
 }
 
 func assertDisableDatabaseState(t *testing.T, db *gorm.DB, linkID, sessionID uint64, status IdentityStatus, revoked bool, operations, audits int64) {

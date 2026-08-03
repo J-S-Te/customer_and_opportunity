@@ -6,9 +6,8 @@ import (
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/security"
 )
 
-// portalInviteOperationProtector adapts the CRM authenticated-encryption
-// codec to the invitation saga without exposing plaintext snapshots outside
-// the portalinvite service boundary.
+// 将 CRM 认证加密能力适配到邀请 Saga；补偿快照离开 portalinvite 服务边界前已加密，不在任务表
+// 或日志中暴露明文凭据和身份材料。
 type portalInviteOperationProtector struct {
 	codec *security.SensitiveCodec
 }

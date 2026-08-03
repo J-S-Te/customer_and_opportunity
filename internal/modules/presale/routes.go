@@ -7,8 +7,8 @@ import (
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/middleware"
 )
 
-// RegisterRoutes mounts presale endpoints beneath the host application's
-// already-authenticated /api/v1 route group.
+// 售前路由挂载在宿主应用已认证的 /api/v1 分组下；中间件权限是第一道门槛，
+// 服务层仍会校验状态、角色和资源关系，不能把路由权限视为最终授权。
 func RegisterRoutes(api *gin.RouterGroup, handler *Handler) {
 	presale := api.Group("/presale")
 	presale.POST("/requests", middleware.RequirePermission("presale.create"), handler.CreateRequest)
@@ -41,9 +41,8 @@ func RegisterRoutes(api *gin.RouterGroup, handler *Handler) {
 	presale.POST("/reports/exports", middleware.RequirePermission("presale.report"), handler.RequestReportExport)
 }
 
-// ContactPhoneNoStore is mounted before authentication at bootstrap. It marks
-// every response from the sensitive endpoint non-cacheable, including an
-// authentication or permission rejection that occurs before the handler.
+// 电话接口的 no-store 中间件在认证前挂载，因此成功响应以及认证、权限拒绝响应都不可缓存，
+// 防止共享浏览器或代理根据响应差异残留敏感访问痕迹。
 func ContactPhoneNoStore() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		path := c.Request.URL.Path
@@ -55,8 +54,7 @@ func ContactPhoneNoStore() gin.HandlerFunc {
 	}
 }
 
-// RegisterInternalRoutes is separated so bootstrap can apply machine identity,
-// audience, scope, timestamp and replay-protection middleware.
+// 审批回调单独挂载到内部路由，便于宿主统一校验机器身份、audience、scope、时间戳和防重放信息。
 func RegisterInternalRoutes(internal *gin.RouterGroup, handler *Handler) {
 	internal.POST("/approval/callbacks/presale", middleware.RequirePermission("approval.callback.write"), handler.ApprovalCallback)
 }

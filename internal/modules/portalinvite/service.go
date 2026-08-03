@@ -159,10 +159,8 @@ func (s *AccessDisableService) Disable(ctx context.Context, customerID uint64, c
 	return s.resumeDisable(ctx, principal, operation, owner)
 }
 
-// ResumeClaimed continues exactly one operation that a recovery worker owns.
-// It deliberately bypasses user authorization and customer scope because the
-// immutable tenant, actor, customer and remote subjects were authorized and
-// frozen when the saga was created. Lease ownership remains mandatory.
+// ResumeClaimed 只续跑恢复任务已领取的一条操作。Saga 创建时已完成授权并冻结租户、操作者、客户和远程主体，
+// 因此恢复路径不重新依赖用户会话；但租约所有权仍是继续执行的必要条件。
 func (s *AccessDisableService) ResumeClaimed(ctx context.Context, operation *AccessDisableOperation, workerID string) (*DisableAccessResult, error) {
 	workerID = strings.TrimSpace(workerID)
 	if operation == nil || operation.ID == 0 || operation.TenantID == "" || operation.ActorID == "" || workerID == "" ||
@@ -362,8 +360,7 @@ func (s *AccessDisableService) Current(ctx context.Context, customerID uint64) (
 	}
 	operation, operationErr := s.repo.FindLatestAccessDisableOperation(ctx, principal.TenantID, customerID)
 	if operationErr == nil {
-		// A later, explicitly provisioned link is an independent grant. Historical
-		// disable metadata must not shadow its current access state.
+		// 后续显式创建的映射属于独立授权，历史停用元数据不能覆盖它的当前访问状态。
 		if linkErr == nil && operation.IdentityLinkID != link.ID {
 			return result, nil
 		}
@@ -411,6 +408,7 @@ func (s *Service) Create(ctx context.Context, customerID uint64, request CreateR
 		return nil, dependency(errors.New("portal provision operation protector is not configured"))
 	}
 	requestHash := provisionRequestHash(principal, customerID)
+	// 幂等坐标先于外部调用持久化；如果同键操作已存在，续跑其阶段而不是重新创建平台用户或门户映射。
 	operation, err := s.repo.FindProvisionOperation(ctx, principal.TenantID, principal.UserID, request.IdempotencyKey)
 	if err == nil {
 		if operation.RequestHash != requestHash || operation.CustomerID != customerID {
@@ -569,9 +567,8 @@ func (s *Service) Consume(ctx context.Context, cmd ConsumeRequest) error {
 		return ErrSubjectMismatch
 	}
 	err = s.repo.WithTransaction(ctx, func(txCtx context.Context) error {
-		// Serialize activation with access-disable creation. If activation owns the
-		// customer lock first, disable observes ACTIVE and subsequently revokes it;
-		// if disable owns it first, the blocking fence prevents resurrection.
+		// 激活与停用访问通过客户锁串行：激活先持锁时，停用随后观察 ACTIVE 并撤销；
+		// 停用先持锁时，阻断栅栏防止旧邀请把访问复活。
 		if lockErr := s.repo.LockCustomer(txCtx, invite.TenantID, invite.CustomerID); lockErr != nil {
 			return lockErr
 		}
@@ -595,8 +592,8 @@ func (s *Service) Consume(ctx context.Context, cmd ConsumeRequest) error {
 		if linkErr != nil {
 			return linkErr
 		}
-		// A response may be lost after the first commit. Exact token/subject/link
-		// replay is successful only after both authoritative CRM states converged.
+		// 首次提交后响应可能丢失；只有令牌、主体和映射完全匹配，且两处 CRM 权威状态均已收敛，
+		// 才把重复消费视为成功。
 		if locked.Status == StatusUsed {
 			if link.Status == "ACTIVE" {
 				return nil
@@ -651,6 +648,8 @@ func (s *Service) resumeProvision(ctx context.Context, principal auth.Principal,
 		return s.completedProvisionResult(ctx, operation, contact)
 	}
 	if operation.Stage == OperationStagePrepared {
+		// Saga 每完成一个远程步骤就持久化新阶段；崩溃后从已确认阶段继续，
+		// 远端调用还必须使用稳定幂等键覆盖“远端成功、阶段落库失败”的窗口。
 		identity, provisionErr := s.platform.ProvisionExternalUser(ctx, contact)
 		if provisionErr != nil || identity.PlatformUserID == "" || identity.AccountNo == "" {
 			return nil, s.failProvision(ctx, operation, "PLATFORM_USER_PROVISION_FAILED", errors.Join(provisionErr, errors.New("platform provision response is incomplete")))

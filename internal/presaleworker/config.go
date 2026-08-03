@@ -11,8 +11,7 @@ import (
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/integrationhttp"
 )
 
-// Config deliberately uses separate OAuth clients for approval and PMS so a
-// credential can never gain both integration scopes.
+// 审批引擎与 PMS 使用相互独立的 OAuth 客户端，单个机器凭据不能同时获得两类集成权限。
 type Config struct {
 	MySQLDSN        string
 	WorkerID        string
@@ -64,9 +63,7 @@ func LoadConfig() (Config, error) {
 	if cfg.WorkerID == "" || cfg.PollInterval <= 0 || cfg.LeaseDuration < 10*time.Second || cfg.BatchSize < 1 || cfg.BatchSize > 100 {
 		return Config{}, fmt.Errorf("invalid worker scheduling configuration")
 	}
-	// HTTP ports have a hard five-second request timeout. Per-event heartbeat
-	// refresh plus five seconds of scheduling/DB jitter bounds false stale
-	// detection without pretending that configuration itself proves liveness.
+	// HTTP 端口固定五秒超时；逐事件刷新心跳并预留调度/数据库抖动，降低活跃 Worker 被误判失联的概率。
 	if cfg.HeartbeatMaxAge < cfg.PollInterval+10*time.Second || cfg.HeartbeatMaxAge > 5*time.Minute {
 		return Config{}, fmt.Errorf("PRESALE_WORKER_HEARTBEAT_MAX_AGE must cover poll interval, integration timeout and jitter")
 	}

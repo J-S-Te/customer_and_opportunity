@@ -5,7 +5,7 @@ import (
 	"net/http"
 )
 
-// Error is a stable API-facing error. Cause is intentionally excluded from JSON responses.
+// Error 是稳定的 API 错误契约；Cause 仅供服务端诊断，有意排除在 JSON 响应之外。
 type Error struct {
 	Code       string
 	Message    string

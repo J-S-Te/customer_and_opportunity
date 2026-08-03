@@ -13,9 +13,8 @@ const (
 	StatusFailed     = "FAILED"
 )
 
-// Job is a durable, account-scoped request to render the exact project
-// snapshot captured at request time. Payload never contains unmasked contact
-// details or authorization credentials.
+// Job 是账号范围内的持久化渲染请求，固定使用创建时捕获的项目快照。
+// 任务载荷不含未脱敏联系方式或授权凭据，worker 无需继承浏览器会话。
 type Job struct {
 	ID              uint64     `gorm:"primaryKey;autoIncrement"`
 	PublicID        string     `gorm:"size:64;not null;uniqueIndex:uq_portal_project_export_public"`
@@ -74,9 +73,8 @@ type Event struct {
 
 func (Event) TableName() string { return "portal_project_export_events" }
 
-// Capture carries the authorization scope alongside the immutable business
-// snapshot. Snapshot's TenantID is intentionally hidden from normal JSON, so
-// the worker must not infer scope from its public representation.
+// Capture 将授权范围与不可变业务快照一起交给 worker。
+// Detail 的 TenantID 在普通 JSON 中被隐藏，因此 worker 不得从公开表示推断租户范围。
 type Capture struct {
 	TenantID   string         `json:"tenant_id"`
 	CustomerID uint64         `json:"customer_id"`

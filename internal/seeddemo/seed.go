@@ -18,8 +18,7 @@ import (
 	"gorm.io/gorm"
 )
 
-// Dependencies carries the production services the seeder reuses so encrypted
-// fields, audit events, sequences and idempotency records stay consistent.
+// 注入生产服务所需依赖，使演示数据沿用真实加密、审计、编号和幂等记录规则，而不是绕过领域层写表。
 type Dependencies struct {
 	DB        *gorm.DB
 	Codec     *security.SensitiveCodec
@@ -69,9 +68,8 @@ type seeder struct {
 	principal       auth.Principal
 }
 
-// Run seeds the demo dataset idempotently. Existing rows are matched by tenant
-// plus normalized customer name or tenant plus customer and opportunity name,
-// so repeated runs never create duplicates or re-enter stage transitions.
+// 幂等写入演示数据：客户按租户和规范化名称匹配，商机按租户、客户和名称匹配；重复运行不会
+// 创建副本，也不会重新触发阶段流转。
 func Run(ctx context.Context, deps Dependencies) (Summary, error) {
 	if deps.DB == nil {
 		return Summary{}, errors.New("seed database must not be nil")
@@ -138,6 +136,8 @@ func Run(ctx context.Context, deps Dependencies) (Summary, error) {
 }
 
 func (seed *seeder) seedCustomer(ctx context.Context, item customerSeed) (CustomerResult, error) {
+	// 先按业务唯一语义查找，再使用稳定幂等键调用正式创建服务；并发执行时最终仍由服务端
+	// 幂等记录和数据库约束收敛。
 	var existing customer.Customer
 	err := seed.db.WithContext(ctx).
 		Where("tenant_id = ? AND normalized_name = ? AND deleted_at IS NULL", seed.tenantID, normalizeName(item.Name)).
@@ -171,6 +171,7 @@ func (seed *seeder) seedCustomer(ctx context.Context, item customerSeed) (Custom
 }
 
 func (seed *seeder) seedCustomerProfile(ctx context.Context, customerID uint64, item customerSeed) error {
+	// 子档案通过正式 Replace 接口写入，确保审计字段、租户条件和敏感字段加密与线上编辑一致。
 	repo := customer.NewGORMRepository(seed.db)
 	if len(item.Stakeholders) > 0 {
 		models := make([]customer.Stakeholder, 0, len(item.Stakeholders))
@@ -331,10 +332,8 @@ func (seed *seeder) seedOpportunity(ctx context.Context, item opportunitySeed, c
 	return result, nil
 }
 
-// createTerminalOpportunity inserts a closed opportunity directly because the
-// signed/failed terminal transitions need a contract provider or a lost reason
-// that a demo seed must not fake through external services. The row, stage log
-// and audit events still commit in one transaction.
+// 终态商机直接构造，是因为签约/失败流转依赖合同提供方或失败原因，种子任务不应伪造外部服务；
+// 主记录、阶段日志和审计事件仍在同一事务提交。
 func (seed *seeder) createTerminalOpportunity(ctx context.Context, key string, input opportunity.CreateRequest, terminal terminalSeed) (*opportunity.Opportunity, error) {
 	amount, err := decimal.NewFromString(input.ExpectedAmount)
 	if err != nil || !amount.IsPositive() {

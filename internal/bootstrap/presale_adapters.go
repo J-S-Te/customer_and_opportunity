@@ -11,8 +11,7 @@ import (
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/security"
 )
 
-// presaleOpportunityReader keeps the presale module on the opportunity
-// service boundary. It deliberately does not query opportunity tables.
+// 售前模块通过商机服务边界读取快照，有意不直接查询商机表，从而复用租户、数据范围和可见性校验。
 type presaleOpportunityReader struct {
 	service *opportunity.Service
 }

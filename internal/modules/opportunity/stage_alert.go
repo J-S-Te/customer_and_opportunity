@@ -23,9 +23,8 @@ const (
 	StageAlertCancelled = "CANCELLED"
 )
 
-// StageAlertRule is the current threshold configuration for one advancing
-// opportunity stage. ConfigVersion changes on every accepted configuration
-// write and is part of the durable alert identity.
+// StageAlertRule 保存推进阶段的当前阈值配置。每次接受配置写入都会提升 ConfigVersion，
+// 该版本也是持久化告警身份的一部分，避免新旧规则混用。
 type StageAlertRule struct {
 	database.Model
 	Stage          string `gorm:"size:32;not null"`
@@ -36,9 +35,8 @@ type StageAlertRule struct {
 
 func (StageAlertRule) TableName() string { return "crm_opportunity_stage_alert_rules" }
 
-// StageAlert is also the in-product notification projection. A PENDING row is
-// committed with its outbox event, then the worker atomically projects both to
-// UNREAD/SENT. No external delivery channel is implied by that projection.
+// StageAlert 同时作为站内通知投影：PENDING 行与发件箱事件原子提交，任务再把两者收敛到
+// UNREAD/SENT；该状态不表示任何外部通知渠道已经投递。
 type StageAlert struct {
 	database.Model
 	OpportunityID    uint64     `gorm:"not null;index"`
@@ -276,10 +274,8 @@ func requireAlertPrincipal(ctx context.Context, permission string) (auth.Princip
 	return principal, nil
 }
 
-// cancelActiveStageAlerts is called inside the opportunity state-change
-// transaction. This closes the race where a ten-minute scanner has already
-// projected an alert but the opportunity leaves its timed stage immediately
-// afterwards.
+// cancelActiveStageAlerts 在商机状态变更事务内调用，用于关闭定时扫描刚生成告警、
+// 商机随后立即离开计时阶段的竞态窗口。
 func cancelActiveStageAlerts(ctx context.Context, db *gorm.DB, tenantID string, opportunityID uint64, actorID string, now time.Time) error {
 	tx := database.FromContext(ctx, db)
 	var ids []uint64

@@ -151,8 +151,7 @@ func attachmentOpportunityID(c *gin.Context) (uint64, error) {
 
 func NewHandler(service *Service) *Handler { return &Handler{service: service} }
 
-// UseStageAlerts attaches BM-002 rule and in-product notification APIs without
-// changing the constructor used by existing opportunity tests and adapters.
+// 阶段告警作为可选能力附加到既有处理器，不改变现有商机测试和适配器依赖的构造合同。
 func (h *Handler) UseStageAlerts(alerts *StageAlertService) *Handler {
 	h.alerts = alerts
 	return h
@@ -682,9 +681,8 @@ func parsePositiveQueryInt(c *gin.Context, key string, defaultValue, maximum int
 	return value, nil
 }
 
-// validQueryKeys fails closed for both unknown keys and repeated keys. Query
-// values are intentionally parsed by each handler because the allowed DTO is
-// different for every read endpoint.
+// validQueryKeys 对未知键和重复键都采用失败关闭；各读取接口允许的 DTO 不同，
+// 因此值仍由对应处理器按自己的合同解析。
 func validQueryKeys(c *gin.Context, allowed ...string) bool {
 	values, err := url.ParseQuery(c.Request.URL.RawQuery)
 	if err != nil {

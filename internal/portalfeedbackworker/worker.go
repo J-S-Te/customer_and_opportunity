@@ -71,6 +71,7 @@ func (a *App) RunOnce(ctx context.Context) (int, error) {
 	}
 	total := 0
 	for {
+		// 同一轮固定 now，确保跨批次的 SLA 截止判断一致，不因长扫描让后批记录被提前纳入。
 		processed, scanErr := a.scanBatch(ctx, now)
 		total += processed
 		if scanErr != nil || processed < a.config.BatchSize {
@@ -108,6 +109,7 @@ func (a *App) acquireLease(ctx context.Context, now time.Time) (bool, error) {
 func (a *App) scanBatch(ctx context.Context, now time.Time) (int, error) {
 	processed := 0
 	err := a.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// 反馈、升级记录、站内通知和 Outbox 在同一事务产生；唯一冲突使重复扫描保持幂等。
 		var items []feedback.Feedback
 		query := `SELECT f.* FROM portal_feedbacks f
 WHERE f.tenant_id=? AND f.deleted_at IS NULL AND f.first_responded_at IS NULL

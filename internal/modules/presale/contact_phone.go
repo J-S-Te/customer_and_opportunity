@@ -14,10 +14,8 @@ const (
 	contactPhoneRelationAssignment = "ASSIGNMENT"
 )
 
-// ContactPhone decrypts the phone only for an explicit, independently
-// authorized request. Ordinary detail and list projections remain masked.
-// The audit write deliberately happens before the plaintext is returned so an
-// unavailable audit store closes the sensitive-data path.
+// 电话明文只在独立敏感信息请求中解密，普通列表和详情始终保持脱敏。
+// 返回明文前必须先成功写入隐私审计，因此审计不可用时该数据路径失败关闭。
 func (s *Service) ContactPhone(ctx context.Context, actor Actor, id uint64) (ContactPhoneView, error) {
 	if !actor.Can("presale.contact_phone.read") {
 		return ContactPhoneView{}, ErrForbidden
@@ -55,8 +53,7 @@ func (s *Service) ContactPhone(ctx context.Context, actor Actor, id uint64) (Con
 	return ContactPhoneView{RequestID: requestValue.ID, ContactPhone: plaintext}, nil
 }
 
-// canViewContactPhone is safe to include in the ordinary detail DTO: it only
-// reports the server-side capability and never decrypts or returns the phone.
+// 普通详情只返回服务端计算的“是否可查看”能力，不触发解密，也不携带电话号码。
 func (s *Service) canViewContactPhone(ctx context.Context, actor Actor, value *PresaleRequest) (bool, error) {
 	if !actor.Can("presale.contact_phone.read") {
 		return false, nil
@@ -66,8 +63,7 @@ func (s *Service) canViewContactPhone(ctx context.Context, actor Actor, value *P
 }
 
 func (s *Service) contactPhoneRelation(ctx context.Context, actor Actor, value *PresaleRequest) (string, error) {
-	// Auditor is an explicit deny and wins over any additional role or stale PMS
-	// assignment attached to the same principal.
+	// 审计员是显式拒绝，优先于同一主体可能附带的其他角色或过期 PMS 分派关系。
 	if actor.HasRole("auditor") {
 		return "", nil
 	}

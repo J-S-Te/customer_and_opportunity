@@ -31,6 +31,7 @@ var (
 
 const minimumStatisticsSample int64 = 5
 
+// Actor 同时携带租户、客户和 Portal 账号三个边界；读取自己的评价还必须匹配 AccountID。
 type Actor struct {
 	TenantID, AccountID string
 	CustomerID          uint64
@@ -84,6 +85,7 @@ func (s *Service) ListLowScoreNotices(ctx context.Context, tenantID, status stri
 }
 
 func (s *Service) ReadLowScoreNotice(ctx context.Context, tenantID, actorID, publicEvaluationID string) (*LowScoreNotice, error) {
+	// “标记已读”和追加审计必须同事务提交，不能出现 UI 已读但审计缺失的中间状态。
 	tenantID, actorID, publicEvaluationID = strings.TrimSpace(tenantID), strings.TrimSpace(actorID), strings.TrimSpace(publicEvaluationID)
 	if tenantID == "" || actorID == "" || publicEvaluationID == "" || len(publicEvaluationID) > 64 {
 		return nil, ErrValidation
@@ -126,6 +128,7 @@ func NewService(repo Repository, projects ProjectAccess, clock Clock, ids IDGene
 }
 
 func (s *Service) Eligibility(ctx context.Context, actor Actor, projectID string) (Eligibility, error) {
+	// 项目完成状态来自受信项目投影；已有评价只向原提交账号暴露其公开 ID。
 	projectID = strings.TrimSpace(projectID)
 	if !validActor(actor) || !validProjectID(projectID) {
 		return Eligibility{}, ErrProjectNotFound
@@ -182,8 +185,7 @@ func (s *Service) Submit(ctx context.Context, actor Actor, command SubmitCommand
 		CreateIdempotencyKey: command.IdempotencyKey, CreateRequestHash: requestHash,
 	}
 	err := s.repo.WithTransaction(ctx, func(tx context.Context) error {
-		// Eligibility is deliberately re-read inside the write transaction. The
-		// browser's earlier GET is never trusted as an authorization decision.
+		// 写事务内重新读取资格；浏览器此前的资格查询只是展示信息，不能作为提交时授权决定。
 		status, found, projectErr := s.projects.Status(tx, actor.TenantID, actor.CustomerID, command.ProjectID)
 		if projectErr != nil {
 			return projectErr
@@ -228,8 +230,7 @@ func (s *Service) Submit(ctx context.Context, actor Actor, command SubmitCommand
 		return s.repo.CreateOutbox(tx, &Outbox{EventID: eventID, TenantID: actor.TenantID, EventType: "PORTAL_EVALUATION_LOW_SCORE", AggregateID: value.ID, Payload: payload, Status: "PENDING", CreatedAt: now})
 	})
 	if err != nil {
-		// Resolve both unique-key races from durable state after the losing
-		// transaction has rolled back.
+		// 并发唯一键竞争失败后从持久化状态解析结果，区分精确重放和业务上的重复评价。
 		if existing, findErr := s.repo.FindByIdempotencyKey(ctx, actor, command.IdempotencyKey); findErr == nil {
 			if existing.CreateRequestHash != requestHash {
 				return nil, ErrIdempotencyConflict
@@ -259,9 +260,7 @@ func (s *Service) Get(ctx context.Context, actor Actor, publicID string) (*View,
 	return &result, nil
 }
 
-// Statistics returns only one tenant-wide aggregate. No project, customer or
-// account filters are accepted, preventing callers from drilling a cohort down
-// below the five-evaluation anonymity threshold.
+// Statistics 只返回租户级整体聚合，不接受项目、客户或账号筛选，防止把群组钻取到五条匿名阈值以下。
 func (s *Service) Statistics(ctx context.Context, tenantID string) (*Statistics, error) {
 	tenantID = strings.TrimSpace(tenantID)
 	if tenantID == "" {
@@ -326,9 +325,8 @@ func submitHash(command SubmitCommand) string {
 	return hex.EncodeToString(digest[:])
 }
 
-// sanitizePlainText prevents stored markup from becoming executable if a
-// future UI accidentally changes rendering context. Vue still renders this
-// value through text interpolation; v-html is intentionally not used.
+// sanitizePlainText 清除可执行标记，防止未来 UI 误改渲染上下文时把已存评论变成脚本。
+// 当前 Vue 仍使用文本插值，不能改为 v-html。
 func sanitizePlainText(value string) string {
 	value = strings.ReplaceAll(value, "\r\n", "\n")
 	value = strings.ReplaceAll(value, "\r", "\n")

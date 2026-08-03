@@ -49,6 +49,7 @@ func NewHTTPPorts(approval, pms HTTPPortConfig) (presale.ApprovalCommandPort, pr
 }
 
 func oauthClient(cfg HTTPPortConfig) (*http.Client, error) {
+	// 令牌和业务请求共用受控 TLS，且禁止重定向，避免 Authorization 头越过预配置服务边界。
 	cc := clientcredentials.Config{ClientID: cfg.ClientID, ClientSecret: cfg.ClientSecret, TokenURL: cfg.TokenURL, Scopes: strings.Fields(cfg.Scope), AuthStyle: oauth2.AuthStyleInHeader}
 	transport, err := integrationhttp.NewTransport(cfg.TLS, 2*time.Second)
 	if err != nil {
@@ -171,6 +172,7 @@ func (p *httpPorts) postJSON(ctx context.Context, client *http.Client, endpoint,
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Idempotency-Key", idempotencyKey)
+	// 业务幂等键用于结果收敛；时间戳和随机 nonce 则限制同一认证请求被截获后的重放窗口。
 	req.Header.Set("X-Integration-Timestamp", now().UTC().Format(time.RFC3339Nano))
 	req.Header.Set("X-Integration-Nonce", base64.RawURLEncoding.EncodeToString(nonce))
 	resp, err := client.Do(req)
@@ -203,6 +205,7 @@ func isJSONContentType(value string) bool {
 }
 
 func decodeSuccessEnvelope[T any](response integrationResponse, statuses ...int) (T, error) {
+	// 严格信封拒绝未知字段、尾随 JSON 和缺失请求 ID，防止错误服务的宽松响应被当作成功。
 	var zero T
 	allowed := false
 	for _, status := range statuses {

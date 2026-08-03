@@ -25,8 +25,7 @@ func (s *outboxStore) heartbeat(ctx context.Context, workerID string, now time.T
 	return heartbeat(s.db.WithContext(ctx), workerID, now)
 }
 
-// claim uses a short database transaction and SKIP LOCKED. External HTTP is
-// never performed while a row or database transaction is held.
+// 领取使用短事务和 SKIP LOCKED；任何审批或 PMS HTTP 调用都在事务提交后执行，不长期占用 Outbox 行锁。
 func (s *outboxStore) claim(ctx context.Context, workerID string, now time.Time, lease time.Duration, limit int) ([]presale.OutboxEvent, error) {
 	var result []presale.OutboxEvent
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -39,9 +38,7 @@ ORDER BY created_at,id LIMIT ? FOR UPDATE SKIP LOCKED`, now, now, limit).Scan(&e
 		if err != nil {
 			return err
 		}
-		// Persist liveness in the same transaction as the successful outbox
-		// query/claim. A heartbeat failure rolls back every lease mutation, so
-		// admission evidence can never strand claimed events.
+		// 心跳与领取在同一事务提交；心跳失败会回滚全部租约变化，不能出现“已领取但监控认为实例未存活”的状态。
 		if err = heartbeat(tx, workerID, now); err != nil {
 			return err
 		}
@@ -79,6 +76,7 @@ func (s *outboxStore) sent(ctx context.Context, event presale.OutboxEvent, worke
 }
 
 func (s *outboxStore) failed(ctx context.Context, event presale.OutboxEvent, workerID string, now time.Time, summary string) error {
+	// 失败按有限退避推进，耗尽后转死信；状态条件阻止不再持有事件的副本覆盖结果。
 	attempt := event.RetryCount + 1
 	status, next := outboxFailurePlan(now, attempt)
 	result := s.db.WithContext(ctx).Model(&presale.OutboxEvent{}).

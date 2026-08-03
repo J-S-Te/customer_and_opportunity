@@ -83,6 +83,7 @@ func (r *GORMRepository) CreateOutbox(ctx context.Context, value *Outbox) error 
 }
 
 func (r *GORMRepository) Statistics(ctx context.Context, tenantID string) (Aggregate, error) {
+	// 聚合查询只以租户为维度，不提供可组合的小群体筛选，配合服务层匿名样本阈值。
 	var value Aggregate
 	err := r.tx(ctx).Model(&ServiceEvaluation{}).
 		Select("COUNT(*) AS count, COALESCE(SUM(professional_score),0) AS professional_sum, COALESCE(SUM(response_score),0) AS response_sum, COALESCE(SUM(report_score),0) AS report_sum, COALESCE(SUM(attitude_score),0) AS attitude_sum").
@@ -108,6 +109,7 @@ func (r *GORMRepository) ListLowScoreNotices(ctx context.Context, tenantID, stat
 }
 
 func (r *GORMRepository) FindLowScoreNoticeForUpdate(ctx context.Context, tenantID, publicEvaluationID string) (*LowScoreNoticeRow, error) {
+	// 锁定通知与评价联接结果，使首次已读和审计事件在并发请求下仍只发生一次。
 	var value LowScoreNoticeRow
 	err := r.tx(ctx).Table("portal_evaluation_notifications AS n").Clauses(clause.Locking{Strength: "UPDATE"}).
 		Select("n.id AS notification_id,n.evaluation_id,e.public_id,e.evaluation_no,e.project_id,e.professional_score,e.response_score,e.report_score,e.attitude_score,e.average_score,e.comment,n.status,n.created_at,n.read_at").

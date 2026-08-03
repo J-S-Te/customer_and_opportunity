@@ -13,9 +13,7 @@ import (
 
 const requiredProjectScope = "project.snapshot.read"
 
-// Config is independent from the browser Portal and from every other machine
-// integration. In particular, its OAuth credential grants read-only access to
-// project snapshots and must not be reused for report submission.
+// 项目同步配置与浏览器 Portal 及其他机器集成隔离；其 OAuth 凭据只读项目快照，不能复用于报告提交。
 type Config struct {
 	MySQLDSN       string
 	TenantID       string

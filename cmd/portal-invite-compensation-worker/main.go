@@ -17,6 +17,7 @@ func main() {
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
+	// 初始化也接收同一个取消上下文，启动阶段若收到终止信号，不再继续建立远端补偿依赖。
 	app, err := portalinvitecompensationworker.New(ctx, cfg)
 	if err != nil {
 		log.Fatal(err)

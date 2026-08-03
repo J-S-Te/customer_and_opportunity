@@ -29,6 +29,7 @@ ORDER BY created_at,id LIMIT ? FOR UPDATE SKIP LOCKED`
 func (s *store) claim(ctx context.Context, workerID string, now time.Time, lease time.Duration, limit int) ([]portalinvite.AccessDisableOperation, error) {
 	var claimed []portalinvite.AccessDisableOperation
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// 有限租约把崩溃后的半完成操作重新暴露；SKIP LOCKED 允许多个恢复副本安全分摊任务。
 		var operations []portalinvite.AccessDisableOperation
 		if err := tx.Raw(claimOperationsSQL, now, now, now.Add(-lease), limit).Scan(&operations).Error; err != nil {
 			return err
@@ -85,6 +86,7 @@ func (s *store) failInvalid(ctx context.Context, operation portalinvite.AccessDi
 		if status != portalinvite.DisableStatusDeadLetter {
 			return nil
 		}
+		// 只有耗尽重试的非法恢复记录才写高价值审计，避免每次瞬时失败产生重复噪声。
 		auditCtx := database.WithHandle(requestctx.WithID(ctx, "portal-disable-worker:"+operation.OperationNo), tx)
 		return audit.NewGORMWriter(tx).Write(auditCtx, audit.Event{
 			TenantID: operation.TenantID, Module: "portal_invite", Operation: "DISABLE_ACCESS_RECOVERY",

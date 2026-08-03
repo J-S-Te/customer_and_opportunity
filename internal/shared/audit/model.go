@@ -40,16 +40,19 @@ type GORMWriter struct{ db *gorm.DB }
 func NewGORMWriter(db *gorm.DB) *GORMWriter { return &GORMWriter{db: db} }
 
 func (w *GORMWriter) Write(ctx context.Context, event Event) error {
+	// 优先复用上下文中的业务事务，使状态变化与审计事件同成同败；没有事务时才使用共享连接。
 	if event.EventID == "" {
 		event.EventID = request.NewID()
 	}
 	event.ApplicationCode = "customer_and_opportunity"
+	// 应用代码、追踪号和发生时间由服务端覆盖，调用方只能提供业务快照，不能伪造审计来源。
 	event.RequestID = request.ID(ctx)
 	event.OccurredAt = time.Now().UTC()
 	return database.FromContext(ctx, w.db).Create(&event).Error
 }
 
 func JSON(value any) []byte {
+	// 审计快照来自内部结构；编码失败退化为空值，调用方不得把该辅助函数用于需要返回错误的协议数据。
 	encoded, _ := json.Marshal(value)
 	return encoded
 }

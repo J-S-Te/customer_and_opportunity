@@ -87,9 +87,8 @@ func (s *Service) CreateRequest(ctx context.Context, actor Actor, key string, in
 	if err != nil {
 		return nil, err
 	}
-	// Authorize the requested opportunity before looking up a tenant-wide key.
-	// Otherwise a guessed key could disclose an application created by another
-	// salesperson or for an opportunity outside the caller's data scope.
+	// 先确认目标商机处于调用者的数据范围，再查询租户级幂等键；否则猜中他人的键值可能
+	// 暴露由其他销售创建或属于不可见商机的申请。
 	if old, findErr := s.repo.FindRequestByCreateKey(ctx, actor.TenantID, key); findErr == nil {
 		if !sameCreateRequestReplay(old, actor, opp.ID, hash, legacyHash) {
 			return nil, ErrIdempotencyConflict
@@ -117,8 +116,8 @@ func (s *Service) CreateRequest(ctx context.Context, actor Actor, key string, in
 		} else if !errors.Is(e, ErrNotFound) {
 			return e
 		}
-		// Recheck inside the write transaction so a stale result from a long
-		// request cannot admit work after every worker heartbeat has expired.
+		// 写事务内再次检查心跳，避免长请求在事务外检查后等待过久，待全部 worker 心跳过期
+		// 仍写入无人投递的审批事件。
 		if !s.deliveryWorkerReady(tx) {
 			return ErrDependencyUnavailable
 		}
@@ -145,10 +144,8 @@ func (s *Service) CreateRequest(ctx context.Context, actor Actor, key string, in
 		return nil
 	})
 	if err != nil {
-		// Requests for different opportunities do not share a parent-row lock.
-		// Resolve a concurrently committed tenant-wide key to the same bound
-		// replay/conflict semantics instead of exposing a database duplicate-key
-		// error or returning another actor's resource.
+		// 不同商机的申请没有共享父行锁，可能并发争用同一个租户级幂等键。唯一键决定胜者后，
+		// 仍按操作者、商机和摘要重新判定重放或冲突，不能返回数据库重复键或他人的资源。
 		if old, findErr := s.repo.FindRequestByCreateKey(ctx, actor.TenantID, key); findErr == nil {
 			if !sameCreateRequestReplay(old, actor, opp.ID, hash, legacyHash) {
 				return nil, ErrIdempotencyConflict
@@ -189,9 +186,8 @@ func createRequestHashes(actor Actor, in CreateRequestInput) (string, string, er
 	if err != nil {
 		return "", "", err
 	}
-	// The legacy digest is accepted only together with exact persisted actor and
-	// parent bindings. This keeps safe retries across a rolling deployment while
-	// preventing the historical payload-only hash from authorizing a replay.
+	// 旧版摘要只在持久化操作者和父商机也精确匹配时接受，用于兼容滚动发布期间的安全重试；
+	// 历史版本仅绑定请求体，不能单独作为跨操作者或跨商机重放的依据。
 	legacyHash, err := requestDigest(in)
 	return hash, legacyHash, err
 }
@@ -221,7 +217,8 @@ func validateCreate(in CreateRequestInput) error {
 }
 
 // 只有审批引擎确认实例创建后才推进本地状态。事件序号用于吞掉重复或乱序回执，
-// 请求行和审批实例行同时加锁，保证两个状态投影不会分叉。
+// 请求行和审批实例行同时加锁以缩小两个状态投影的竞争窗口。已进入待审批状态时当前实现
+// 按幂等成功返回，并不会再次核对重复事件的引擎实例 ID 或事件身份。
 func (s *Service) MarkApprovalStarted(ctx context.Context, tenant string, in ApprovalStartedInput) error {
 	return s.repo.WithTransaction(ctx, func(tx context.Context) error {
 		r, e := s.repo.FindRequestForUpdate(tx, tenant, in.RequestID)
@@ -306,9 +303,8 @@ func (s *Service) RequestApprovalAction(ctx context.Context, actor Actor, id uin
 		if instanceErr != nil || instance.EngineInstanceID == "" || instance.CurrentNode != r.CurrentApprovalNode || instance.Status != "PENDING" {
 			return ErrDependencyUnavailable
 		}
-		// Exactly one action may be in flight for an authoritative task. A second
-		// key or opposite action must not overwrite the callback binding while the
-		// first outbox event is being delivered.
+		// 一个权威审批任务同一时刻只允许一个动作在途；第一条 Outbox 尚未投递完成时，新的
+		// 幂等键或相反动作不能覆盖待回调绑定。
 		if instance.PendingTaskID != "" || instance.PendingApprover != "" || instance.PendingAction != "" {
 			return ErrInvalidTransition
 		}
@@ -510,9 +506,8 @@ func (s *Service) ReplaceAssignments(ctx context.Context, actor Actor, id uint64
 		if len(byID) != len(ids) {
 			return ErrInvalidInput
 		}
-		// A PMS deactivation must not erase an active assignment. It can be
-		// retained or explicitly removed, but only a currently valid engineer
-		// with the authoritative PMS role may be newly assigned.
+		// PMS 停用不会隐式抹除现有分派：旧分派可以保留或被显式移除，但新增分派必须指向
+		// 当前有效且 PMS 权威角色与目标角色一致的工程师。
 		for personID, target := range targets {
 			if _, retained := current[personID]; retained {
 				continue
@@ -644,14 +639,12 @@ func (s *Service) recordProgressNotifications(ctx context.Context, actor Actor, 
 	}
 	recipients := make([]recipient, 0, len(assignments)+1)
 	seenPersonRecipients := make(map[string]struct{}, len(assignments))
-	// The applicant is a CRM user recipient. Only equality in the same USER
-	// namespace can establish that the author should be excluded.
+	// 申请人属于 CRM 用户命名空间，只有作者的 USER 身份相等时才排除其自通知。
 	if request.ApplicantID != "" && request.ApplicantID != actor.UserID {
 		recipients = append(recipients, recipient{id: request.ApplicantID, namespace: ProgressRecipientUser, kind: ProgressRecipientApplicant})
 	}
 	for _, assignment := range assignments {
-		// Assignees are PMS person recipients. Never compare or substitute their
-		// identifiers with CRM user/sub identifiers.
+		// 执行人属于 PMS 人员命名空间，不能拿 person_id 与 CRM user/sub 标识比较或相互替代。
 		if !assignment.IsCurrent || assignment.ID == 0 || assignment.AssigneeID == "" || assignment.AssigneeID == actor.PersonID {
 			continue
 		}
@@ -714,9 +707,8 @@ func (s *Service) AddProgress(ctx context.Context, actor Actor, id uint64, key s
 			return nil, ErrInvalidInput
 		}
 	}
-	// Progress is plain text. Reject markup at the write boundary so future
-	// consumers cannot accidentally turn an immutable historical record into
-	// executable HTML even if they omit contextual output escaping.
+	// 进展按纯文本保存，在写入边界拒绝标签字符；即使未来消费者遗漏上下文转义，也不会
+	// 把不可变历史记录直接解释成可执行 HTML。
 	if strings.ContainsAny(content, "<>") {
 		return nil, ErrInvalidInput
 	}
@@ -747,9 +739,8 @@ func (s *Service) AddProgress(ctx context.Context, actor Actor, id uint64, key s
 		if findErr != nil {
 			return findErr
 		}
-		// Lock the parent before the key lookup. This serializes concurrent
-		// submissions for one immutable timeline and avoids a stale RR snapshot
-		// in which two transactions both miss the same idempotency key.
+		// 先锁父申请再查询幂等键，使同一时间线的并发提交串行化，避免可重复读快照中两个事务
+		// 同时判断键不存在。
 		if old, findErr := s.repo.FindProgressByKeyForUpdate(tx, actor.TenantID, key); findErr == nil {
 			if old.RequestHash != requestHash {
 				return ErrIdempotencyConflict
@@ -786,10 +777,8 @@ func (s *Service) AddProgress(ctx context.Context, actor Actor, id uint64, key s
 		return s.recordProgressNotifications(tx, actor, requestValue, created, assignments)
 	})
 	if err != nil {
-		// Different request rows do not share the parent lock. If two such
-		// transactions race on one tenant idempotency key, the unique index picks
-		// a winner. Resolve the committed record to a stable replay/conflict
-		// response instead of exposing a raw MySQL duplicate-key error.
+		// 不同申请行不共享父锁；它们争用同一租户级幂等键时由唯一索引选出胜者，再把已提交
+		// 记录转换成稳定的重放或冲突响应，不向调用方暴露 MySQL 重复键错误。
 		if old, findErr := s.repo.FindProgressByKey(ctx, actor.TenantID, key); findErr == nil {
 			if old.RequestHash != requestHash {
 				return nil, ErrIdempotencyConflict
@@ -899,10 +888,8 @@ func (s *Service) AddWorklog(ctx context.Context, actor Actor, id uint64, key st
 		if !current {
 			return ErrForbidden
 		}
-		// Parent scope and the current execution relationship are checked before
-		// the tenant-wide key. An exact retry remains valid after its first write
-		// automatically completed the task, but a different actor/resource never
-		// receives the old worklog.
+		// 先核验父资源范围和当前执行关系，再查询租户级幂等键。首次写入即使自动完成任务，
+		// 精确重试仍可返回原工时；不同操作者或资源不能借同一键取得旧记录。
 		if old, findErr := s.repo.FindWorklogByKey(tx, actor.TenantID, key); findErr == nil {
 			if !sameWorklogReplay(old, actor, id, requestHash, legacyHash) {
 				return ErrIdempotencyConflict
@@ -956,8 +943,7 @@ func (s *Service) AddWorklog(ctx context.Context, actor Actor, id uint64, key st
 		return nil
 	})
 	if e != nil {
-		// A tenant-wide key can race across different request parent locks. Repeat
-		// the complete parent/assignee authorization before resolving the winner.
+		// 租户级键可能跨不同申请父锁竞争；解析唯一键胜者前必须重新完成父申请和执行人授权。
 		var replay *Worklog
 		parentAuthorized := false
 		replayErr := s.repo.WithTransaction(ctx, func(tx context.Context) error {
@@ -1125,10 +1111,8 @@ func (s *Service) resolveApprovalMutationRace(ctx context.Context, actor Actor, 
 	})
 }
 
-// resolveMutationRace handles only the storage-level unique-key race after the
-// first transaction has failed. It locks and authorizes the requested parent
-// before consulting the tenant-wide key, so a guessed key cannot disclose the
-// winner's resource. Business conflicts are returned before reaching here.
+// 这里仅处理首个事务失败后的存储层唯一键竞争：先锁定并授权请求中的父申请，再查询
+// 租户级键，避免猜测键值泄露胜者资源；普通业务冲突在进入该恢复路径前已经返回。
 func (s *Service) resolveMutationRace(
 	ctx context.Context,
 	actor Actor,

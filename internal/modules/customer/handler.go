@@ -307,6 +307,8 @@ func (h *Handler) CreateExport(c *gin.Context) {
 }
 
 func (h *Handler) PreviewImport(c *gin.Context) {
+	// 预览阶段只接受一个 xlsx 文件和一条原因：先限制整个 multipart 请求，再分别限制文件
+	// 与文本字段大小，并拒绝未知或重复字段，避免解析器在业务校验前消耗无界资源。
 	mediaType, _, err := mime.ParseMediaType(c.GetHeader("Content-Type"))
 	if err != nil || mediaType != "multipart/form-data" {
 		response.Error(c, invalidCustomerBody())
@@ -371,6 +373,8 @@ func (h *Handler) PreviewImport(c *gin.Context) {
 }
 
 func (h *Handler) CommitImport(c *gin.Context) {
+	// 提交阶段不再次上传文件，而是引用预览生成的 jobNo，并用幂等键约束重复确认；
+	// 预览令牌、内容摘要和逐行写入规则由服务层复核，不能只信任前端预览结果。
 	var input ImportCommitRequest
 	if err := requestbody.DecodeJSON(c, &input); err != nil {
 		response.Error(c, invalidCustomerBody())
@@ -385,6 +389,7 @@ func (h *Handler) CommitImport(c *gin.Context) {
 }
 
 func (h *Handler) ImportErrors(c *gin.Context) {
+	// 错误明细按当前主体和导入任务授权后生成；下载禁用缓存与 MIME 嗅探，文件名由服务端产生。
 	contents, filename, err := h.service.ImportErrorsCSV(c.Request.Context(), c.Param("jobNo"))
 	if err != nil {
 		response.Error(c, err)

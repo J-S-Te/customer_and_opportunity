@@ -29,10 +29,8 @@ const (
 	portalApplicationRole      = "portal_customer"
 )
 
-// HTTPPlatformProvisioner is the CRM anti-corruption adapter for the platform
-// external-identity management contract. User provisioning and role assignment
-// deliberately use different OAuth clients so neither credential can exercise
-// both write capabilities.
+// HTTPPlatformProvisioner 是 CRM 对基础平台外部身份合同的防腐层。创建用户与授予角色使用不同 OAuth 客户端，
+// 任一凭据都不能同时行使两种写权限。
 type HTTPPlatformProvisioner struct {
 	provisionURL string
 	application  string
@@ -52,9 +50,7 @@ type PlatformProvisionerOptions struct {
 	NonceReader                                              io.Reader
 }
 
-// HTTPPlatformRoleAssigner is exported for the compensation worker, which
-// retries only the already-recorded role assignment and therefore must not
-// receive the external-user provisioning credential.
+// 补偿任务只能重试已记录的角色授予，因此单独暴露角色客户端，不能让任务持有外部用户创建凭据。
 type HTTPPlatformRoleAssigner struct {
 	endpoint    string
 	application string
@@ -71,10 +67,8 @@ type PlatformRoleAssignerOptions struct {
 	NonceReader                                                        io.Reader
 }
 
-// HTTPPlatformRoleRevoker owns a dedicated application_role.revoke OAuth
-// client. It is not embedded in HTTPPlatformProvisioner so invitation
-// generation and its forward-recovery worker can never revoke existing Portal
-// access with the credentials they already hold.
+// 角色撤销使用独立的 application_role.revoke OAuth 客户端，且不嵌入创建邀请的适配器；
+// 邀请及其恢复任务不能用已有凭据撤销现存门户访问。
 type HTTPPlatformRoleRevoker struct {
 	endpoint    string
 	application string

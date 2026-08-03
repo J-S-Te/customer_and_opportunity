@@ -98,6 +98,8 @@ func (s *ReportService) Trend(ctx context.Context, actor Actor, query ReportQuer
 		byDate[value.Date] = value
 	}
 	result := make([]ReportTrendPoint, 0, int(query.To.Sub(query.From)/(24*time.Hour))+1)
+	// 数据库只返回有事实的日期；服务层补齐半开区间内的空日期，
+	// 保证图表横轴连续且不会把“无数据”误解为接口漏行。
 	for day := utcDay(query.From); day.Before(query.To); day = day.AddDate(0, 0, 1) {
 		key := day.Format(time.DateOnly)
 		value, ok := byDate[key]
@@ -121,9 +123,8 @@ func (s *ReportService) Distribution(ctx context.Context, actor Actor, query Rep
 	return s.repo.ReportDistribution(ctx, scope, query, dimension)
 }
 
-// RequestExport deliberately fails closed until object storage, a worker and a
-// downloadable file lifecycle are configured. It never returns a fabricated
-// job identifier or a URL that does not exist.
+// 在对象存储、导出 worker 和下载生命周期尚未配置前，导出明确失败关闭，
+// 不返回虚假的任务编号或不可用链接。
 func (s *ReportService) RequestExport(actor Actor, query ReportQuery) error {
 	_, _, err := validateReportAccess(actor, query)
 	if err != nil {
@@ -161,8 +162,7 @@ func validateReportAccess(actor Actor, query ReportQuery) (ReportScope, ReportQu
 		if query.PersonID != "" && query.PersonID != scope.PersonID {
 			return ReportScope{}, ReportQuery{}, ErrForbidden
 		}
-		// Backward-compatible role fallback is only used when an older session did
-		// not populate scope_mode. An explicit SELF scope never receives it.
+		// 仅旧会话完全缺少 scope_mode 时才使用角色兼容逻辑；显式 SELF 范围不会被角色扩大。
 		if actor.ScopeMode == "" && (actor.HasRole("technical_lead") || actor.HasRole("sales_director") || actor.HasRole("team_lead")) {
 			scope.All = true
 		}
@@ -199,7 +199,7 @@ func ratio(numerator, denominator int64) string {
 	if denominator <= 0 || numerator <= 0 {
 		return "0.00"
 	}
-	// The selected rows can only make the numerator a subset of the denominator.
+	// 正常口径下分子应是分母子集；上限保护避免异常聚合数据产生超过 100% 的展示值。
 	if numerator > denominator {
 		numerator = denominator
 	}

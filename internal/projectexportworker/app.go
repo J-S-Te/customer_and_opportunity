@@ -48,6 +48,7 @@ func (a *App) Run(ctx context.Context) error {
 	var heartbeatWait sync.WaitGroup
 	heartbeatWait.Add(1)
 	defer func() {
+		// 先停止并等待刷新协程，再删除带 startedAt 的本次实例心跳，避免旧实例误删重启后同 ID 的新心跳。
 		stopHeartbeat()
 		heartbeatWait.Wait()
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -62,6 +63,7 @@ func (a *App) Run(ctx context.Context) error {
 			log.Printf("refresh Portal project export worker heartbeat: %v", err)
 		})
 	}()
+	// 渲染循环退出后由 defer 收敛心跳生命周期，监控不会看到已停止 Worker 继续存活。
 	return a.worker.Run(ctx)
 }
 func (a *App) Close() error {

@@ -40,8 +40,7 @@ var attachmentMIMEs = map[string]string{
 	"xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 }
 
-// Attachment stores only an immutable object reference and trust metadata.
-// Binary content must never be written to CRM MySQL.
+// Attachment 只保存不可变对象引用及信任元数据，二进制内容不得写入 CRM MySQL。
 type Attachment struct {
 	database.Model
 	PublicID             string     `gorm:"size:64;not null;uniqueIndex:uq_opportunity_attachment_public,priority:2"`
@@ -127,8 +126,8 @@ type AttachmentUploadGrant struct {
 	ExpiresAt time.Time
 }
 
-// AttachmentObjectStore is an immutable object-store boundary. Finalize must
-// bind a version/etag so content cannot be replaced after it has been scanned.
+// AttachmentObjectStore 是不可变对象存储边界；Finalize 必须绑定版本或 ETag，
+// 防止扫描通过后文件内容被替换。
 type AttachmentObjectStore interface {
 	Available() bool
 	CreateUpload(context.Context, string, string, uint64, string, string) (AttachmentUploadGrant, error)
@@ -138,9 +137,8 @@ type AttachmentObjectStore interface {
 
 type AttachmentScanner interface {
 	Available() bool
-	// Submit must use idempotencyKey as an exactly-once business coordinate.
-	// The same key and object tuple must return the original scan reference;
-	// the same key with a different tuple must fail.
+	// Submit 以 idempotencyKey 作为业务上的唯一执行坐标：同键同对象必须返回原扫描引用，
+	// 同键换对象必须失败。
 	Submit(context.Context, string, string, string, string, uint64, string) (string, error)
 }
 
@@ -291,8 +289,7 @@ func (s *AttachmentService) CreateUpload(ctx context.Context, opportunityID uint
 		return nil, ErrIdempotencyKeyTooLong
 	}
 	hash := attachmentRequestHash(opportunityID, name, input.SizeBytes, mediaType, digest)
-	// Do not persist an unusable session: production defaults deliberately fail
-	// before metadata is written until both trust-boundary adapters are wired.
+	// 对象存储和扫描器两个信任边界未同时接通前，不持久化无法完成的上传会话。
 	if !s.store.Available() || !s.scanner.Available() {
 		return nil, ErrAttachmentUnavailable
 	}
@@ -398,9 +395,8 @@ func (s *AttachmentService) CompleteUpload(ctx context.Context, opportunityID ui
 	if !s.store.Available() || !s.scanner.Available() {
 		return nil, ErrAttachmentUnavailable
 	}
-	// Claim finalization before any slow external call. A crashed or concurrent
-	// request may resume FINALIZING; Finalize and scanner Submit are required to
-	// be idempotent, with PublicID as the stable scanner coordinate.
+	// 慢速外部调用前先领取终结状态；崩溃恢复或并发请求可以续跑 FINALIZING。
+	// 对象终结和扫描提交都必须幂等，并以 PublicID 作为稳定扫描坐标。
 	expected := value.Version
 	leaseUntil := s.now().Add(attachmentSideEffectLease)
 	value.UpdatedBy = principal.UserID

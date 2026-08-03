@@ -191,8 +191,7 @@ func snapshotUpdates(value *Snapshot) map[string]any {
 	}
 }
 
-// normalizeChildren makes the trusted claim scope authoritative. The source
-// response cannot move child rows into another tenant, customer or project.
+// normalizeChildren 以已验证的父级范围为准，上游响应不能把子记录移动到其他租户、客户或项目。
 func normalizeChildren(bundle *Bundle) {
 	for i := range bundle.Milestones {
 		bundle.Milestones[i].TenantID = bundle.Snapshot.TenantID

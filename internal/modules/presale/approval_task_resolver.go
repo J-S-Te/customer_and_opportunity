@@ -56,6 +56,8 @@ type HTTPApprovalTaskResolver struct {
 	nonceReader io.Reader
 }
 
+// 解析器使用专用机器客户端和最小读取 scope 调用审批服务；只接受 HTTPS、禁止重定向，
+// 并为每次请求附加时间戳、请求追踪号和随机 nonce，降低凭据误用与重放风险。
 func NewHTTPApprovalTaskResolver(ctx context.Context, options ApprovalTaskResolverOptions) (*HTTPApprovalTaskResolver, error) {
 	for name, value := range map[string]string{"endpoint": options.Endpoint, "token URL": options.TokenURL, "client ID": options.ClientID, "client secret": options.ClientSecret} {
 		if strings.TrimSpace(value) == "" || value != strings.TrimSpace(value) {
@@ -96,6 +98,8 @@ func NewHTTPApprovalTaskResolver(ctx context.Context, options ApprovalTaskResolv
 	}, nil
 }
 
+// 返回结果必须与请求中的实例、节点和审批人逐项一致且仍为 PENDING。
+// 响应大小、媒体类型和 JSON 字段均严格校验，任何协议漂移都按依赖不可用失败关闭。
 func (r *HTTPApprovalTaskResolver) ResolveCurrentTask(ctx context.Context, query ApprovalTaskQuery) (ApprovalTask, error) {
 	if r == nil || r.client == nil || !validApprovalTaskIdentity(query.TenantID) || !validApprovalTaskIdentity(query.EngineInstanceID) || !validApprovalTaskIdentity(query.ApproverID) || query.Node < 1 || query.Node > 2 {
 		return ApprovalTask{}, ErrDependencyUnavailable

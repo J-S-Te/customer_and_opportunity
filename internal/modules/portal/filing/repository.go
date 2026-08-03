@@ -74,6 +74,7 @@ func (r *GORMRepository) FindOwned(ctx context.Context, actor Actor, publicID st
 	return filingResult(&value, err)
 }
 func (r *GORMRepository) FindOwnedForUpdate(ctx context.Context, actor Actor, publicID string) (*Filing, error) {
+	// 行锁仍同时限定租户、客户和账号，不能为加锁便利而退化为仅主键查询。
 	var value Filing
 	err := r.tx(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).Where("tenant_id=? AND customer_id=? AND public_id=? AND deleted_at IS NULL", actor.TenantID, actor.CustomerID, publicID).Take(&value).Error
 	return filingResult(&value, err)
@@ -142,6 +143,7 @@ func (r *GORMRepository) UpdateMatrix(ctx context.Context, value *MatrixSelectio
 	return nil
 }
 func (r *GORMRepository) NextSubmissionSequence(ctx context.Context, tenant string, filingID uint64) (uint64, error) {
+	// 调用方已锁定备案头记录，序号只用于同一聚合内不可变快照排序。
 	var max uint64
 	err := r.tx(ctx).Model(&SubmissionSnapshot{}).Where("tenant_id=? AND filing_id=?", tenant, filingID).Select("COALESCE(MAX(sequence),0)").Scan(&max).Error
 	return max + 1, err
@@ -153,6 +155,7 @@ func (r *GORMRepository) CreateSubmissionOutbox(ctx context.Context, value *Subm
 	return r.tx(ctx).Create(value).Error
 }
 func (r *GORMRepository) CancelWaitingSubmissionOutbox(ctx context.Context, tenant string, filingID uint64, at time.Time) error {
+	// 解锁只取消尚未签订外部契约的等待项；已领取或已投递任务不能被追溯取消。
 	return r.tx(ctx).Model(&SubmissionOutbox{}).
 		Where("tenant_id=? AND filing_id=? AND status='WAITING_CONTRACT'", tenant, filingID).
 		Updates(map[string]any{"status": "CANCELED", "next_retry_at": nil, "locked_by": "", "locked_until": nil, "last_error_summary": "canceled by authorized filing unlock", "sent_at": at.UTC()}).Error
