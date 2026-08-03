@@ -16,10 +16,8 @@ import (
 
 const customerMergedEventType = "CUSTOMER_MERGED"
 
-// MergeRepository is separate from the regular customer repository because a
-// merge coordinates several already-existing CRM aggregates. Keeping this
-// boundary explicit also prevents a caller from treating a partial table
-// update as a completed merge.
+// MergeRepository 单独表达跨多个既有聚合的合并事务，避免调用方把某张表的局部迁移
+// 误认为客户合并已经完整完成。
 type MergeRepository interface {
 	WithMergeTransaction(context.Context, func(context.Context) error) error
 	LockCustomersForMerge(context.Context, auth.Principal, uint64, uint64) (*Customer, *Customer, error)
@@ -34,8 +32,8 @@ type MergeRepository interface {
 	CreateChangeLog(context.Context, *ChangeLog) error
 }
 
-// Merge makes the target customer the surviving master. The method requires
-// both records to remain in the caller's data scope while their rows are locked.
+// 合并后目标客户作为唯一存续主记录；源、目标两行加锁后仍须同时处于操作者数据范围内，
+// 防止利用可见客户把不可见客户的数据并入自己范围。
 func (s *Service) Merge(ctx context.Context, input MergeRequest) (*MergeResponse, error) {
 	principal, err := principalFromContext(ctx)
 	if err != nil {

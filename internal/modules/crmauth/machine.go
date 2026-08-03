@@ -47,9 +47,8 @@ func NewMachineAuthenticator(_ context.Context, db *gorm.DB, options MachineOpti
 	return &MachineAuthenticator{verifier: verifier, db: db, options: options, now: time.Now}, nil
 }
 
-// Authenticate verifies a platform client-credentials token and consumes the
-// caller's request nonce. The signed scope becomes the machine Principal's only
-// permission set; browser roles and headers are never considered.
+// Authenticate 校验平台 client_credentials 令牌并消费请求 nonce。机器 Principal 的权限仅来自签名 scope，
+// 不读取浏览器角色或业务自定义请求头，避免两套身份语义混用。
 func (a *MachineAuthenticator) Authenticate(ctx context.Context, request *http.Request) (sharedauth.Principal, error) {
 	parts := strings.Fields(request.Header.Get("Authorization"))
 	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") || parts[1] == "" {
@@ -60,8 +59,7 @@ func (a *MachineAuthenticator) Authenticate(ctx context.Context, request *http.R
 		return sharedauth.Principal{}, ErrUnauthenticated
 	}
 	claims := machineClaims{Subject: verified.Subject, OAuthClientID: verified.OAuthClientID, TenantID: verified.TenantID, TokenUse: "application", Scopes: verified.Scopes}
-	// Platform contract: sub is the public client_id while oauth_client_id is
-	// the registry record ID. They are distinct required bindings.
+	// 平台协议中 sub 是公开 client_id，oauth_client_id 是注册表记录 ID；二者是不同且都必须存在的绑定。
 	if err := validateMachineClaims(claims, a.options.TenantID); err != nil {
 		return sharedauth.Principal{}, ErrUnauthenticated
 	}
@@ -76,6 +74,7 @@ func (a *MachineAuthenticator) Authenticate(ctx context.Context, request *http.R
 		return sharedauth.Principal{}, ErrUnauthenticated
 	}
 	replayHash := tokenHash(claims.TenantID + "\x00" + claims.OAuthClientID + "\x00" + claims.Subject + "\x00" + nonce)
+	// 时间戳限制重放窗口，数据库唯一摘要负责跨实例“只消费一次”；分隔符避免不同字段拼接产生同一摘要输入。
 	if err := a.db.WithContext(ctx).Where("expires_at <= ?", now).Delete(&MachineRequestReplay{}).Error; err != nil {
 		return sharedauth.Principal{}, err
 	}

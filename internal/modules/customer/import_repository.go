@@ -23,6 +23,7 @@ type ImportRepository interface {
 }
 
 func (r *GORMRepository) LockAndRenewImportLease(ctx context.Context, job *ImportJob, lockToken string, now, lockedUntil time.Time) error {
+	// lock_token 是 fencing token：只有当前持有者能续租和推进，过期旧进程即使恢复也无法写结果。
 	db := database.FromContext(ctx, r.db)
 	var locked ImportJob
 	err := db.Clauses(clause.Locking{Strength: "UPDATE"}).
@@ -128,11 +129,8 @@ func (r *GORMRepository) ClaimImport(ctx context.Context, tenantID, actorID, job
 	return &job, rows, nil
 }
 
-// validateImportClaim deliberately does not bind an expired lease takeover to
-// the previous browser's idempotency key. The same tenant actor and original
-// preview version may resume with a new key after a browser refresh; the new
-// lock token/version fences the old worker, while either key can later rebuild
-// the same durable COMPLETED response.
+// validateImportClaim 刻意不要求过期租约接管沿用旧浏览器的幂等键。同一租户操作者可在刷新后以新键、
+// 原预览版本恢复；新 lock token/版本隔离旧执行者，而任一键最终都只能重建同一份持久化完成结果。
 func validateImportClaim(job *ImportJob, requestVersion uint64, now time.Time) error {
 	if job == nil {
 		return ErrImportJobNotFound

@@ -16,8 +16,8 @@ type Claims struct {
 	AccessToken    string
 }
 
-// OIDCClient owns authorization URL creation, code exchange and cryptographic
-// validation of issuer, audience, signature, nonce and token_use.
+// OIDCClient 负责授权地址、授权码兑换，以及发行方、受众、签名、nonce 与 token_use 的密码学校验。
+// 业务服务只接收已验证声明，不能把浏览器回传字段直接提升为登录主体。
 type OIDCClient interface {
 	AuthorizationURL(state, nonce, codeChallenge, returnPath string) (string, error)
 	ExchangeAndValidate(context.Context, string, string, string) (Claims, error)
@@ -36,6 +36,7 @@ type InviteClient interface {
 	Consume(context.Context, string, string) error
 }
 
+// SecretProtector 隔离持久化层与明文访问令牌、邀请令牌和 PKCE 材料，降低数据库泄露后的重放风险。
 type SecretProtector interface {
 	Encrypt(context.Context, []byte) ([]byte, error)
 	Decrypt(context.Context, []byte) ([]byte, error)
@@ -63,6 +64,7 @@ type Repository interface {
 	AcknowledgeSecurityEvent(context.Context, string, string, string, time.Time) error
 }
 
+// AccessDisableRepository 单独表达需要强事务保证的下线协议；旧仓储不支持时必须显式失败。
 type AccessDisableRepository interface {
 	DisableLink(context.Context, DisableCommand, time.Time) (DisableResult, error)
 }

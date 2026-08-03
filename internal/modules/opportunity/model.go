@@ -88,9 +88,8 @@ type Followup struct {
 
 func (Followup) TableName() string { return "crm_opportunity_followups" }
 
-// ExternalLink is the immutable local projection of one trusted quotation or
-// bid status callback. CRM owns only this read-only snapshot; the originating
-// system remains authoritative for the external business document.
+// ExternalLink 是可信报价/投标状态回调在 CRM 中的不可变投影。CRM 只拥有该只读快照，
+// 外部业务单据及其最终状态仍由来源系统负责。
 type ExternalLink struct {
 	ID            uint64           `gorm:"primaryKey;autoIncrement"`
 	TenantID      string           `gorm:"size:64;not null;uniqueIndex:uq_opportunity_external_status,priority:1"`
@@ -106,9 +105,8 @@ type ExternalLink struct {
 
 func (ExternalLink) TableName() string { return "crm_opportunity_external_links" }
 
-// Member is the canonical membership row for one platform subject. Replacing a
-// team deactivates removed rows instead of deleting them, so historical
-// subjects remain available to audits even after they leave the current team.
+// Member 是平台主体在商机团队中的当前规范记录。替换团队时仅停用移除成员而不物理删除，
+// 保证成员退出当前团队后仍能被历史审计引用。
 type Member struct {
 	database.Model
 	OpportunityID uint64     `gorm:"not null;index;uniqueIndex:uq_opportunity_member,priority:2"`
@@ -125,10 +123,8 @@ const (
 	MemberTermSourceLegacySnapshot = "LEGACY_SNAPSHOT"
 )
 
-// MemberTerm is one immutable participation interval for an opportunity team
-// member. The canonical Member row answers who is on the team now; terms retain
-// repeated joins, removals and role changes without inferring a display name or
-// employment status from an opaque platform subject.
+// MemberTerm 保存团队成员的一段不可变参与区间；Member 回答“现在是谁”，区间记录则保留
+// 多次加入、移除和角色变化。平台主体是不透明标识，不能据此推断姓名或任职状态。
 type MemberTerm struct {
 	ID               uint64     `gorm:"primaryKey;autoIncrement"`
 	TenantID         string     `gorm:"size:64;not null;index"`
@@ -161,10 +157,8 @@ type ChangeIdempotency struct {
 
 func (ChangeIdempotency) TableName() string { return "crm_opportunity_change_idempotency" }
 
-// CreateIdempotency is the durable, actor-bound replay coordinate for one
-// opportunity creation command. The request is retained only as a digest. The
-// response snapshot contains the same public DTO returned at creation time so
-// later master-data changes cannot alter an exact retry's result.
+// CreateIdempotency 是绑定操作者的商机创建重放坐标。请求仅保留摘要，响应快照保存创建时的公开 DTO，
+// 后续主数据变化不能改变完全相同重试的返回结果。
 type CreateIdempotency struct {
 	ID             uint64    `gorm:"primaryKey;autoIncrement"`
 	TenantID       string    `gorm:"size:64;not null;uniqueIndex:uq_opportunity_create_idem,priority:1"`
@@ -181,10 +175,8 @@ type CreateIdempotency struct {
 
 func (CreateIdempotency) TableName() string { return "crm_opportunity_create_idempotency" }
 
-// OutboxEvent is a module-local view of the shared CRM transactional outbox.
-// Owner-change notifications are inserted in the same transaction as the
-// optimistic opportunity update and consumed by the CRM in-product
-// notification projection worker.
+// OutboxEvent 是共享事务发件箱在商机模块中的本地模型。负责人变更通知与乐观锁更新原子写入，
+// 再由 CRM 站内通知投影任务异步消费。
 type OutboxEvent struct {
 	ID               uint64     `gorm:"primaryKey;autoIncrement"`
 	EventID          string     `gorm:"size:64;not null;uniqueIndex"`

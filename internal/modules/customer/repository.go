@@ -32,9 +32,8 @@ type Repository interface {
 	ListOpportunityHistory(context.Context, string, uint64, int, int) (pagination.Page[OpportunitySummary], error)
 }
 
-// CreateRepository owns the transaction and durable replay operations used by
-// interactive creation. Keeping it separate preserves import's intentionally
-// independent per-row creation semantics.
+// CreateRepository 负责交互式创建所需的事务与持久化重放坐标。
+// 将它与通用仓储分离，可避免批量导入的“逐行独立提交”语义被误改成整批事务。
 type CreateRepository interface {
 	WithCreateTransaction(context.Context, func(context.Context) error) error
 	FindCreateIdempotency(context.Context, string, string, string) (*CreateIdempotency, error)
@@ -119,8 +118,8 @@ func (r *GORMRepository) CreateFollowup(ctx context.Context, model *Followup) er
 	return database.FromContext(ctx, r.db).Create(model).Error
 }
 
-// LockActiveForWrite shares the same customer-row lock protocol as merge.
-// Follow-up creation holds this lock until its insert and audit commit.
+// LockActiveForWrite 与客户合并共用同一行锁协议。跟进记录的插入和审计提交前一直持锁，
+// 防止合并事务在并发窗口中迁移完关系后又出现写入原客户的新记录。
 func (r *GORMRepository) LockActiveForWrite(ctx context.Context, principal auth.Principal, customerID uint64) (*Customer, error) {
 	var model Customer
 	err := scopedCustomer(database.FromContext(ctx, r.db).Model(&Customer{}), principal).
@@ -154,9 +153,8 @@ func (r *GORMRepository) ListFollowups(ctx context.Context, tenantID string, cus
 
 func (r *GORMRepository) ListChangeLogs(ctx context.Context, tenantID string, customerID uint64, page, pageSize int) (pagination.Page[ChangeLogResponse], error) {
 	page, pageSize = pagination.Normalize(page, pageSize)
-	// The operation-log tab is backed by the shared append-only audit stream,
-	// not just field deltas, so create, status, follow-up and merge actions are
-	// visible under the same customer permission boundary.
+	// 操作日志读取共享的追加式审计流，而不只读取字段差异表，因此创建、状态、跟进和合并
+	// 都在同一个客户可见性边界下展示。
 	db := database.FromContext(ctx, r.db).Table("crm_audit_events").
 		Where("tenant_id = ? AND module = ? AND resource_type = ? AND resource_id = ?", tenantID, "customer", "customer", stringUint(customerID))
 	var total int64
@@ -230,9 +228,8 @@ func (r *GORMRepository) FindCreateIdempotency(ctx context.Context, tenantID, ac
 	return &model, err
 }
 
-// FindCreatedCustomer verifies that a replay still points to the resource
-// created by the same tenant actor. It deliberately does not use current owner
-// scope because customer.create permits assigning a different owner.
+// FindCreatedCustomer 确认重放记录仍指向同租户、同操作者创建的资源。
+// 这里不能套用当前负责人范围，因为 customer.create 本来就允许把新客户分配给其他负责人。
 func (r *GORMRepository) FindCreatedCustomer(ctx context.Context, tenantID, actorID string, customerID uint64) (*Customer, error) {
 	var model Customer
 	err := database.FromContext(ctx, r.db).
@@ -422,8 +419,8 @@ func (r *GORMRepository) VoidBlockers(ctx context.Context, tenantID string, cust
 			blockers = append(blockers, check.code)
 		}
 	}
-	// Presale owns opportunity_id rather than customer_id, so this dependency must
-	// follow the real relationship instead of assuming a non-existent column.
+	// 售前记录关联的是 opportunity_id 而不是 customer_id，阻断检查必须沿真实关系连接，
+	// 不能假设售前表存在客户字段而漏掉依赖。
 	var activePresale int64
 	err := db.Table("crm_presale_requests AS pr").Joins("JOIN crm_opportunities AS o ON o.id = pr.opportunity_id AND o.tenant_id = pr.tenant_id AND o.deleted_at IS NULL").Where("pr.tenant_id = ? AND o.customer_id = ? AND pr.deleted_at IS NULL AND pr.status NOT IN ('COMPLETED','CANCELLED','REJECTED')", tenantID, customerID).Count(&activePresale).Error
 	if err != nil {

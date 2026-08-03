@@ -55,8 +55,8 @@ func NewService(db *gorm.DB, repo Repository, auditWriter audit.Writer, codec *s
 	return service
 }
 
-// UseImportScanner injects the deployment's malware/content scanner. Import is
-// deliberately unavailable until this boundary is explicitly configured.
+// 导入文件必须先经过部署侧恶意内容扫描器；未显式配置该信任边界时保持功能不可用，
+// 不能因为本地解析器能打开文件就把它当作安全输入。
 func (s *Service) UseImportScanner(scanner ImportFileScanner) *Service {
 	s.scanner = scanner
 	return s
@@ -67,9 +67,8 @@ func (s *Service) UseProjectHistoryReader(reader ProjectHistoryReader) *Service 
 	return s
 }
 
-// UseOwnerDirectory enables authoritative platform validation for owner and
-// organization pairs. Deployments without the formal contract retain existing
-// read/write behavior but the owner picker reports the integration unavailable.
+// 负责人和组织必须作为一对交给基础平台权威目录校验，不能分别验证后自行拼接。
+// 未配置正式集成合同时保留既有业务读写，但负责人选择目录明确报告依赖不可用。
 func (s *Service) UseOwnerDirectory(catalog ownerdirectory.Catalog) *Service {
 	s.owners = catalog
 	return s
@@ -112,6 +111,8 @@ func (s *Service) Create(ctx context.Context, request CreateRequest) (*Response,
 	if err = validateRegistrationContacts(request.Contacts); err != nil {
 		return nil, ErrInvalidContact
 	}
+	// 摘要绑定租户、操作者、标准化业务字段以及敏感字段 HMAC；同一幂等键不能被换载荷复用，
+	// 同时避免把信用代码、电话和邮箱明文写入幂等表。
 	requestHash, err := s.createRequestHash(principal, request)
 	if err != nil {
 		return nil, err
@@ -147,6 +148,7 @@ func (s *Service) Create(ctx context.Context, request CreateRequest) (*Response,
 		model.Contacts = append(model.Contacts, Contact{Model: database.Model{TenantID: principal.TenantID, CreatedBy: principal.UserID, UpdatedBy: principal.UserID, Version: 1}, Name: item.Name, PhoneCipher: phoneCipher, PhoneMasked: security.MaskPhone(item.Phone), EmailCipher: emailCipher, EmailMasked: maskEmail(item.Email), IsRegistration: item.IsRegistration, SortOrder: index})
 	}
 	var response *Response
+	// 事务内再次检查幂等记录与重复客户，关闭“事务外预检后并发插入”的时间窗口。
 	err = s.create.WithCreateTransaction(ctx, func(txCtx context.Context) error {
 		prior, findErr := s.create.FindCreateIdempotency(txCtx, principal.TenantID, principal.UserID, request.IdempotencyKey)
 		if findErr != nil {
@@ -291,20 +293,16 @@ func isCustomerCreateRaceCandidate(err error) bool {
 	if !errors.As(err, &mysqlErr) || mysqlErr.Number != 1062 {
 		return false
 	}
-	// Two identical concurrent requests that carry a credit code can block on
-	// the customer unique index before the losing transaction reaches the
-	// replay-table insert. Both named indexes may therefore trigger a lookup for
-	// an actor-bound winner. The caller returns a replay only after validating
-	// tenant, actor, key, canonical payload, resource and response snapshot; if
-	// no such winner exists, the original business duplicate is preserved.
+	// 两个携带统一信用代码的相同并发请求，失败方可能先撞到客户唯一索引，尚未来得及写入幂等表。
+	// 因此两类已知唯一键冲突都可尝试查找同操作者的胜出记录；只有租户、操作者、键、规范化载荷、
+	// 资源和响应快照全部吻合才按重放返回，否则保留原始业务重复错误。
 	message := strings.ToLower(mysqlErr.Message)
 	return strings.Contains(message, "uq_customer_create_idempotency") ||
 		strings.Contains(message, "uk_customer_credit")
 }
 
-// persistCreatedCustomer must be called inside the caller-owned transaction.
-// It is shared by interactive creation and each independently committed import
-// row so numbering, persistence and masked audit semantics cannot drift.
+// persistCreatedCustomer 必须在调用方持有的事务内执行。交互创建和导入的每个独立提交行共用它，
+// 使编号分配、数据落库和脱敏审计不会形成两套不同语义。
 func (s *Service) persistCreatedCustomer(ctx context.Context, principal auth.Principal, model *Customer, reason string) error {
 	number, err := s.repo.NextNumber(ctx, principal.TenantID, s.now().Format("20060102"))
 	if err != nil {
@@ -374,6 +372,8 @@ func (s *Service) Update(ctx context.Context, id uint64, request UpdateRequest) 
 	before := toResponse(current)
 	current.Name, current.NormalizedName, current.UnifiedCreditCodeCipher, current.UnifiedCreditCodeHMAC = strings.TrimSpace(request.Name), normalizeName(request.Name), creditCipher, creditHMAC
 	current.CustomerType, current.Industry, current.Region, current.OwnerUserID, current.OwnerOrgID, current.UpdatedBy = request.CustomerType, request.Industry, request.Region, request.OwnerUserID, request.OwnerOrgID, principal.UserID
+	// 更新 DTO 的敏感字段使用指针表达“未提交”；未提交时沿用旧密文，避免前端只拿到脱敏值后
+	// 又把掩码覆盖回数据库。全量替换仍通过 ID 校验阻止挂接其他客户的联系人。
 	existingContacts := make(map[uint64]Contact, len(current.Contacts))
 	for _, contact := range current.Contacts {
 		existingContacts[contact.ID] = contact
@@ -445,7 +445,7 @@ func buildChangeLogs(principal auth.Principal, customerID uint64, before, after 
 	appendChange("region", before.Region, after.Region)
 	appendChange("owner_user_id", before.OwnerUserID, after.OwnerUserID)
 	appendChange("owner_org_id", before.OwnerOrgID, after.OwnerOrgID)
-	// Contact DTOs contain masked values only; ciphertext and plaintext never enter audit JSON.
+	// 联系人 DTO 只含脱敏值；密文和明文均不得进入审计 JSON。
 	appendChange("contacts", before.Contacts, after.Contacts)
 	return logs
 }
@@ -601,7 +601,7 @@ func (s *Service) ListChangeLogs(ctx context.Context, id uint64, page, pageSize 
 	if err != nil {
 		return pagination.Page[ChangeLogResponse]{}, err
 	}
-	// Validate visibility before reading the child table, preventing IDOR.
+	// 先通过父客户证明当前主体可见，再读取子表，避免只猜测子资源编号形成 IDOR。
 	if _, err = s.repo.FindByID(ctx, principal, id, false); err != nil {
 		return pagination.Page[ChangeLogResponse]{}, err
 	}

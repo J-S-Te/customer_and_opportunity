@@ -43,6 +43,7 @@ func NewService(repo repository, oidc oidcClient, encryptionKey []byte, options 
 type LoginStart struct{ AuthorizationURL string }
 
 func (s *Service) BeginLogin(ctx context.Context, returnPath string) (LoginStart, error) {
+	// return_to 最终会进入重定向响应，只允许站内绝对路径，阻断开放重定向和响应头注入。
 	if !safeReturnPath(returnPath) {
 		returnPath = "/"
 	}
@@ -64,6 +65,7 @@ func (s *Service) BeginLogin(ctx context.Context, returnPath string) (LoginStart
 		return LoginStart{}, err
 	}
 	now := s.now().UTC()
+	// state 原文仅返回浏览器；服务端保存摘要并加密其余秘密，回调消费后立即删除。
 	if err := s.repo.SaveLogin(ctx, &LoginTransaction{StateHash: tokenHash(state), TenantID: s.options.TenantID, NonceCipher: nonceCipher, CodeVerifierCipher: verifierCipher, ReturnPath: returnPath, ExpiresAt: now.Add(loginTTL), CreatedAt: now}); err != nil {
 		return LoginStart{}, err
 	}
@@ -80,6 +82,7 @@ func (s *Service) CompleteLogin(ctx context.Context, state, code string) (LoginR
 		return LoginResult{}, ErrUnauthenticated
 	}
 	now := s.now().UTC()
+	// 先原子消费 state，再兑换授权码；即使后续校验失败，同一回调也不能重放。
 	transaction, err := s.repo.ConsumeLogin(ctx, tokenHash(state), now)
 	if err != nil {
 		return LoginResult{}, ErrUnauthenticated
@@ -96,10 +99,12 @@ func (s *Service) CompleteLogin(ctx context.Context, state, code string) (LoginR
 	if err != nil {
 		return LoginResult{}, ErrUnauthenticated
 	}
+	// 不直接信任平台返回的扁平权限：必须与本地发布的角色目录精确一致，防止目录漂移或越权声明。
 	claims, err = normalizeAuthorization(claims, s.options.TenantID, s.options.RoleConfigHash, s.options.MaxRoles)
 	if err != nil || !claims.ExpiresAt.After(now) {
 		return LoginResult{}, ErrUnauthenticated
 	}
+	// 本地会话绝不能比上游 ID/Access Token 或本地策略 TTL 活得更久。
 	expiresAt := earliestExpiry(claims.ExpiresAt, now.Add(s.options.SessionTTL))
 	if !expiresAt.After(now) {
 		return LoginResult{}, ErrUnauthenticated
@@ -145,6 +150,8 @@ func (s *Service) Authenticate(ctx context.Context, rawSession string) (sharedau
 		return sharedauth.Principal{}, ErrUnauthenticated
 	}
 	checkedAt := time.Time{}
+	// 会话不是永久授权缓存。超过检查窗口后通过 UserInfo 重新取得完整授权快照；任一字段变化都撤销
+	// 该主体的全部 CRM 会话，使禁用账号、组织调整和权限降级在短窗口内统一生效。
 	if now.Sub(session.AuthorizationCheckedAt) >= authorizationCheckInterval {
 		accessToken, decryptErr := s.codec.decrypt(session.AccessTokenCipher)
 		if decryptErr != nil {
@@ -195,8 +202,8 @@ func principalFromClaims(claims verifiedClaims) sharedauth.Principal {
 		permissions[permission] = struct{}{}
 	}
 	scope := scopeForRoles(claims.Roles)
-	// PersonID comes only from the platform's explicit tenant-scoped PMS binding.
-	// It remains empty when no binding exists and is never inferred from sub.
+	// PersonID 只能来自平台显式、租户内的人员绑定；没有绑定时保持为空，绝不能由 sub 猜测，
+	// 否则售前任务等以人员身份授权的数据会被错误归属。
 	return sharedauth.Principal{UserID: claims.Subject, PersonID: claims.PersonID, TenantID: claims.TenantID, DisplayName: claims.DisplayName, PrimaryOrgID: claims.PrimaryOrgID, Roles: append([]string(nil), claims.Roles...), Permissions: permissions, ScopeMode: scope, OrganizationIDs: append([]string(nil), claims.OrganizationIDs...), RoleConfigHash: claims.RoleConfigHash, AuthzRevision: claims.AuthzRevision}
 }
 

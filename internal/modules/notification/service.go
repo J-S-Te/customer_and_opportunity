@@ -46,8 +46,8 @@ func NewService(db *gorm.DB) *Service {
 	return &Service{db: db, now: func() time.Time { return time.Now().UTC() }}
 }
 
-// ListMine deliberately ignores SELF/ORG/ALL. A broader opportunity data
-// scope never broadens a user's personal notification inbox.
+// ListMine 有意忽略 SELF/ORG/ALL 数据范围：商机可见范围扩大不能连带扩大个人收件箱，
+// 每条通知仍必须按当前用户或人员主体精确匹配。
 func (s *Service) ListMine(ctx context.Context, unreadOnly bool, page, pageSize int) (Page, error) {
 	principal, err := requirePrincipal(ctx)
 	if err != nil {
@@ -124,8 +124,8 @@ func personalInboxQuery(db *gorm.DB, principal auth.Principal) *gorm.DB {
 		scopes = append(scopes, "(type=? AND recipient_id=?)")
 		args = append(args, TypePresaleProgressApplicant, principal.UserID)
 	}
-	// requirePrincipal ensures at least one permission, but a presale principal
-	// without a person claim must still see no assignment notification.
+	// 即使主体拥有售前权限，缺少平台签发的人员标识时也不能查看人员维度的指派通知；
+	// 返回空集比拿用户 ID 猜测人员身份更安全。
 	if len(scopes) == 0 {
 		return query.Where("1=0")
 	}

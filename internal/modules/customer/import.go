@@ -33,15 +33,13 @@ var importHeaders = []string{
 	"负责人组织ID", "登记联系人姓名", "登记联系人电话", "登记联系人邮箱",
 }
 
-// ImportFileScanner is the mandatory trust boundary before workbook parsing.
-// Implementations receive bytes only and must not persist them through this API.
+// ImportFileScanner 是解析工作簿之前的强制信任边界。实现只接收字节，不得通过该接口持久化文件内容。
 type ImportFileScanner interface {
 	Scan(context.Context, []byte) error
 }
 
-// ErrImportFileUnsafe is returned by scanner adapters only when their scan
-// positively classifies the provided workbook bytes as unsafe. Transport,
-// timeout and scanner-internal failures remain dependency-unavailable errors.
+// ErrImportFileUnsafe 只表示扫描器明确判定文件有害；网络、超时和扫描器内部故障必须保留为依赖不可用，
+// 不能把“未完成扫描”误报成“文件安全/不安全”。
 var ErrImportFileUnsafe = errors.New("customer import file is unsafe")
 
 type importCommand struct {
@@ -84,6 +82,7 @@ func (s *Service) PreviewImport(ctx context.Context, file []byte, reason string)
 		}
 		return nil, ErrImportScannerUnavailable
 	}
+	// 解压后的归档大小、行列和单元格长度都受限，避免压缩炸弹与超大共享字符串耗尽内存。
 	workbook, err := safexlsx.ParseWorkbook(file, safexlsx.Limits{MaxArchiveBytes: importMaxFileBytes, MaxRows: importMaxDataRows + 1, MaxColumns: len(importHeaders), MaxCellRunes: 500})
 	if err != nil {
 		return nil, ErrImportInvalidFile
@@ -108,6 +107,7 @@ func (s *Service) PreviewImport(ctx context.Context, file []byte, reason string)
 		}
 	}
 	for index := range parsed {
+		// 先做文件内重复检查，再访问数据库；有结构性错误的行不继续发起昂贵的重复查询。
 		row := &parsed[index]
 		if row.command.UnifiedCreditCode != "" && codeCounts[s.codec.HMAC(row.command.UnifiedCreditCode)] > 1 {
 			row.issues = append(row.issues, ImportRowIssue{Column: "统一社会信用代码", Code: "DUPLICATE_CODE_IN_FILE", Message: "统一社会信用代码在上传文件内重复"})
@@ -152,6 +152,7 @@ func (s *Service) PreviewImport(ctx context.Context, file []byte, reason string)
 		}
 		var ciphertext []byte
 		if status == "READY" {
+			// 仅可导入行保存加密命令；错误/警告行只保留脱敏预览和诊断，缩小敏感数据留存面。
 			commandJSON, marshalErr := json.Marshal(parsedRow.command)
 			if marshalErr != nil {
 				return nil, marshalErr
@@ -167,6 +168,8 @@ func (s *Service) PreviewImport(ctx context.Context, file []byte, reason string)
 		parsedRow.preview.Status, parsedRow.preview.Issues = status, parsedRow.issues
 		previewRows = append(previewRows, parsedRow.preview)
 	}
+	// 首个短事务建立幂等坐标并领取带过期时间的作业租约；浏览器断线后允许同一操作者接管，
+	// 但版本和 lockToken 会隔离旧执行者。
 	err = database.WithTransaction(ctx, s.db, func(txCtx context.Context) error {
 		if createErr := s.imports.CreateImportPreview(txCtx, job, rows); createErr != nil {
 			return createErr
@@ -410,6 +413,7 @@ func (s *Service) CommitImport(ctx context.Context, jobNo, idempotencyKey string
 		return replay, err
 	}
 
+	// 每行独立事务提交，单行数据冲突只标记该行失败，不回滚此前成功客户；每次处理前续租并验证 fencing token。
 	for index := range rows {
 		row := &rows[index]
 		if row.Status != "READY" {
@@ -447,9 +451,8 @@ func (s *Service) CommitImport(ctx context.Context, jobNo, idempotencyKey string
 	return result, nil
 }
 
-// validateCompletedImportReplay ensures a new idempotency key cannot be used
-// to reinterpret an already-completed import with a different preview version.
-// Replays with the original key are independently bound by request_hash.
+// validateCompletedImportReplay 防止换一个幂等键后用不同预览版本重新解释已完成作业；
+// 原幂等键的重放还会由 request_hash 独立约束。
 func validateCompletedImportReplay(job *ImportJob, requestVersion uint64) error {
 	if job == nil || job.Status != "COMPLETED" {
 		return ErrImportJobConflict
@@ -469,6 +472,7 @@ func (s *Service) commitImportRow(ctx context.Context, principal auth.Principal,
 	if err = json.Unmarshal([]byte(plaintext), &command); err != nil {
 		return err
 	}
+	// 预览到提交之间数据可能变化，因此必须在每行事务内重新检查重复项，不能把预览当写入授权。
 	duplicates, err := s.repo.FindDuplicates(ctx, principal.TenantID, normalizeName(command.Name), s.codec.HMAC(command.UnifiedCreditCode), 0)
 	if err != nil {
 		return err
@@ -515,6 +519,7 @@ func (s *Service) commitImportRow(ctx context.Context, principal auth.Principal,
 		}
 		return err
 	}
+	// 成功后清除可执行命令密文，作业表只保留结果；失败分支同样不再保留可重放的命令。
 	row.Status, row.CustomerID, row.CustomerNo, row.CommandCipher = "IMPORTED", &model.ID, model.CustomerNo, nil
 	return s.imports.UpdateImportRow(ctx, row)
 }

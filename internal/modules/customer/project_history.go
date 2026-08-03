@@ -27,9 +27,8 @@ const (
 	maxProjectHistoryPage          = 1_000_000
 )
 
-// ProjectHistoryItem is the CRM anti-corruption projection of Portal-owned
-// project snapshot data. Portal account, manager identity and team fields are
-// intentionally not part of this contract.
+// ProjectHistoryItem 是 CRM 对门户项目快照的防腐层投影。门户账号、项目经理身份和团队字段
+// 不属于该合同，避免 CRM 把门户内部授权模型复制为自己的权威数据。
 type ProjectHistoryItem struct {
 	ProjectID         string     `json:"project_id"`
 	ProjectName       string     `json:"project_name"`
@@ -64,8 +63,8 @@ type ProjectHistoryReaderOptions struct {
 	NonceReader                                       io.Reader
 }
 
-// HTTPProjectHistoryReader calls the Portal-owned, application-JWT-protected
-// projection endpoint with a dedicated client-credentials identity.
+// HTTPProjectHistoryReader 使用专用 client_credentials 身份调用门户拥有的投影接口，
+// 接口同时受应用 JWT 约束，不复用浏览器会话或用户令牌。
 type HTTPProjectHistoryReader struct {
 	endpoint    string
 	client      *http.Client
@@ -176,10 +175,8 @@ func validProjectHistoryPage(page ProjectHistoryPage, expectedPage, expectedPage
 	if page.Items == nil || page.Page != expectedPage || page.PageSize != expectedPageSize || page.Total < int64(len(page.Items)) || len(page.Items) > page.PageSize {
 		return false
 	}
-	// A non-empty page must start inside the declared total, while an empty
-	// page may only be the first empty page or a page after the final item.
-	// This rejects contradictory dependency envelopes such as page 2 with one
-	// item and total 1 without assuming how the Portal repository counts rows.
+	// 非空页的起始位置必须落在依赖声明的总数内；空页只能是首个空页或位于最后一条之后。
+	// 这样能拒绝“总数为 1 却在第 2 页返回数据”等矛盾响应，又不假设门户仓储的计数实现。
 	offset := int64(page.Page-1) * int64(page.PageSize)
 	if len(page.Items) > 0 && (offset >= page.Total || offset+int64(len(page.Items)) > page.Total) {
 		return false
@@ -201,11 +198,8 @@ func validProjectHistoryFreshness(item ProjectHistoryItem) bool {
 	if item.SyncLastSuccessAt == nil {
 		return item.Stale && item.StalenessSeconds == nil
 	}
-	// A page in the current synchronization run may have been persisted before
-	// a later page fails. In that legitimate state the row's SyncedAt is newer
-	// than the customer's last *complete* successful synchronization. The two
-	// timestamps describe different facts, so imposing an ordering between them
-	// would reject a valid stale projection supplied by Portal.
+	// 当前同步批次的前几页可能已落库，而后续页失败；此时行级 SyncedAt 会晚于客户最后一次“完整成功”时间。
+	// 两个时间戳描述不同事实，不能强行要求先后顺序，否则会拒绝门户返回的合法陈旧投影。
 	return !item.SyncLastSuccessAt.IsZero() && item.StalenessSeconds != nil && *item.StalenessSeconds >= 0
 }
 

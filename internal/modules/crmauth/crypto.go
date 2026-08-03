@@ -28,6 +28,7 @@ func newSecretCodec(key []byte) (*secretCodec, error) {
 }
 
 func (c *secretCodec) encrypt(value string) ([]byte, error) {
+	// nonce 随密文前置保存；GCM 要求同一密钥下 nonce 不重复，因此每次加密都从系统 CSPRNG 生成。
 	nonce := make([]byte, c.aead.NonceSize())
 	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
 		return nil, err

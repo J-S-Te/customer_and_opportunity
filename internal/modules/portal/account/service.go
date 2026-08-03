@@ -57,9 +57,8 @@ type DisableResult struct {
 	Version        uint64         `json:"version"`
 }
 
-// Disable freezes the exact Portal identity mapping before the caller revokes
-// its platform role. The local session boundary therefore remains closed even
-// when the second remote step must be retried by the caller's durable saga.
+// Disable 先冻结 Portal 本地身份映射，再由调用方撤销平台角色。
+// 即使远端步骤需要由持久化 Saga 重试，本地会话边界也已关闭，不会继续放行旧权限。
 func (s *Service) Disable(ctx context.Context, cmd DisableCommand) (DisableResult, error) {
 	cmd.TenantID = strings.TrimSpace(cmd.TenantID)
 	cmd.PlatformUserID = strings.TrimSpace(cmd.PlatformUserID)
@@ -83,6 +82,7 @@ func disableRequestHash(command DisableCommand) string {
 }
 
 func (s *Service) Provision(ctx context.Context, cmd ProvisionCommand) (ProvisionResult, error) {
+	// 预配只建立待激活映射，不等价于登录成功；真实 OIDC subject 仍需在回调阶段匹配。
 	if strings.TrimSpace(cmd.TenantID) == "" || strings.TrimSpace(cmd.AccountNo) == "" || strings.TrimSpace(cmd.PlatformUserID) == "" || cmd.CustomerID == 0 {
 		return ProvisionResult{}, ErrInvalidClaims
 	}
@@ -115,9 +115,7 @@ func (s *Service) BeginLogin(ctx context.Context, tenantID, returnPath string) (
 	if strings.TrimSpace(tenantID) == "" {
 		return LoginStart{}, ErrInvalidClaims
 	}
-	// The subject is only trustworthy after the OIDC callback. Ordinary login
-	// therefore creates an unbound context and resolves the ACTIVE link from the
-	// cryptographically validated sub; invitation login remains pre-bound.
+	// subject 只有在 OIDC 回调验签后才可信。普通登录先建未绑定上下文，再按已验证 sub 查活动映射；邀请登录则预先绑定邀请对象。
 	return s.begin(ctx, tenantID, "", 0, "", returnPath)
 }
 
@@ -181,6 +179,7 @@ type LoginMetadata struct {
 }
 
 func (s *Service) CompleteLogin(ctx context.Context, state, code string, metadata LoginMetadata) (LoginResult, error) {
+	// state 先按摘要一次性消费，再解密 nonce/PKCE 完成令牌校验，防止回调重放与授权码替换。
 	now := s.clock.Now().UTC()
 	activation, err := s.repo.ConsumeActivation(ctx, hash(state), now)
 	if err != nil {
@@ -257,9 +256,7 @@ func (s *Service) CompleteLogin(ctx context.Context, state, code string, metadat
 	}); err != nil {
 		return LoginResult{}, err
 	}
-	// CRM consume is deliberately last: once it succeeds the browser session is
-	// already durable. If consume fails, revoke that session and leave the invite
-	// reusable instead of stranding the customer after a one-way remote change.
+	// CRM 邀请消费故意放在最后：远端成功前浏览器会话已持久化；若消费失败则撤销会话并保留邀请可重试。
 	if inviteToken != "" {
 		if err = s.invites.Consume(ctx, inviteToken, claims.Subject); err != nil {
 			revokeErr := s.repo.RevokeSession(ctx, claims.TenantID, claims.Subject, session.SessionIDHash, now)
@@ -292,6 +289,7 @@ func validPortalAuthorization(roles, permissions []string) bool {
 }
 
 func (s *Service) AuthenticateSession(ctx context.Context, tenantID, rawToken string) (*Session, error) {
+	// Cookie 仅携带高熵令牌，数据库按摘要检索；租户、撤销和到期边界均由服务端重新验证。
 	now := s.clock.Now().UTC()
 	sessionHash := hash(rawToken)
 	session, err := s.repo.FindSession(ctx, tenantID, sessionHash, now)
@@ -363,7 +361,7 @@ func sameStringSet(left, right []string) bool {
 	return true
 }
 
-// Logout revokes the server-side session before the browser cookie is cleared.
+// Logout 先撤销服务端会话，再由浏览器清除 Cookie；仅删除 Cookie 无法阻止已泄露令牌继续使用。
 func (s *Service) Logout(ctx context.Context, tenantID, subject, rawToken string) error {
 	if strings.TrimSpace(tenantID) == "" || strings.TrimSpace(subject) == "" || strings.TrimSpace(rawToken) == "" {
 		return ErrInvalidLoginState
@@ -404,9 +402,8 @@ type SecurityOverview struct {
 	Events            []SecurityEventView `json:"events"`
 }
 
-// AccountSecurity returns only data owned by the authenticated OIDC subject.
-// The caller supplies the configured security-center URL; no request value is
-// accepted here, preventing an attacker-controlled redirect target.
+// AccountSecurity 只返回已认证 OIDC 主体拥有的数据。
+// 安全中心地址来自受控配置而非请求参数，避免攻击者注入跳转目标。
 func (s *Service) AccountSecurity(ctx context.Context, session *Session, securityCenterURL string) (SecurityOverview, error) {
 	events, err := s.repo.ListSecurityEvents(ctx, session.TenantID, session.PlatformUserID, 50)
 	if err != nil {
@@ -472,8 +469,7 @@ func securityEventViews(values []SecurityEvent) []SecurityEventView {
 
 func (s *Service) writeLoginSecurityEvent(ctx context.Context, activation *ActivationContext, eventType, risk, reason string, metadata LoginMetadata, now time.Time) {
 	if activation.ExpectedPlatformUserID == "" || activation.CustomerID == 0 {
-		// Ordinary-login failures have no authenticated subject. Persisting them
-		// against a guessed account would create an IDOR-prone event assignment.
+		// 普通登录失败时尚无已认证主体，不能把事件归到猜测账号，否则会形成可被 IDOR 利用的错误归属。
 		return
 	}
 	s.writeSecurityEvent(ctx, activation.TenantID, activation.ExpectedPlatformUserID, activation.CustomerID, eventType, risk, reason, metadata, now)
@@ -522,6 +518,7 @@ func contains(values []string, expected string) bool {
 	return false
 }
 func safeReturnPath(path string) bool {
+	// 回跳地址只能是站内绝对路径，并拒绝协议相对地址，防止登录成功后发生开放重定向。
 	return strings.HasPrefix(path, "/") && !strings.HasPrefix(path, "//") && !strings.ContainsAny(path, "\r\n")
 }
 

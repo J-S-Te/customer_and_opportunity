@@ -1,6 +1,5 @@
-// Package workerruntime persists liveness evidence for independently deployed
-// Portal workers. Server configuration alone is never treated as proof that a
-// worker can consume newly admitted work.
+// Package workerruntime 持久化独立部署的 Portal worker 存活证据。
+// 仅有服务端配置不能证明 worker 正在消费任务，因此新任务准入依赖最近心跳。
 package workerruntime
 
 import (
@@ -47,6 +46,7 @@ type Repository struct{ db *gorm.DB }
 func NewRepository(db *gorm.DB) *Repository { return &Repository{db: db} }
 
 func (r *Repository) HasFreshHeartbeat(ctx context.Context, workerType string, notBefore time.Time) (bool, error) {
+	// 只要任一该类型实例心跳新鲜即可准入；实例明细不暴露给业务服务。
 	if r == nil || r.db == nil || !validWorkerType(workerType) || notBefore.IsZero() {
 		return false, ErrInvalidIdentity
 	}
@@ -58,6 +58,7 @@ func (r *Repository) HasFreshHeartbeat(ctx context.Context, workerType string, n
 }
 
 func (r *Repository) Start(ctx context.Context, workerType, instanceID string, startedAt time.Time) error {
+	// 同一实例重启以 started_at 区分 incarnation，旧进程之后不能刷新新进程的心跳。
 	workerType, instanceID = strings.TrimSpace(workerType), strings.TrimSpace(instanceID)
 	if r == nil || r.db == nil || !validWorkerType(workerType) || instanceID == "" || len(instanceID) > 128 || startedAt.IsZero() {
 		return ErrInvalidIdentity
@@ -73,6 +74,7 @@ func (r *Repository) Start(ctx context.Context, workerType, instanceID string, s
 }
 
 func (r *Repository) Refresh(ctx context.Context, workerType, instanceID string, startedAt, now time.Time) error {
+	// 更新条件包含规范化后的启动时间；零更新意味着实例身份已被替换，应停止继续声明存活。
 	workerType, instanceID = strings.TrimSpace(workerType), strings.TrimSpace(instanceID)
 	if r == nil || r.db == nil || !validWorkerType(workerType) || instanceID == "" || len(instanceID) > 128 || startedAt.IsZero() || now.IsZero() {
 		return ErrInvalidIdentity
@@ -114,9 +116,7 @@ func canonicalStartedAt(value time.Time) time.Time {
 	return value.UTC().Truncate(time.Millisecond)
 }
 
-// RefreshLoop periodically refreshes an already-created heartbeat. Refresh
-// failures are reported but never block or terminate the worker's processing
-// loop; failed evidence naturally expires and admission closes.
+// RefreshLoop 周期刷新已创建的心跳。刷新失败会上报但不阻塞 worker 的处理循环；证据自然过期后准入自动关闭。
 func RefreshLoop(ctx context.Context, repo *Repository, workerType, instanceID string, startedAt time.Time, onError func(error)) {
 	ticker := time.NewTicker(HeartbeatInterval)
 	defer ticker.Stop()

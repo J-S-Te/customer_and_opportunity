@@ -23,8 +23,8 @@ const (
 	RecipientProgressAssignee    = "PROGRESS_ASSIGNEE"
 )
 
-// Notification is the CRM-local in-product projection. Delivery into this
-// table does not imply delivery to an external IM, email, or SMS channel.
+// Notification 是 CRM 站内通知的本地投影。写入此表只代表站内消息可见，
+// 不代表邮件、短信或即时通信等外部渠道已经投递成功。
 type Notification struct {
 	database.Model
 	SourceEventID      string     `gorm:"size:64;not null;uniqueIndex:uq_crm_notification_source,priority:2"`

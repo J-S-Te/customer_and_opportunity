@@ -18,8 +18,8 @@ type CreateRequest struct {
 	IdempotencyKey     string `json:"-"`
 }
 
-// UpdateRequest contains only ordinary master-data fields. Customer, owner,
-// stage and lifecycle changes use dedicated operations with stronger permissions.
+// UpdateRequest 只承载普通主数据字段；客户归属、负责人、阶段和生命周期变化必须走专用操作，
+// 以应用更严格的权限、状态机与并发校验。
 type UpdateRequest struct {
 	Name               string `json:"name" binding:"required,max=200"`
 	Type               string `json:"type" binding:"required,max=64"`
@@ -136,9 +136,8 @@ const (
 	QuoteAmountCheckMismatch        = "MISMATCH"
 )
 
-// QuoteAmountCheck is a read-time projection. It is bound to an opportunity
-// version and an immutable trusted quotation snapshot, rather than stored as
-// mutable alert state that could become stale after either amount changes.
+// QuoteAmountCheck 是读取时计算的投影，绑定商机版本和可信报价不可变快照；
+// 不把它保存成可变告警状态，避免任一金额变化后遗留陈旧判断。
 type QuoteAmountCheck struct {
 	Status                 string     `json:"status"`
 	Warning                bool       `json:"warning"`
@@ -155,8 +154,8 @@ type ContractTransferRequest struct {
 	IdempotencyKey string `json:"-"`
 }
 
-// ContractTransferResponse confirms only that CRM durably accepted an outbox
-// event. It never represents a contract draft or downstream delivery success.
+// ContractTransferResponse 只确认 CRM 已持久化接收转合同发件箱事件，
+// 不代表合同草稿已经生成，也不代表下游投递成功。
 type ContractTransferResponse struct {
 	OpportunityID  uint64 `json:"opportunity_id"`
 	EventVersion   uint64 `json:"event_version"`

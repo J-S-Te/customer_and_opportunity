@@ -34,6 +34,7 @@ func (r *GORMRepository) SaveLogin(ctx context.Context, value *LoginTransaction)
 
 func (r *GORMRepository) ConsumeLogin(ctx context.Context, stateHash string, now time.Time) (*LoginTransaction, error) {
 	var value LoginTransaction
+	// 行锁与删除处于同一事务，使多个实例收到相同回调时只有一个实例能取得登录秘密。
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 			Where("state_hash = ? AND expires_at > ?", stateHash, now).Take(&value).Error
@@ -79,11 +80,8 @@ func (r *GORMRepository) TouchSession(ctx context.Context, hash string, now, che
 		return nil
 	}
 
-	// MySQL DATETIME(3) stores timestamps at millisecond precision. Parallel browser requests may
-	// therefore write the same last_seen_at (and authorization_checked_at) value, in which case
-	// MySQL reports zero changed rows even though the session is still active. Recheck the
-	// authoritative predicates before treating this as a missing/revoked session; otherwise one
-	// request succeeds while its siblings return 401 and the frontend starts an OAuth refresh loop.
+	// MySQL DATETIME(3) 只有毫秒精度，并行浏览器请求可能写入相同的 last_seen_at，MySQL 因值未变化
+	// 报告 0 行受影响。此时重新检查权威有效条件，不能把合法并发请求误判为会话撤销，否则前端会进入 401/OAuth 刷新循环。
 	var active struct {
 		SessionIDHash string `gorm:"column:session_id_hash"`
 	}

@@ -146,8 +146,7 @@ func (r *GORMRepository) NextNumber(ctx context.Context, tenantID, date string) 
 }
 
 func (r *GORMRepository) CustomerVisible(ctx context.Context, principal auth.Principal, id uint64) (bool, error) {
-	// A shared row lock serializes child creation with customer merge's update
-	// lock. Callers must invoke this inside the same transaction as Create.
+	// 对父客户加共享锁，使商机子记录创建与客户合并的更新锁串行；调用方必须在与 Create 相同的事务中执行。
 	query := database.FromContext(ctx, r.db).Table("crm_customers").Clauses(clause.Locking{Strength: "SHARE"}).Where("tenant_id=? AND id=? AND status=? AND merged_into_id IS NULL AND deleted_at IS NULL", principal.TenantID, id, "ACTIVE")
 	switch principal.ScopeMode {
 	case auth.ScopeAll:
@@ -367,10 +366,8 @@ func (r *GORMRepository) FindChangeIdempotency(ctx context.Context, tenantID str
 	return &model, err
 }
 
-// FindChangeIdempotencyForUpdate is a current read. After waiting on the
-// opportunity row under MySQL REPEATABLE READ, a second ordinary snapshot read
-// may otherwise miss a concurrent winner that committed while this request
-// was blocked.
+// FindChangeIdempotencyForUpdate 使用当前读。MySQL REPEATABLE READ 下，请求等待商机行锁后若继续普通快照读，
+// 可能看不到阻塞期间刚提交的并发胜出记录。
 func (r *GORMRepository) FindChangeIdempotencyForUpdate(ctx context.Context, tenantID string, opportunityID uint64, operation, actorID, key string) (*ChangeIdempotency, error) {
 	var model ChangeIdempotency
 	err := database.FromContext(ctx, r.db).Clauses(clause.Locking{Strength: "UPDATE"}).
@@ -406,7 +403,7 @@ func (r *GORMRepository) Update(ctx context.Context, model *Opportunity, expecte
 	return nil
 }
 
-// UpdateLifecycle atomically guards both the expected version and source state.
+// UpdateLifecycle 在一条更新语句中同时约束期望版本和源状态，防止两个并发生命周期命令都通过事务外检查。
 func (r *GORMRepository) UpdateLifecycle(ctx context.Context, model *Opportunity, expectedVersion uint64, expectedStatus string) error {
 	result := database.FromContext(ctx, r.db).Model(&Opportunity{}).
 		Where("id=? AND tenant_id=? AND version=? AND opp_status=? AND deleted_at IS NULL", model.ID, model.TenantID, expectedVersion, expectedStatus).
@@ -576,9 +573,8 @@ func (r *GORMRepository) LatestExternalLink(ctx context.Context, tenantID string
 	return &model, err
 }
 
-// LatestApprovedQuotation returns the newest quotation whose latest status for
-// that source document is still approved. An older approval for a quotation
-// that was subsequently invalidated must not be used for an amount warning.
+// LatestApprovedQuotation 只返回“该来源单据最新状态仍为已批准”的最新报价；
+// 已被后续状态作废的历史批准不能继续用于金额偏差提示。
 func (r *GORMRepository) LatestApprovedQuotation(ctx context.Context, tenantID string, opportunityID uint64) (*ExternalLink, error) {
 	var model ExternalLink
 	err := latestApprovedQuotationQuery(database.FromContext(ctx, r.db), tenantID, opportunityID).

@@ -46,8 +46,8 @@ type Contact struct {
 
 func (Contact) TableName() string { return "crm_customer_contacts" }
 
-// Stakeholder is a customer-scoped key participant. Phone and email are
-// encrypted independently; only their masked companions may leave the module.
+// Stakeholder 表示客户范围内的关键干系人。电话与邮箱分别加密保存，
+// 离开模块边界的响应和审计只能使用对应脱敏字段。
 type Stakeholder struct {
 	database.Model
 	CustomerID          uint64 `gorm:"not null;index"`
@@ -64,8 +64,8 @@ type Stakeholder struct {
 
 func (Stakeholder) TableName() string { return "crm_customer_stakeholders" }
 
-// InformationSystem describes a customer's protected information system. Its
-// protection level is an MLPS system level and is unrelated to customer credit.
+// InformationSystem 描述客户受保护的信息系统，其中保护等级指等保级别，
+// 与客户信用等级是两套互不替代的业务概念。
 type InformationSystem struct {
 	database.Model
 	CustomerID          uint64     `gorm:"not null;index"`
@@ -92,8 +92,7 @@ type Followup struct {
 
 func (Followup) TableName() string { return "crm_customer_followups" }
 
-// ChangeLog is an append-only, field-oriented customer audit companion. Sensitive
-// before/after values must already be masked or hashed before persistence.
+// ChangeLog 是按字段追加写入的客户变更记录；敏感前后值进入该表前必须已经脱敏或摘要化。
 type ChangeLog struct {
 	ID         uint64    `gorm:"primaryKey"`
 	TenantID   string    `gorm:"size:64;not null;index"`
@@ -109,9 +108,8 @@ type ChangeLog struct {
 
 func (ChangeLog) TableName() string { return "crm_customer_change_logs" }
 
-// MergeLog is the immutable business record for a committed customer merge.
-// MigratedCountsJSON contains aggregate counts only and must never contain
-// contact details or other sensitive customer data.
+// MergeLog 是客户合并提交后的不可变业务凭证。MigratedCountsJSON 只保存关系迁移数量，
+// 不能包含联系人或其他敏感客户数据。
 type MergeLog struct {
 	ID                 uint64    `gorm:"primaryKey;autoIncrement"`
 	TenantID           string    `gorm:"size:64;not null;index"`
@@ -128,8 +126,8 @@ type MergeLog struct {
 
 func (MergeLog) TableName() string { return "crm_customer_merge_logs" }
 
-// MergeIdempotency binds a key to one actor and one canonical request. The
-// response is persisted in the same transaction as the merge for safe replay.
+// MergeIdempotency 将幂等键绑定到一个操作者和一份规范化请求；响应与合并在同一事务落库，
+// 调用方重试时无需重新执行关系迁移。
 type MergeIdempotency struct {
 	ID           uint64    `gorm:"primaryKey;autoIncrement"`
 	TenantID     string    `gorm:"size:64;not null;uniqueIndex:uq_customer_merge_idempotency,priority:1"`
@@ -142,10 +140,8 @@ type MergeIdempotency struct {
 
 func (MergeIdempotency) TableName() string { return "crm_customer_merge_idempotency" }
 
-// CreateIdempotency is the durable, append-only replay record for interactive
-// customer creation. RequestHash is a digest of a canonical request whose
-// sensitive values were first protected with the deployment HMAC key.
-// ResponseJSON contains only the already-masked public Response DTO.
+// CreateIdempotency 是交互式创建的持久化重放记录。RequestHash 基于规范化请求生成，
+// 其中敏感值先由部署密钥做 HMAC；ResponseJSON 只保存已经脱敏的公开响应 DTO。
 type CreateIdempotency struct {
 	ID           uint64    `gorm:"primaryKey;autoIncrement"`
 	TenantID     string    `gorm:"size:64;not null;uniqueIndex:uq_customer_create_idempotency,priority:1"`
@@ -161,7 +157,7 @@ type CreateIdempotency struct {
 
 func (CreateIdempotency) TableName() string { return "crm_customer_create_idempotency" }
 
-// MergeOutboxEvent is the customer module's view of the shared CRM outbox.
+// MergeOutboxEvent 是客户模块写入共享事务发件箱的本地模型，确保合并结果与待发布事件原子提交。
 type MergeOutboxEvent struct {
 	ID               uint64     `gorm:"primaryKey;autoIncrement"`
 	EventID          string     `gorm:"size:64;not null;uniqueIndex"`

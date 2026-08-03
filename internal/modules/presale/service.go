@@ -37,23 +37,22 @@ type Service struct {
 	workerMaxAge      time.Duration
 }
 
+// 审批任务解析器用于把本地审批节点与审批引擎当前待办进行实时绑定；
+// 未配置时审批按钮和审批命令均按依赖不可用处理，而不是仅凭本地角色放行。
 func (s *Service) UseApprovalTaskResolver(resolver ApprovalTaskResolver) *Service {
 	s.approvalTasks = resolver
 	return s
 }
 
-// UseWorkerReadiness installs persisted liveness evidence for the independent
-// delivery worker. New requests fail closed when no instance has a fresh
-// heartbeat; already committed idempotent replays remain readable.
+// 新建申请依赖独立投递 worker 的持久化心跳，而不是仅检查当前进程配置。
+// 没有任何新鲜心跳时新写入失败关闭；已经提交的幂等重放仍可读取，避免重试语义被可用性检查破坏。
 func (s *Service) UseWorkerReadiness(readiness WorkerReadiness, maxAge time.Duration) *Service {
 	s.workerReadiness = readiness
 	s.workerMaxAge = maxAge
 	return s
 }
 
-// UseAuditWriter installs the mandatory privacy-audit sink used before any
-// decrypted contact phone is released. ContactPhone fails closed when this
-// dependency is unavailable.
+// 联系电话明文返回前必须先写入隐私审计；审计存储不可用时敏感数据接口失败关闭。
 func (s *Service) UseAuditWriter(writer audit.Writer) *Service {
 	s.auditWriter = writer
 	return s
@@ -66,6 +65,9 @@ func NewService(repo Repository, opportunities OpportunityReader, phones PhonePr
 	return &Service{repo: repo, opportunities: opportunities, phones: phones, clock: clock, ids: ids, dayHours: "8.00"}
 }
 
+// 创建申请先校验商机的数据范围，再检查租户级幂等键，避免猜测幂等键泄露他人申请。
+// 申请、审批实例和“启动审批”Outbox 在同一事务落库；本地状态先保持 APPROVAL_STARTING，
+// 只有审批引擎回执确认实例创建后才进入 PENDING_APPROVAL。
 func (s *Service) CreateRequest(ctx context.Context, actor Actor, key string, in CreateRequestInput) (*PresaleRequest, error) {
 	if !actor.Can("presale.create") {
 		return nil, ErrForbidden
@@ -218,8 +220,8 @@ func validateCreate(in CreateRequestInput) error {
 	return nil
 }
 
-// MarkApprovalStarted moves the local request only after the real approval
-// engine has acknowledged instance creation.
+// 只有审批引擎确认实例创建后才推进本地状态。事件序号用于吞掉重复或乱序回执，
+// 请求行和审批实例行同时加锁，保证两个状态投影不会分叉。
 func (s *Service) MarkApprovalStarted(ctx context.Context, tenant string, in ApprovalStartedInput) error {
 	return s.repo.WithTransaction(ctx, func(tx context.Context) error {
 		r, e := s.repo.FindRequestForUpdate(tx, tenant, in.RequestID)
@@ -250,6 +252,9 @@ func (s *Service) MarkApprovalStarted(ctx context.Context, tenant string, in App
 	})
 }
 
+// 审批命令不直接改变申请状态，而是把“当前真实待办 + 审批人 + 动作”绑定到审批实例，
+// 并与 Outbox、幂等记录同事务提交。节点 1 仅销售总监可处理，节点 2 仅组长可处理；
+// 最终状态只能由携带同一任务绑定的审批引擎回调推进。
 func (s *Service) RequestApprovalAction(ctx context.Context, actor Actor, id uint64, key string, in ApprovalActionInput) error {
 	if !actor.Can("presale.approve") {
 		return ErrForbidden
@@ -339,6 +344,9 @@ func (s *Service) RequestApprovalAction(ctx context.Context, actor Actor, id uin
 	return s.resolveApprovalMutationRace(ctx, actor, id, key, in.Action, hash)
 }
 
+// 审批回调以引擎任务 ID 做事实级去重，并同时核验实例、事件序号、当前节点和待处理绑定。
+// 第一级通过只切换到第二节点；第二级通过进入待分派；任一级驳回都进入终态。
+// 日志、审批实例和申请状态在同一事务更新，乱序、陈旧或被篡改的事件统一拒绝。
 func (s *Service) HandleApprovalCallback(ctx context.Context, tenant string, in ApprovalCallbackInput) error {
 	in.EngineInstanceID = strings.TrimSpace(in.EngineInstanceID)
 	in.EngineTaskID = strings.TrimSpace(in.EngineTaskID)
@@ -416,6 +424,9 @@ func (s *Service) HandleApprovalCallback(ctx context.Context, tenant string, in 
 	})
 }
 
+// 分派采用“目标集合替换”语义：保留集合不重复写入，移除项结束历史关系，新增项必须来自
+// 当前有效的 PMS 工程师目录且角色一致。首次有效分派会把申请推进到 EXECUTING；执行中
+// 调整人员后还会重新判断所有当前执行人是否已有有效工时，从而可能立即完成任务。
 func (s *Service) ReplaceAssignments(ctx context.Context, actor Actor, id uint64, key string, in ReplaceAssignmentsInput) (*PresaleRequest, error) {
 	if !actor.Can("presale.assign") || !actor.HasRole("team_lead") {
 		return nil, ErrForbidden
@@ -607,16 +618,16 @@ func (s *Service) recordAssignmentNotification(ctx context.Context, actor Actor,
 	})
 }
 
-// AssignmentNotificationEventID is shared with the projection worker so the
-// producer and consumer cannot drift on the immutable event identity contract.
+// 事件 ID 由租户、申请、任职记录和变更类型共同决定，生产者与通知投影使用同一算法，
+// 因此 worker 重试不会为同一次人员变更重复创建通知。
 func AssignmentNotificationEventID(tenantID string, requestID, assignmentID uint64, eventType string) string {
 	value := tenantID + "\x00" + fmt.Sprint(requestID) + "\x00" + fmt.Sprint(assignmentID) + "\x00" + eventType
 	digest := sha256.Sum256([]byte(value))
 	return hex.EncodeToString(digest[:])
 }
 
-// ProgressNotificationEventID binds a personal inbox projection to the
-// immutable progress row and one explicitly namespaced recipient.
+// 进展通知 ID 同时绑定不可变进展记录、分派记录、收件人命名空间和身份，
+// 防止用户 ID 与 PMS 人员 ID 碰撞，也保证同一收件人的重试可去重。
 func ProgressNotificationEventID(tenantID string, requestID, progressID, assignmentID uint64, namespace, recipientID, kind string) string {
 	value := strings.Join([]string{tenantID, fmt.Sprint(requestID), fmt.Sprint(progressID), fmt.Sprint(assignmentID), namespace, recipientID, kind}, "\x00")
 	digest := sha256.Sum256([]byte(value))
@@ -678,6 +689,9 @@ func (s *Service) recordProgressNotifications(ctx context.Context, actor Actor, 
 	return nil
 }
 
+// 新增进展只允许当前执行人操作。进展事实、每个收件人的不可变通知证据和 Outbox
+// 在同一事务提交；申请人按 USER 命名空间通知，其他当前执行人按 PERSON 命名空间通知，
+// 作者自身不会收到重复提醒。
 func (s *Service) AddProgress(ctx context.Context, actor Actor, id uint64, key string, in AddProgressInput) (*ProgressLog, error) {
 	if !actor.Can("presale.progress") || actor.PersonID == "" {
 		return nil, ErrForbidden
@@ -786,6 +800,8 @@ func (s *Service) AddProgress(ctx context.Context, actor Actor, id uint64, key s
 	return created, err
 }
 
+// 撤销权限随状态变化：审批中仅申请人可撤销，审批通过后仅组长或具备专门撤销权限者可操作。
+// 申请行锁、版本号和绑定操作者的幂等摘要共同防止并发覆盖和跨资源重放。
 func (s *Service) Cancel(ctx context.Context, actor Actor, id uint64, key string, in CancelInput) error {
 	key = strings.TrimSpace(key)
 	in.Reason = strings.TrimSpace(in.Reason)
@@ -844,6 +860,8 @@ func (s *Service) Cancel(ctx context.Context, actor Actor, id uint64, key string
 	}, nil)
 }
 
+// 工时只能由当前执行人写入执行中的申请。创建工时、完成条件判断和 PMS 投递 Outbox
+// 同事务提交；当所有当前执行人至少存在一条未作废工时后，最后一次写入会原子推进为完成态。
 func (s *Service) AddWorklog(ctx context.Context, actor Actor, id uint64, key string, in AddWorklogInput) (*Worklog, error) {
 	if !actor.Can("presale.worklog") || actor.PersonID == "" {
 		return nil, ErrForbidden
@@ -1261,11 +1279,9 @@ func (s *Service) Assignments(ctx context.Context, actor Actor, id uint64) ([]As
 	return s.repo.ListAssignments(ctx, actor.TenantID, id)
 }
 
-// requireReadable enforces the same scope as TS-007 list queries. Managers may
-// read all tenant tasks. Sales may read their own applications. Any principal
-// with an authoritative PMS person ID may read its current or historical
-// assignments; PMS assignment roles are not inferred from CRM OIDC roles.
-// This prevents a guessed ID from broadening access beyond a real relation.
+// 详情读取与列表使用相同资源范围：管理角色可读租户内任务，销售只读本人申请，
+// 具有可信 PMS 人员 ID 的主体可读其当前或历史分派。分派角色不从 OIDC 角色猜测，
+// 因而猜中租户内申请 ID 也不能绕过真实业务关系。
 func (s *Service) requireReadable(ctx context.Context, actor Actor, value *PresaleRequest) error {
 	if actor.HasRole("sales_director") || actor.HasRole("team_lead") || actor.HasRole("technical_lead") || actor.HasRole("auditor") {
 		return nil

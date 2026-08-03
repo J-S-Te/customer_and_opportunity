@@ -62,6 +62,8 @@ type platformOIDCClient struct {
 func NewPlatformOIDCClient(ctx context.Context, options OIDCOptions) (*platformOIDCClient, error) {
 	httpClient := &http.Client{Timeout: 10 * time.Second}
 	if options.BackchannelBaseURL != "" {
+		// 浏览器仍使用公开 issuer；仅把服务端发现、换码和 UserInfo 请求改写到容器内地址，
+		// 从而保持令牌 iss 校验不变，同时避免容器回环访问公网入口。
 		publicURL, err := url.Parse(strings.TrimRight(options.Issuer, "/"))
 		if err != nil {
 			return nil, fmt.Errorf("parse CRM OIDC issuer: %w", err)
@@ -147,9 +149,8 @@ func normalizeAuthorization(claims verifiedClaims, expectedTenantID, expectedRol
 		claims.RoleConfigHash == "" || claims.RoleConfigHash != expectedRoleConfigHash || claims.AuthzRevision == 0 {
 		return verifiedClaims{}, errors.New("CRM OIDC identity or authorization metadata is invalid")
 	}
-	// CRM business and append-only audit schemas use 64-byte actor identifiers.
-	// Reject a wider subject during authentication instead of allowing a valid
-	// session whose first business write later fails or truncates its actor.
+	// CRM 业务表和追加式审计表的操作者标识上限为 64 字节。应在认证阶段拒绝过长 subject，
+	// 避免生成“能登录但首次写入才失败或被截断”的不完整会话。
 	if len([]byte(claims.Subject)) > 64 {
 		return verifiedClaims{}, errors.New("CRM OIDC subject exceeds the signed actor identifier boundary")
 	}
@@ -192,6 +193,7 @@ func normalizeAuthorization(claims verifiedClaims, expectedTenantID, expectedRol
 		}
 	}
 	expectedPermissions := make(map[string]struct{})
+	// 权限必须恰好等于有效角色的权限并集；既不允许额外权限，也不接受缺项造成的策略歧义。
 	for _, role := range roles {
 		for _, permission := range rolePermissions[role] {
 			expectedPermissions[permission] = struct{}{}
@@ -306,6 +308,7 @@ type backchannelTransport struct {
 }
 
 func (t *backchannelTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	// 只改写与公开 issuer 完全同源的请求，第三方 URL 继续走原始目标，避免把任意请求导向内网。
 	if request.URL.Scheme != t.public.Scheme || request.URL.Host != t.public.Host {
 		return t.base.RoundTrip(request)
 	}

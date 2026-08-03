@@ -51,6 +51,7 @@ func (h *Handler) Callback(c *gin.Context) {
 		target = strings.TrimRight(h.options.PathPrefix, "/") + "/"
 	}
 	if !strings.HasPrefix(target, h.options.PathPrefix+"/") && target != h.options.PathPrefix {
+		// service 只保证站内路径；这里再收紧到 CRM 挂载前缀，避免登录后跳入同域的其他子系统。
 		target = strings.TrimRight(h.options.PathPrefix, "/") + "/"
 	}
 	c.Redirect(http.StatusFound, target)
@@ -77,8 +78,8 @@ func (h *Handler) Logout(c *gin.Context) {
 	c.Redirect(http.StatusFound, strings.TrimRight(h.options.PathPrefix, "/")+"/")
 }
 
-// RequireSameOrigin protects cookie-authenticated state changes. The custom
-// header prevents a cross-origin HTML form from satisfying the check.
+// RequireSameOrigin 保护基于 Cookie 的写请求。除 Origin 必须与公开入口同源外，还要求自定义头，
+// 使跨站 HTML 表单即便携带 SameSite 允许的 Cookie 也无法通过校验。
 func (h *Handler) RequireSameOrigin(c *gin.Context) {
 	origin, err := url.Parse(c.GetHeader("Origin"))
 	expected, expectedErr := url.Parse(h.options.PublicOrigin)

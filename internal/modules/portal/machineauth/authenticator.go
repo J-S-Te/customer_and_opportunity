@@ -18,14 +18,13 @@ const requestSkew = 5 * time.Minute
 
 var noncePattern = regexp.MustCompile(`^[A-Za-z0-9_-]{32,200}$`)
 
-// Options binds Portal machine tokens to the base platform's issuer,
-// deployment-wide application-token audience, and one tenant.
+// Options 将 Portal 机器令牌绑定到基础平台发行方、部署级应用令牌受众以及一个确定租户。
 type Options struct {
 	Issuer, Audience, PublicKeyPath, TenantID string
 }
 
-// Authenticator verifies base-platform application JWTs and atomically
-// consumes each integration nonce before returning a machine principal.
+// Authenticator 验证基础平台应用 JWT，并在返回机器主体前原子消费每个集成 nonce。
+// “签名有效”不足以放行请求，时间戳和一次性 nonce 共同限制截获令牌的重放窗口。
 type Authenticator struct {
 	verifier tokenVerifier
 	replays  replayStore
@@ -47,7 +46,7 @@ type claims struct {
 	IssuedAt, NotBefore, ExpiresAt             time.Time
 }
 
-// RequestReplay belongs exclusively to the customer_portal schema.
+// RequestReplay 仅属于 customer_portal 数据库，用唯一摘要在多副本间共享重放防线。
 type RequestReplay struct {
 	ReplayHash string `gorm:"primaryKey;size:64"`
 	ExpiresAt  time.Time
@@ -56,8 +55,7 @@ type RequestReplay struct {
 
 func (RequestReplay) TableName() string { return "portal_machine_request_replays" }
 
-// New loads the base platform's read-only Ed25519 application-token public key.
-// Browser OIDC discovery remains a separate adapter and is not used here.
+// New 加载基础平台只读 Ed25519 应用令牌公钥；浏览器 OIDC discovery 属于另一适配器，此处不复用。
 func New(_ context.Context, db *gorm.DB, options Options) (*Authenticator, error) {
 	verifier, err := applicationjwt.LoadVerifier(options.Issuer, options.Audience, options.PublicKeyPath)
 	if err != nil {
@@ -70,8 +68,7 @@ func newAuthenticator(verifier tokenVerifier, replays replayStore, tenantID stri
 	return &Authenticator{verifier: verifier, replays: replays, tenantID: tenantID, now: now}
 }
 
-// Authenticate rejects browser tokens and consumes the timestamp/nonce tuple.
-// The signed scope claim is the returned principal's complete permission set.
+// Authenticate 拒绝浏览器令牌，并消费时间戳/nonce 组合；签名 scope 是返回主体的完整权限集。
 func (a *Authenticator) Authenticate(ctx context.Context, request *http.Request) (sharedauth.Principal, error) {
 	parts := strings.Fields(request.Header.Get("Authorization"))
 	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") || parts[1] == "" {
@@ -91,6 +88,7 @@ func (a *Authenticator) Authenticate(ctx context.Context, request *http.Request)
 		return sharedauth.Principal{}, errUnauthenticated
 	}
 	replayHash := hashReplay(verified.TenantID, verified.OAuthClientID, verified.Subject, nonce)
+	// 摘要绑定租户、客户端和主体，避免不同集成方复用同一个 nonce 相互占用或绕过审计边界。
 	if err := a.replays.Consume(ctx, replayHash, now.Add(requestSkew), now); err != nil {
 		if errors.Is(err, errReplay) {
 			return sharedauth.Principal{}, errUnauthenticated
@@ -105,6 +103,7 @@ func (a *Authenticator) Authenticate(ctx context.Context, request *http.Request)
 }
 
 func validateClaims(value claims, expectedTenant string, now time.Time) error {
+	// 机器接口只接受 application token；主体、客户端和 scope 都要求规范形式，拒绝模糊等价值。
 	if value.TokenUse != "application" || value.TenantID != expectedTenant || strings.TrimSpace(value.Subject) == "" || value.Subject != strings.TrimSpace(value.Subject) || strings.TrimSpace(value.OAuthClientID) == "" || value.OAuthClientID != strings.TrimSpace(value.OAuthClientID) || len(value.Scopes) == 0 {
 		return errUnauthenticated
 	}
@@ -159,6 +158,7 @@ func (v *applicationTokenVerifier) Verify(_ context.Context, rawToken string) (c
 type gormReplayStore struct{ db *gorm.DB }
 
 func (s *gormReplayStore) Consume(ctx context.Context, replayHash string, expiresAt, now time.Time) error {
+	// 唯一键承担跨进程原子消费；清理过期行只是控制表规模，不参与正确性判断。
 	if err := s.db.WithContext(ctx).Where("expires_at <= ?", now).Delete(&RequestReplay{}).Error; err != nil {
 		return err
 	}

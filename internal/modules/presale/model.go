@@ -6,8 +6,8 @@ import (
 	"gorm.io/gorm"
 )
 
-// BaseModel contains the tenancy, audit, soft-delete and optimistic-lock fields
-// required on mutable presale records.
+// BaseModel 统一承载可变售前记录的租户边界、审计字段、软删除标记和乐观锁版本。
+// 业务写操作必须同时限定 tenant_id 与 version，避免跨租户访问和并发覆盖。
 type BaseModel struct {
 	ID        uint64         `gorm:"primaryKey;autoIncrement"`
 	TenantID  string         `gorm:"size:64;not null;index"`
@@ -21,6 +21,8 @@ type BaseModel struct {
 
 type RequestStatus string
 
+// 售前申请以审批引擎确认启动作为进入审批态的边界；审批通过后必须完成分派才能执行。
+// COMPLETED、REJECTED、CANCELLED 是终态，不再参与逾期判断或普通状态推进。
 const (
 	StatusApprovalStarting          RequestStatus = "APPROVAL_STARTING"
 	StatusPendingApproval           RequestStatus = "PENDING_APPROVAL"
@@ -154,8 +156,8 @@ type EngineerSyncJob struct {
 
 func (EngineerSyncJob) TableName() string { return "crm_presale_engineer_sync_jobs" }
 
-// EngineerSyncRequest persists the HTTP actor/idempotency-key replay even when
-// multiple manual requests are coalesced onto one already-active sync job.
+// EngineerSyncRequest 单独保存“操作者 + 幂等键”与同步任务的绑定。
+// 即使多次人工请求被合并到同一个活动任务，每个 HTTP 请求仍能获得稳定、可核验的重放结果。
 type EngineerSyncRequest struct {
 	BaseModel
 	RequestedBy    string `gorm:"size:64;not null"`
@@ -189,9 +191,8 @@ const (
 	AssignmentEventRemoved = "REMOVED"
 )
 
-// AssignmentEvent is the append-only business evidence for an assignee
-// entering or leaving the current execution set. The notification worker
-// projects this record; it never trusts display text from an outbox payload.
+// AssignmentEvent 是人员加入或退出当前执行集合时只追加、不改写的业务证据。
+// 通知消费者依据该记录生成投影，而不信任 Outbox 中可被协议演进影响的展示文本。
 type AssignmentEvent struct {
 	ID                 uint64    `gorm:"primaryKey;autoIncrement"`
 	EventID            string    `gorm:"size:64;not null;uniqueIndex"`
@@ -232,9 +233,8 @@ const (
 	ProgressRecipientAssignee  = "CURRENT_ASSIGNEE"
 )
 
-// ProgressNotificationEvent is immutable occurrence-time evidence for one
-// trusted personal-inbox recipient. User and PMS person identifiers are kept
-// in explicit namespaces and must never be inferred from one another.
+// ProgressNotificationEvent 固化进展发生时的个人收件人证据。
+// 基础平台用户 ID 与 PMS 人员 ID 分属不同命名空间，不能互相推断或直接比较。
 type ProgressNotificationEvent struct {
 	ID                 uint64    `gorm:"primaryKey;autoIncrement"`
 	EventID            string    `gorm:"size:64;not null;uniqueIndex"`
@@ -270,10 +270,9 @@ type StatusLog struct {
 
 func (StatusLog) TableName() string { return "crm_presale_status_logs" }
 
-// MutationReplay is the immutable idempotency coordinator for actor-driven
-// approval, assignment and cancellation commands. It deliberately stores only
-// a digest of the canonical request; business payloads and responses remain in
-// their authoritative domain tables and outbox.
+// MutationReplay 协调审批、分派和撤销命令的幂等重放。
+// 表内只保存绑定操作者、资源和操作语义的规范化摘要；业务事实仍以领域表和 Outbox 为准，
+// 避免幂等记录成为第二份可漂移的业务数据。
 type MutationReplay struct {
 	ID              uint64    `gorm:"primaryKey;autoIncrement"`
 	TenantID        string    `gorm:"size:64;not null;index"`
@@ -292,6 +291,8 @@ func (MutationReplay) TableName() string { return "crm_presale_mutation_replays"
 
 type PushStatus string
 
+// 推送状态反映工时投递到 PMS 的本地投影：worker 领取后进入 SENDING，
+// 失败按退避策略进入 RETRY_WAIT，耗尽重试后进入 DEAD_LETTER 等待人工重放。
 const (
 	PushPending    PushStatus = "PENDING"
 	PushSending    PushStatus = "SENDING"

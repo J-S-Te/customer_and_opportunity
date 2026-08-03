@@ -40,7 +40,7 @@ func (s *Service) ListStakeholders(ctx context.Context, customerID uint64) (*Sta
 	if err != nil {
 		return nil, err
 	}
-	// Resolve the parent through its data scope before querying child rows.
+	// 查询子记录前先按数据范围解析父客户，不能仅凭 customer_id 直接读取子表。
 	if s.profile == nil {
 		return nil, ErrProfileUnavailable
 	}
@@ -352,7 +352,6 @@ func unsafeText(value string) bool {
 }
 
 func maskStakeholderPhone(value string) string {
-	// Keep the shared masking convention for common mobile numbers; do not reveal
-	// short extension formatting through an alternative mask.
+	// 常见手机号沿用统一脱敏格式；短号或分机不能借另一种掩码暴露额外格式信息。
 	return security.MaskPhone(value)
 }

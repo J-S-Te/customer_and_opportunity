@@ -21,8 +21,8 @@ type Actor struct {
 func (a Actor) Can(permission string) bool { return a.Permissions[permission] }
 func (a Actor) HasRole(role string) bool   { return a.Roles[role] }
 
-// RequestListQuery contains only supported presale filters. Authorization
-// scope is deliberately absent: it is derived from Actor by the service.
+// RequestListQuery 只表达业务筛选条件，不允许客户端传入授权范围。
+// 可见范围由服务端根据 Actor 计算，因此筛选只能收窄结果，不能扩大权限边界。
 type RequestListQuery struct {
 	RequestNo     string
 	OpportunityID uint64
@@ -43,8 +43,8 @@ type RequestListQuery struct {
 	SortOrder     string
 }
 
-// RequestQueryScope is an authorization decision produced by Service. Query
-// repositories accept this value instead of user-supplied scope parameters.
+// RequestQueryScope 是服务层完成授权判断后的可信查询条件，仓储层只接受该结果，
+// 从接口结构上阻止前端伪造“查看全部”或冒充申请人、执行人的范围参数。
 type RequestQueryScope struct {
 	TenantID    string
 	All         bool
@@ -129,8 +129,8 @@ type OpportunitySnapshot struct {
 	Venue         Venue
 }
 
-// RequestView is the public API projection. Sensitive contact ciphertext and
-// internal idempotency hashes must never be serialized from the GORM model.
+// RequestView 是面向接口的显式投影，避免直接序列化 GORM 模型而泄露联系人密文、
+// 幂等键或请求摘要等内部字段。
 type RequestView struct {
 	ID                  uint64        `json:"id"`
 	RequestNo           string        `json:"request_no"`
@@ -173,8 +173,7 @@ type AssigneeSummaryView struct {
 	Role       string `json:"role"`
 }
 
-// RequestListItem is a purpose-built projection for TS-007. It does not
-// contain encrypted contact data, idempotency keys or request hashes.
+// RequestListItem 只包含列表决策所需字段，不携带联系人密文、幂等键和请求摘要。
 type RequestListItem struct {
 	ID                  uint64                `json:"id"`
 	RequestNo           string                `json:"request_no"`
@@ -211,8 +210,8 @@ type RequestDetailView struct {
 	CanViewContactPhone bool                  `json:"can_view_contact_phone"`
 }
 
-// ContactPhoneView is returned only by the explicit audited sensitive-data
-// endpoint. It is never embedded into the ordinary request detail projection.
+// ContactPhoneView 仅由独立的敏感信息接口返回；普通详情不会触发解密，
+// 从而使电话号码访问始终经过单独授权和审计。
 type ContactPhoneView struct {
 	RequestID    uint64 `json:"request_id"`
 	ContactPhone string `json:"contact_phone"`
@@ -255,8 +254,8 @@ type AlertView struct {
 
 type AlertListPage = pagination.Page[AlertView]
 
-// OpportunityPresaleItem is the restricted TS-010 projection. Contact data
-// is intentionally not part of this contract.
+// OpportunityPresaleItem 是商机侧的受限摘要，刻意排除联系人信息；
+// 是否可进入售前详情由 CanViewDetail 单独表达，不能由摘要内容反推出权限。
 type OpportunityPresaleItem struct {
 	ID               uint64                `json:"id"`
 	RequestNo        string                `json:"request_no"`
@@ -275,9 +274,8 @@ type OpportunityPresaleItem struct {
 type RequestListPage = pagination.Page[RequestListItem]
 type OpportunityPresalePage = pagination.Page[OpportunityPresaleItem]
 
-// RequestBoardColumn is a bounded status lane. Total is the count after the
-// same authorization scope and filters as GET /presale/requests; Items contains
-// at most ColumnLimit records and is never populated by loading the full table.
+// RequestBoardColumn 是有上限的状态泳道。Total 与列表接口使用相同授权范围和筛选条件，
+// Items 最多返回 ColumnLimit 条，避免看板为了展示数量而加载全部任务。
 type RequestBoardColumn struct {
 	Status RequestStatus     `json:"status"`
 	Items  []RequestListItem `json:"items"`
@@ -299,9 +297,8 @@ type OpportunityFilterOption struct {
 	Label string `json:"label"`
 }
 
-// RequestFilterOptions contains only values observed in the caller's scoped,
-// filtered request set. It deliberately does not query an external personnel
-// directory or expose contact fields.
+// RequestFilterOptions 只从调用者已经有权查看且符合筛选条件的申请中提取选项，
+// 不查询全量人员目录，避免筛选器侧信道泄露不可见人员或业务数据。
 type RequestFilterOptions struct {
 	Opportunities []OpportunityFilterOption `json:"opportunities"`
 	Applicants    []FilterOption            `json:"applicants"`

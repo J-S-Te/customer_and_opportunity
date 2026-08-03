@@ -19,6 +19,7 @@ type GORMRepository struct{ db *gorm.DB }
 func NewGORMRepository(db *gorm.DB) *GORMRepository       { return &GORMRepository{db: db} }
 func (r *GORMRepository) tx(ctx context.Context) *gorm.DB { return database.FromContext(ctx, r.db) }
 func (r *GORMRepository) WithTransaction(ctx context.Context, fn func(context.Context) error) error {
+	// 事务句柄通过上下文传递，保证 fn 内的后续仓储调用共享同一提交边界。
 	return database.WithTransaction(ctx, r.db, fn)
 }
 
@@ -41,9 +42,7 @@ func (r *GORMRepository) UpsertPendingLink(ctx context.Context, value *IdentityL
 		return nil, ErrInvalidClaims
 	}
 	updates := map[string]any{"contact_id": value.ContactID, "updated_by": value.UpdatedBy, "updated_at": value.UpdatedAt}
-	// Compensation replays intentionally carry only immutable integration
-	// identities, not mutable contact PII. An empty display name must therefore
-	// never erase a previously provisioned customer-facing name.
+	// 补偿重试只携带不可变集成身份，不携带可变联系人信息；空展示名不能覆盖已登记的客户名称。
 	if strings.TrimSpace(value.DisplayName) != "" {
 		updates["display_name"] = value.DisplayName
 	}
@@ -77,10 +76,8 @@ type identityDisableOperation struct {
 
 func (identityDisableOperation) TableName() string { return "portal_identity_disable_operations" }
 
-// DisableLink atomically freezes the exact customer/subject mapping and
-// revokes every active Portal session for that subject. Replays against an
-// exact business idempotency key are stable; a conflicting payload or a
-// mapping bound to another customer fails closed.
+// DisableLink 在一个事务中冻结精确的客户/主体映射，并撤销该主体的全部活动会话。
+// 相同业务幂等键的精确重放返回稳定结果；载荷冲突或映射属于其他客户时按拒绝处理。
 func (r *GORMRepository) DisableLink(ctx context.Context, command DisableCommand, now time.Time) (DisableResult, error) {
 	requestHash := disableRequestHash(command)
 	requestID := strings.TrimSpace(requestctx.ID(ctx))
@@ -114,9 +111,7 @@ func (r *GORMRepository) DisableLink(ctx context.Context, command DisableCommand
 			}
 			return err
 		}
-		// A disabled mapping may only be observed through the exact operation
-		// ledger replay checked above. Accepting a fresh key/client here would
-		// manufacture a second audit history for an already-finalized action.
+		// 已禁用映射只能通过上方核验过的操作账本重放返回；接受新键会为已终结动作制造第二条审计历史。
 		if link.Status == IdentityDisabled {
 			return ErrIdentityDisabled
 		}
@@ -136,9 +131,7 @@ func (r *GORMRepository) DisableLink(ctx context.Context, command DisableCommand
 			Updates(map[string]any{"revoked_at": now, "updated_at": now, "updated_by": command.ActorID}).Error; err != nil {
 			return err
 		}
-		// The administrative reason is intentionally not copied into the auth
-		// timeline. The immutable operation ledger binds the canonical payload,
-		// while this minimized event provides a request-correlated security audit.
+		// 管理原因只进入不可变操作账本，不复制到认证时间线；这里仅保存与请求关联的最小安全事件。
 		if err := tx.Create(&AuthEvent{
 			TenantID: command.TenantID, PlatformUserID: command.PlatformUserID, CustomerID: &command.CustomerID,
 			Type: "PORTAL_ACCESS_DISABLED", Result: "SUCCESS", ReasonCode: "CRM_ADMINISTRATIVE_DISABLE",
@@ -171,9 +164,8 @@ func (r *GORMRepository) ActivateLink(ctx context.Context, tenantID string, id, 
 	return nil
 }
 
-// RevertActivation compensates a failed remote invitation consume. The
-// revision and activation timestamp make the update conditional so it cannot
-// undo a later successful login or an administrator's state change.
+// RevertActivation 补偿远端邀请消费失败。
+// revision 与激活时间共同约束更新，避免回滚覆盖后续成功登录或管理员状态变更。
 func (r *GORMRepository) RevertActivation(ctx context.Context, tenantID string, id, revision uint64, actor string, activatedAt time.Time) error {
 	result := r.tx(ctx).Model(&IdentityLink{}).
 		Where("tenant_id = ? AND id = ? AND status = ? AND last_claims_revision = ? AND activated_at = ?", tenantID, id, IdentityActive, revision, activatedAt).
@@ -192,6 +184,7 @@ func (r *GORMRepository) CreateActivation(ctx context.Context, value *Activation
 }
 
 func (r *GORMRepository) ConsumeActivation(ctx context.Context, stateHash string, now time.Time) (*ActivationContext, error) {
+	// 行锁与 consumed_at 条件使 OAuth state 只能消费一次，并阻止并发回调同时通过。
 	var value ActivationContext
 	err := r.tx(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Where("state_hash = ? AND consumed_at IS NULL AND expires_at > ?", stateHash, now).Take(&value).Error; err != nil {
@@ -216,6 +209,7 @@ func (r *GORMRepository) CreateSession(ctx context.Context, value *Session) erro
 	return r.tx(ctx).Create(value).Error
 }
 func (r *GORMRepository) FindSession(ctx context.Context, tenantID, sessionHash string, now time.Time) (*Session, error) {
+	// 查询直接限定租户、未撤销及双重到期时间，调用方不会拿到待二次判断的过期会话。
 	var value Session
 	err := r.tx(ctx).Where("tenant_id = ? AND session_id_hash = ? AND revoked_at IS NULL AND expires_at > ? AND absolute_expiry > ?", tenantID, sessionHash, now, now).Take(&value).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -316,8 +310,7 @@ func (r *GORMRepository) AcknowledgeSecurityEvent(ctx context.Context, tenantID,
 		return result.Error
 	}
 	if result.RowsAffected != 1 {
-		// A concurrent acknowledgement is idempotently successful once the
-		// tenant/subject-scoped event has already been proven to exist.
+		// 已证明事件属于当前租户和主体后，并发确认导致的零更新可视为幂等成功。
 		var count int64
 		if err := r.tx(ctx).Model(&SecurityEvent{}).
 			Where("id = ? AND tenant_id = ? AND platform_user_id = ? AND public_id = ? AND acknowledged_at IS NOT NULL", event.ID, tenantID, subject, publicID).

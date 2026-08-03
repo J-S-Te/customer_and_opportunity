@@ -9,11 +9,15 @@ import (
 type IdentityStatus string
 
 const (
+	// 身份映射先保持待激活，只有完成 OIDC 主体校验与邀请消费后才可建立会话。
 	IdentityPending  IdentityStatus = "PENDING"
 	IdentityActive   IdentityStatus = "ACTIVE"
+	// 禁用态是不可登录边界；切换状态时仓储会同步撤销该主体的活动会话。
 	IdentityDisabled IdentityStatus = "DISABLED"
 )
 
+// IdentityLink 将平台 OIDC 主体绑定到租户内客户及可选联系人。
+// PlatformUserID 是授权身份，DisplayName 仅供展示，二者不可相互替代。
 type IdentityLink struct {
 	database.Model
 	AccountNo          string         `gorm:"size:32;not null;uniqueIndex:uq_portal_account_no,priority:2"`
@@ -87,9 +91,8 @@ type AuthEvent struct {
 
 func (AuthEvent) TableName() string { return "portal_auth_events" }
 
-// SecurityEvent is the customer-visible, deliberately minimized security
-// timeline. It never stores a token, cookie, full IP address or another
-// account's identifier. PublicID is the only identifier exposed by the API.
+// SecurityEvent 是面向客户的最小化安全时间线。
+// 它不保存令牌、Cookie、完整 IP 或其他账号标识；API 仅暴露 PublicID。
 type SecurityEvent struct {
 	database.Model
 	PublicID         string     `gorm:"size:64;not null;uniqueIndex"`
