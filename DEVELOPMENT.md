@@ -310,6 +310,16 @@ SENSITIVE_ENCRYPTION_KEY_BASE64='...' SENSITIVE_HMAC_KEY_BASE64='...' \
 go run ./cmd/seed-demo-data
 ```
 
+本地栈默认租户是 `OIDC_TENANT_ID`（如 `01J00000000000000000000000`），种子命令会自动使用该值；不要把演示数据写到 `tenant-demo`，否则 CRM 会话看不到。
+
+### 门户客户账号开通
+
+```bash
+go run ./cmd/seed-portal-invite -customer 华兴证券股份有限公司
+```
+
+命令走生产 CM-004 saga：平台预置无密码外部客户账号 → 分配 `customer_portal/portal_customer` → Portal 建立身份映射 → 返回一次性激活链接和登录账号。之后在基础平台“系统设置 → 登录账号”对该账号执行“初始化密码”，再打开激活链接完成登录。该链路本地已验证通过；平台侧曾因 `iam_external_identity.login_account_id` 非空约束与同值 UPDATE 零行影响两个缺陷返回 500/409，已修复于 `platform/backend/internal/platform/externalidentity/infrastructure/gorm_repository.go`。
+
 ## 验证命令
 
 ```bash
