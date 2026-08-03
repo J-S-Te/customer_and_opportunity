@@ -61,6 +61,12 @@ GitHub `test` Environment 配置：
 双 schema 备份、受控 migration、两个 API 的滚动更新、健康检查和失败回滚；
 workflow 不修改 platform 的 Compose 或 `deploy-service.sh`。
 
+对应生产资产位于相邻 platform 仓库的 `deploy/production`：
+`compose.yaml`、`customer.env.example`、`portal.env.example` 与
+`bin/deploy-customer-opportunity.sh`。服务器必须先将这些文件安装到
+`DEPLOY_PATH`；工作流会在脚本缺失或不可执行时输出具体远端路径并以 126 退出。
+首次发布若运行凭据尚未补齐，只安全暂存两个不可变 digest，不执行 migration 或启动 API。
+
 ---
 
 ## 2. 目录说明
