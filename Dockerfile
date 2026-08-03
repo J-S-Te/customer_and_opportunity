@@ -12,6 +12,7 @@ COPY . ./
 
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w' -o /out/crm-server ./cmd/crm-server \
     && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w' -o /out/portal-server ./cmd/portal-server \
+    && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w' -o /out/presale-worker ./cmd/presale-worker \
     && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w' -o /out/authz-catalog ./cmd/authz-catalog \
     && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w' -o /out/local-migrate ./cmd/local-migrate
 
@@ -32,6 +33,12 @@ COPY --from=builder /out/crm-server ./crm-server
 EXPOSE 8090
 
 CMD ["./crm-server"]
+
+FROM runtime-base AS presale-worker-runtime
+
+COPY --from=builder /out/presale-worker ./presale-worker
+
+CMD ["./presale-worker"]
 
 FROM runtime-base AS portal-runtime
 

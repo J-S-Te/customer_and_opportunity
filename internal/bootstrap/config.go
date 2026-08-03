@@ -368,14 +368,21 @@ func LoadConfig() (Config, error) {
 		}
 	}
 	if config.OwnerDirectoryEnabled {
-		for key, value := range map[string]string{
-			"PLATFORM_OWNER_DIRECTORY_URL":           config.PlatformOwnerDirectoryURL,
-			"PLATFORM_MANAGEMENT_TOKEN_URL":          config.PlatformManagementTokenURL,
-			"PLATFORM_OWNER_DIRECTORY_CLIENT_ID":     config.PlatformOwnerDirectoryClientID,
-			"PLATFORM_OWNER_DIRECTORY_CLIENT_SECRET": config.PlatformOwnerDirectorySecret,
-		} {
-			if strings.TrimSpace(value) == "" {
-				return Config{}, fmt.Errorf("%s is required when OWNER_DIRECTORY_ENABLED=true", key)
+		// Keep validation order stable. Besides making startup diagnostics predictable,
+		// this ensures the owner-directory endpoint is reported before the shared token
+		// endpoint when the optional integration is enabled without any configuration.
+		requiredOwnerDirectoryFields := []struct {
+			key   string
+			value string
+		}{
+			{"PLATFORM_OWNER_DIRECTORY_URL", config.PlatformOwnerDirectoryURL},
+			{"PLATFORM_MANAGEMENT_TOKEN_URL", config.PlatformManagementTokenURL},
+			{"PLATFORM_OWNER_DIRECTORY_CLIENT_ID", config.PlatformOwnerDirectoryClientID},
+			{"PLATFORM_OWNER_DIRECTORY_CLIENT_SECRET", config.PlatformOwnerDirectorySecret},
+		}
+		for _, field := range requiredOwnerDirectoryFields {
+			if strings.TrimSpace(field.value) == "" {
+				return Config{}, fmt.Errorf("%s is required when OWNER_DIRECTORY_ENABLED=true", field.key)
 			}
 		}
 		if config.PlatformOwnerDirectoryScope != "owner_directory.read" {
