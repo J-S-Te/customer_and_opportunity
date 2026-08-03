@@ -122,8 +122,8 @@ jobs:
           chmod 600 "$HOME/.ssh/id_ed25519"
           printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
           printf -v remote_command \
-            'command -v bash >/dev/null && test -x %q && cd %q && bash %q %q %q' \
-            "$DEPLOY_SCRIPT" "$DEPLOY_PATH" "$DEPLOY_SCRIPT" "$CRM_IMAGE_REF" "$PORTAL_IMAGE_REF"
+            'deploy_script=%q; deploy_path=%q; command -v bash >/dev/null || { echo "remote bash is unavailable" >&2; exit 127; }; test -d "$deploy_path" || { echo "deployment directory is unavailable: $deploy_path" >&2; exit 1; }; test -x "$deploy_script" || { echo "customer deployment script is missing or not executable: $deploy_script" >&2; echo "install the production deployment baseline before retrying" >&2; exit 126; }; cd "$deploy_path" && exec bash "$deploy_script" %q %q' \
+            "$DEPLOY_SCRIPT" "$DEPLOY_PATH" "$CRM_IMAGE_REF" "$PORTAL_IMAGE_REF"
           ssh \
             -o BatchMode=yes \
             -o IdentitiesOnly=yes \

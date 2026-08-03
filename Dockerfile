@@ -14,6 +14,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w' -o /out/crm-ser
     && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w' -o /out/portal-server ./cmd/portal-server \
     && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w' -o /out/presale-worker ./cmd/presale-worker \
     && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w' -o /out/authz-catalog ./cmd/authz-catalog \
+    && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w' -o /out/production-migrate ./cmd/production-migrate \
     && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w' -o /out/local-migrate ./cmd/local-migrate
 
 FROM alpine:3.21 AS runtime-base
@@ -23,6 +24,7 @@ RUN apk add --no-cache ca-certificates tzdata wget
 WORKDIR /app
 
 COPY --from=builder /out/authz-catalog ./authz-catalog
+COPY --from=builder /out/production-migrate ./production-migrate
 COPY --from=builder /out/local-migrate ./local-migrate
 COPY migrations ./migrations
 
