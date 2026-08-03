@@ -36,6 +36,31 @@ BM-001 的可信报价/投标回调已保存本地只读快照并提供详情查
 
 当前原型中的客户、项目、商机、人员、报告和备案数据均为虚构样例，不得直接用作生产初始化数据。
 
+## CI/CD
+
+`.github/workflows/ci-cd.yml` 在 Pull Request 执行 Go 测试、vet 和 CRM/Portal
+OpenAPI 防漂移检查；`main` 分支通过后分别构建 Dockerfile 的 `crm-runtime`
+与 `portal-runtime`，推送到 ACR，并使用两个不可变 digest 进入部署步骤。
+
+仓库级 Actions 配置：
+
+- Secrets：`ACR_USERNAME`、`ACR_PASSWORD`；
+- Variables：`ACR_PUSH_REGISTRY`、`ACR_PULL_REGISTRY`、`ACR_NAMESPACE`、
+  `ACR_REPOSITORY`。
+
+GitHub `test` Environment 配置：
+
+- Secrets：`DEPLOY_HOST`、`DEPLOY_USER`、`DEPLOY_PORT`、`DEPLOY_SSH_KEY`、
+  `DEPLOY_KNOWN_HOSTS`；
+- Variable：`DEPLOY_PATH`，默认 `/opt/basic-platform`；
+- 可选 Variable：`CUSTOMER_DEPLOY_SCRIPT`，默认
+  `/opt/basic-platform/bin/deploy-customer-opportunity.sh`。
+
+服务器发布脚本必须由 customer_and_opportunity 的生产部署基线提供，并接收
+两个参数：`<crm-image@sha256:digest> <portal-image@sha256:digest>`。脚本负责
+双 schema 备份、受控 migration、两个 API 的滚动更新、健康检查和失败回滚；
+workflow 不修改 platform 的 Compose 或 `deploy-service.sh`。
+
 ---
 
 ## 2. 目录说明
