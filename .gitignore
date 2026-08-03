@@ -1,0 +1,4 @@
+# Local Worker runtime configuration may contain OAuth client secrets and TLS paths.
+.env.presale-worker
+.env.presale-worker.*
+!.env.presale-worker.example
