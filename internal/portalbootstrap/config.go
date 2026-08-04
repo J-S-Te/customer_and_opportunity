@@ -15,22 +15,25 @@ import (
 const maxSessionTTL = 15 * time.Minute
 
 type Config struct {
-	Address                   string
-	MySQLDSN                  string
-	PathPrefix                string
-	PublicOrigin              string
-	TenantID                  string
-	RoleConfigHash            string
-	OIDCIssuer                string
-	OIDCBackchannelURL        string
-	OIDCClientID              string
-	OIDCClientSecret          string
-	OIDCRedirectURI           string
-	OIDCScopes                []string
-	SessionCookieName         string
-	SessionCookieSecure       bool
-	SessionTTL                time.Duration
-	AccountSecurityCenterURL  string
+	Address                  string
+	MySQLDSN                 string
+	PathPrefix               string
+	PublicOrigin             string
+	TenantID                 string
+	RoleConfigHash           string
+	OIDCIssuer               string
+	OIDCBackchannelURL       string
+	OIDCClientID             string
+	OIDCClientSecret         string
+	OIDCRedirectURI          string
+	OIDCScopes               []string
+	SessionCookieName        string
+	SessionCookieSecure      bool
+	SessionTTL               time.Duration
+	AccountSecurityCenterURL string
+	// AllowInsecureHTTPSession 仅用于无 HTTPS 的测试服务器：显式开启后允许非回环 HTTP
+	// 源使用非 Secure 会话 Cookie 和非 HTTPS 安全中心链接。默认关闭，生产必须保持 false。
+	AllowInsecureHTTPSession  bool
 	MachineTokenIssuer        string
 	MachineTokenAudience      string
 	MachineTokenPublicKeyPath string
@@ -57,6 +60,10 @@ func LoadConfig() (Config, error) {
 	secure, err := strconv.ParseBool(valueOrDefault("PORTAL_SESSION_COOKIE_SECURE", "true"))
 	if err != nil {
 		return Config{}, fmt.Errorf("PORTAL_SESSION_COOKIE_SECURE: %w", err)
+	}
+	allowInsecureHTTPSession, err := strconv.ParseBool(valueOrDefault("PORTAL_ALLOW_INSECURE_HTTP_SESSION", "false"))
+	if err != nil {
+		return Config{}, fmt.Errorf("PORTAL_ALLOW_INSECURE_HTTP_SESSION: %w", err)
 	}
 	ttl, err := time.ParseDuration(valueOrDefault("PORTAL_SESSION_TTL", "15m"))
 	if err != nil {
@@ -90,6 +97,7 @@ func LoadConfig() (Config, error) {
 		OIDCClientID: os.Getenv("PORTAL_OIDC_CLIENT_ID"), OIDCClientSecret: os.Getenv("PORTAL_OIDC_CLIENT_SECRET"),
 		OIDCRedirectURI: os.Getenv("PORTAL_OIDC_REDIRECT_URI"), OIDCScopes: fields(valueOrDefault("PORTAL_OIDC_SCOPES", "openid profile")),
 		SessionCookieName: valueOrDefault("PORTAL_SESSION_COOKIE_NAME", "customer_portal_session"), SessionCookieSecure: secure, SessionTTL: ttl,
+		AllowInsecureHTTPSession: allowInsecureHTTPSession,
 		AccountSecurityCenterURL: os.Getenv("PORTAL_ACCOUNT_SECURITY_CENTER_URL"),
 		MachineTokenIssuer:       os.Getenv("PORTAL_MACHINE_TOKEN_ISSUER"), MachineTokenAudience: os.Getenv("PORTAL_MACHINE_TOKEN_AUDIENCE"),
 		MachineTokenPublicKeyPath: os.Getenv("PORTAL_MACHINE_TOKEN_PUBLIC_KEY_PATH"),
@@ -183,8 +191,9 @@ func (c Config) validate() error {
 	}
 	securityCenter, err := url.ParseRequestURI(c.AccountSecurityCenterURL)
 	// 安全中心链接会返回浏览器，生产仅允许 HTTPS；回环 HTTP 只服务本机开发。
+	// 测试服务器可显式开启 PORTAL_ALLOW_INSECURE_HTTP_SESSION 放宽为非回环 HTTP。
 	if err != nil || securityCenter.Host == "" || securityCenter.User != nil || securityCenter.RawQuery != "" || securityCenter.Fragment != "" ||
-		(securityCenter.Scheme != "https" && !(securityCenter.Scheme == "http" && loopbackHostname(securityCenter.Hostname()))) {
+		(!c.AllowInsecureHTTPSession && securityCenter.Scheme != "https" && !(securityCenter.Scheme == "http" && loopbackHostname(securityCenter.Hostname()))) {
 		return fmt.Errorf("PORTAL_ACCOUNT_SECURITY_CENTER_URL must use HTTPS, except HTTP is allowed for localhost or a loopback IP")
 	}
 	origin, _ := url.Parse(c.PublicOrigin)

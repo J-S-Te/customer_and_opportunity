@@ -129,6 +129,15 @@ func TestPortalConfigAllowsHTTPAccountSecurityCenterOnlyOnLoopback(t *testing.T)
 	}
 }
 
+func TestPortalConfigAllowsHTTPAccountSecurityCenterWithExplicitTestToggle(t *testing.T) {
+	config := validPortalConfig()
+	config.AccountSecurityCenterURL = "http://192.168.3.11:8081/settings/security"
+	config.AllowInsecureHTTPSession = true
+	if err := config.validate(); err != nil {
+		t.Fatalf("explicit test toggle rejected non-loopback HTTP security center: %v", err)
+	}
+}
+
 func TestPortalConfigCatalogSynchronizationIsOptionalButCompleteWhenEnabled(t *testing.T) {
 	config := validPortalConfig()
 	config.CatalogSyncEnabled = true
