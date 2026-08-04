@@ -2,3 +2,5 @@
 .env.presale-worker
 .env.presale-worker.*
 !.env.presale-worker.example
+
+.DS_Store

@@ -1,0 +1,16 @@
+{
+  "name": "明德医疗集团股份有限公司",
+  "unified_credit_code": "91110000MA5TE0002B",
+  "customer_type": "三方",
+  "industry": "医疗",
+  "region": "华北",
+  "owner_user_id": "oidc-sub-liu-ming",
+  "owner_org_id": "org-demo-east1",
+  "contacts": [
+    {"name": "孙立", "phone": "13800006890", "email": "sunli@mingde.example.com", "is_registration": true},
+    {"name": "吴倩", "phone": "13700006788", "is_registration": false}
+  ],
+  "duplicate_override": true,
+  "duplicate_override_reason": "JSON 测试数据导入（允许重名）",
+  "reason": "JSON 测试数据导入"
+}

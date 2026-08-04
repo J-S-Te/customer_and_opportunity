@@ -1,0 +1,16 @@
+{
+  "name": "云启科技（广州）有限公司",
+  "unified_credit_code": "91440101MA5TE0001A",
+  "customer_type": "业主",
+  "industry": "软件",
+  "region": "华南",
+  "owner_user_id": "oidc-sub-chen-haoran",
+  "owner_org_id": "org-demo-east1",
+  "contacts": [
+    {"name": "周正", "phone": "13800006789", "email": "zhouzheng@yunqi.example.com", "is_registration": true},
+    {"name": "郑敏", "phone": "13900006990", "is_registration": false}
+  ],
+  "duplicate_override": true,
+  "duplicate_override_reason": "JSON 测试数据导入（允许重名）",
+  "reason": "JSON 测试数据导入"
+}

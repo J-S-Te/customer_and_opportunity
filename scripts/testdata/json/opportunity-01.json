@@ -1,0 +1,14 @@
+{
+  "name": "工业互联网云平台等保测评",
+  "customer_id": {{CUSTOMER_ID_1}},
+  "type": "新购",
+  "source": "自主开发",
+  "expected_amount": "68.00",
+  "expected_sign_date": "2026-09-30",
+  "requirement_summary": "云平台三级等保测评、整改协助与安全运营。",
+  "system_count": 2,
+  "pain_points": "生产系统不能中断，测评窗口有限。",
+  "competitor_info": "安恒信息报价偏高。",
+  "owner_user_id": "oidc-sub-chen-haoran",
+  "owner_org_id": "org-demo-east1"
+}

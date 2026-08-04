@@ -1,0 +1,14 @@
+{
+  "name": "ERP与MES安全加固",
+  "customer_id": {{CUSTOMER_ID_3}},
+  "type": "服务",
+  "source": "渠道合作",
+  "expected_amount": "45.50",
+  "expected_sign_date": "2026-11-20",
+  "requirement_summary": "ERP、MES 安全加固与上线前渗透测试。",
+  "system_count": 2,
+  "pain_points": "车间网络与办公网互联风险高。",
+  "competitor_info": "无强竞品。",
+  "owner_user_id": "oidc-sub-wang-jianguo",
+  "owner_org_id": "org-demo-east1"
+}
