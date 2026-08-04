@@ -17,26 +17,29 @@ import (
 const maxOIDCSessionTTL = 15 * time.Minute
 
 type Config struct {
-	Address                          string
-	MySQLDSN                         string
-	PathPrefix                       string
-	PublicOrigin                     string
-	DevelopmentAuth                  bool
-	EncryptionKey                    []byte
-	HMACKey                          []byte
-	OIDCIssuer                       string
-	OIDCBackchannelBaseURL           string
-	OIDCClientID                     string
-	OIDCClientSecret                 string
-	OIDCRedirectURI                  string
-	OIDCPostLogoutRedirectURI        string
-	OIDCScopes                       []string
-	OIDCTenantID                     string
-	OIDCRoleConfigHash               string
-	OIDCSessionCookieName            string
-	OIDCSessionTTL                   time.Duration
-	OIDCSessionSecure                bool
-	OIDCMaxRoles                     int
+	Address                   string
+	MySQLDSN                  string
+	PathPrefix                string
+	PublicOrigin              string
+	DevelopmentAuth           bool
+	EncryptionKey             []byte
+	HMACKey                   []byte
+	OIDCIssuer                string
+	OIDCBackchannelBaseURL    string
+	OIDCClientID              string
+	OIDCClientSecret          string
+	OIDCRedirectURI           string
+	OIDCPostLogoutRedirectURI string
+	OIDCScopes                []string
+	OIDCTenantID              string
+	OIDCRoleConfigHash        string
+	OIDCSessionCookieName     string
+	OIDCSessionTTL            time.Duration
+	OIDCSessionSecure         bool
+	OIDCMaxRoles              int
+	// AllowInsecureHTTPSession 仅用于无 HTTPS 的测试服务器：显式开启后允许非回环 HTTP
+	// 源使用非 Secure 会话 Cookie。默认关闭，生产部署不得开启。
+	AllowInsecureHTTPSession         bool
 	MachineTokenIssuer               string
 	MachineTokenAudience             string
 	MachineTokenPublicKeyPath        string
@@ -141,6 +144,10 @@ func LoadConfig() (Config, error) {
 	if err != nil {
 		return Config{}, fmt.Errorf("OIDC_SESSION_COOKIE_SECURE: %w", err)
 	}
+	allowInsecureHTTPSession, err := strconv.ParseBool(valueOrDefault("OIDC_ALLOW_INSECURE_HTTP_SESSION", "false"))
+	if err != nil {
+		return Config{}, fmt.Errorf("OIDC_ALLOW_INSECURE_HTTP_SESSION: %w", err)
+	}
 	sessionTTL, err := time.ParseDuration(valueOrDefault("OIDC_SESSION_TTL", "15m"))
 	if err != nil {
 		return Config{}, fmt.Errorf("OIDC_SESSION_TTL: %w", err)
@@ -219,7 +226,8 @@ func LoadConfig() (Config, error) {
 		OIDCClientID: os.Getenv("OIDC_CLIENT_ID"), OIDCClientSecret: os.Getenv("OIDC_CLIENT_SECRET"), OIDCRedirectURI: os.Getenv("OIDC_REDIRECT_URI"), OIDCPostLogoutRedirectURI: os.Getenv("OIDC_POST_LOGOUT_REDIRECT_URI"),
 		OIDCScopes: splitFields(valueOrDefault("OIDC_SCOPES", "openid profile")), OIDCTenantID: os.Getenv("OIDC_TENANT_ID"), OIDCRoleConfigHash: os.Getenv("OIDC_ROLE_CONFIG_HASH"),
 		OIDCSessionCookieName: valueOrDefault("OIDC_SESSION_COOKIE_NAME", "customer_opportunity_session"), OIDCSessionTTL: sessionTTL, OIDCSessionSecure: sessionSecure, OIDCMaxRoles: maxRoles,
-		MachineTokenIssuer: os.Getenv("MACHINE_TOKEN_ISSUER"), MachineTokenAudience: os.Getenv("MACHINE_TOKEN_AUDIENCE"),
+		AllowInsecureHTTPSession: allowInsecureHTTPSession,
+		MachineTokenIssuer:       os.Getenv("MACHINE_TOKEN_ISSUER"), MachineTokenAudience: os.Getenv("MACHINE_TOKEN_AUDIENCE"),
 		MachineTokenPublicKeyPath:        os.Getenv("MACHINE_TOKEN_PUBLIC_KEY_PATH"),
 		PortalInviteEnabled:              portalInviteEnabled,
 		PlatformExternalIdentityEnabled:  platformExternalIdentityEnabled,
@@ -556,7 +564,7 @@ func (c Config) validateOIDC() error {
 	if err != nil || (publicOrigin.Scheme != "http" && publicOrigin.Scheme != "https") || publicOrigin.Host == "" || publicOrigin.User != nil || (publicOrigin.Path != "" && publicOrigin.Path != "/") || publicOrigin.RawQuery != "" || publicOrigin.Fragment != "" {
 		return fmt.Errorf("APP_PUBLIC_ORIGIN must be an HTTP(S) origin in production mode")
 	}
-	if !c.OIDCSessionSecure && !isLoopbackHTTPOrigin(publicOrigin) {
+	if !c.OIDCSessionSecure && !isLoopbackHTTPOrigin(publicOrigin) && !c.AllowInsecureHTTPSession {
 		return fmt.Errorf("OIDC_SESSION_COOKIE_SECURE may be false only for a loopback HTTP APP_PUBLIC_ORIGIN")
 	}
 	if c.OIDCBackchannelBaseURL != "" {

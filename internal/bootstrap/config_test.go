@@ -115,6 +115,27 @@ func TestLoadConfigRejectsInsecureSessionCookieForNonLoopbackOrigin(t *testing.T
 	}
 }
 
+func TestLoadConfigExplicitInsecureHTTPSessionAllowsNonLoopbackHTTP(t *testing.T) {
+	setBaseConfig(t)
+	t.Setenv("DEV_AUTH_ENABLED", "false")
+	t.Setenv("OIDC_ISSUER", "http://identity.example.com:8081")
+	t.Setenv("OIDC_CLIENT_ID", "crm-test-web")
+	t.Setenv("OIDC_CLIENT_SECRET", "secret")
+	t.Setenv("OIDC_REDIRECT_URI", "http://crm.example.com:8081/customer-opportunity/auth/callback")
+	t.Setenv("OIDC_TENANT_ID", "tenant-1")
+	t.Setenv("OIDC_ROLE_CONFIG_HASH", "hash-1")
+	t.Setenv("OIDC_SESSION_COOKIE_SECURE", "false")
+	t.Setenv("OIDC_ALLOW_INSECURE_HTTP_SESSION", "true")
+	t.Setenv("MACHINE_TOKEN_ISSUER", "basic-platform")
+	t.Setenv("MACHINE_TOKEN_AUDIENCE", "basic-platform-application")
+	t.Setenv("MACHINE_TOKEN_PUBLIC_KEY_PATH", "/run/secrets/basic-platform-application-jwt-public.pem")
+	t.Setenv("APP_PUBLIC_ORIGIN", "http://crm.example.com:8081")
+	config, err := LoadConfig()
+	if err != nil || config.OIDCSessionSecure || !config.AllowInsecureHTTPSession {
+		t.Fatalf("LoadConfig() = %+v, %v", config, err)
+	}
+}
+
 func TestLoadConfigPortalInviteRequiresMachineProvisionContract(t *testing.T) {
 	setBaseConfig(t)
 	t.Setenv("DEV_AUTH_ENABLED", "true")
