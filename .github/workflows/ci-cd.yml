@@ -35,7 +35,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      # 前端是独立仓库；当前 CRM 仓库 checkout 不会自动包含 ../frontend。
+      - name: Checkout frontend repository
+        uses: actions/checkout@v4
+        with:
+          repository: J-S-Te/frontend
+          path: frontend
+          # 私有前端仓库请配置 FRONTEND_REPO_TOKEN；公开仓库可回退到工作流 token。
+          token: ${{ secrets.FRONTEND_REPO_TOKEN || secrets.GITHUB_TOKEN }}
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
