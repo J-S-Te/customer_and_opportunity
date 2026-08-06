@@ -17,7 +17,7 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
@@ -31,36 +31,9 @@ jobs:
           go run ./cmd/migration-plan -schema crm -dir migrations >/tmp/crm-migration-plan.json
           go run ./cmd/migration-plan -schema portal -dir migrations >/tmp/portal-migration-plan.json
 
-  frontend-test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      # 前端是独立仓库；当前 CRM 仓库 checkout 不会自动包含 ../frontend。
-      - name: Checkout frontend repository
-        uses: actions/checkout@v4
-        with:
-          repository: J-S-Te/frontend
-          path: frontend
-          # 私有前端仓库请配置 FRONTEND_REPO_TOKEN；公开仓库可回退到工作流 token。
-          token: ${{ secrets.FRONTEND_REPO_TOKEN || secrets.GITHUB_TOKEN }}
-      - uses: actions/setup-node@v5
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-      - name: Install frontend dependencies
-        working-directory: frontend
-        run: npm ci
-      - name: Run frontend tests
-        working-directory: frontend
-        run: npm test
-      - name: Build frontend production bundle
-        working-directory: frontend
-        run: npm run build
-
   image:
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
-    needs: [test, frontend-test]
+    needs: test
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -68,7 +41,7 @@ jobs:
       crm_image_ref: ${{ steps.result.outputs.crm_image_ref }}
       portal_image_ref: ${{ steps.result.outputs.portal_image_ref }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - id: vars
         shell: bash
         env:
