@@ -49,6 +49,13 @@ type Config struct {
 	ReportIngestDescriptorKey []byte
 	HMACKey                   []byte
 	PlatformBaseURL           string
+	PlatformApplicationCode   string
+	PlatformEnvironmentCode   string
+	PlatformAuditClientID     string
+	PlatformAuditClientSecret string
+	PlatformAuditWorkerID     string
+	PlatformAuditPollInterval time.Duration
+	PlatformAuditBatchSize    int
 	CatalogSyncEnabled        bool
 	CatalogApplicationID      string
 	CatalogClientID           string
@@ -72,6 +79,14 @@ func LoadConfig() (Config, error) {
 	projectHistoryStaleAfter, err := time.ParseDuration(valueOrDefault("PORTAL_PROJECT_HISTORY_STALE_AFTER", "10m"))
 	if err != nil {
 		return Config{}, fmt.Errorf("PORTAL_PROJECT_HISTORY_STALE_AFTER: %w", err)
+	}
+	platformAuditPollInterval, err := time.ParseDuration(valueOrDefault("PLATFORM_AUDIT_POLL_INTERVAL", "1s"))
+	if err != nil {
+		return Config{}, fmt.Errorf("PLATFORM_AUDIT_POLL_INTERVAL: %w", err)
+	}
+	platformAuditBatchSize, err := strconv.Atoi(valueOrDefault("PLATFORM_AUDIT_BATCH_SIZE", "100"))
+	if err != nil {
+		return Config{}, fmt.Errorf("PLATFORM_AUDIT_BATCH_SIZE: %w", err)
 	}
 	encryptionKey, err := base64.StdEncoding.DecodeString(os.Getenv("PORTAL_ENCRYPTION_KEY_BASE64"))
 	if err != nil {
@@ -106,8 +121,16 @@ func LoadConfig() (Config, error) {
 		CRMInviteTokenURL: os.Getenv("PORTAL_CRM_INVITE_TOKEN_URL"), CRMInviteClientID: os.Getenv("PORTAL_CRM_INVITE_CLIENT_ID"), CRMInviteClientSecret: os.Getenv("PORTAL_CRM_INVITE_CLIENT_SECRET"),
 		CRMInviteScope: valueOrDefault("PORTAL_CRM_INVITE_SCOPE", "portal.invite.verify"),
 		EncryptionKey:  encryptionKey, ReportIngestDescriptorKey: reportIngestDescriptorKey, HMACKey: hmacKey,
-		PlatformBaseURL: os.Getenv("PORTAL_PLATFORM_BASE_URL"), CatalogSyncEnabled: catalogSyncEnabled,
-		CatalogApplicationID: os.Getenv("PORTAL_AUTHORIZATION_CATALOG_APPLICATION_ID"), CatalogClientID: os.Getenv("PORTAL_AUTHORIZATION_CATALOG_CLIENT_ID"),
+		PlatformBaseURL:           os.Getenv("PORTAL_PLATFORM_BASE_URL"),
+		PlatformApplicationCode:   valueOrDefault("PLATFORM_APPLICATION_CODE", "customer_portal"),
+		PlatformEnvironmentCode:   valueOrDefault("PLATFORM_ENVIRONMENT_CODE", "dev"),
+		PlatformAuditClientID:     os.Getenv("PLATFORM_AUDIT_CLIENT_ID"),
+		PlatformAuditClientSecret: os.Getenv("PLATFORM_AUDIT_CLIENT_SECRET"),
+		PlatformAuditWorkerID:     valueOrDefault("PLATFORM_AUDIT_WORKER_ID", "portal-api-audit"),
+		PlatformAuditPollInterval: platformAuditPollInterval,
+		PlatformAuditBatchSize:    platformAuditBatchSize,
+		CatalogSyncEnabled:        catalogSyncEnabled,
+		CatalogApplicationID:      os.Getenv("PORTAL_AUTHORIZATION_CATALOG_APPLICATION_ID"), CatalogClientID: os.Getenv("PORTAL_AUTHORIZATION_CATALOG_CLIENT_ID"),
 		CatalogClientSecret: os.Getenv("PORTAL_AUTHORIZATION_CATALOG_CLIENT_SECRET"),
 	}
 	if err := config.validate(); err != nil {
@@ -132,6 +155,12 @@ func (c Config) validate() error {
 		"PORTAL_CRM_INVITE_TOKEN_URL":          c.CRMInviteTokenURL,
 		"PORTAL_CRM_INVITE_CLIENT_ID":          c.CRMInviteClientID,
 		"PORTAL_CRM_INVITE_CLIENT_SECRET":      c.CRMInviteClientSecret,
+		"PORTAL_PLATFORM_BASE_URL":             c.PlatformBaseURL,
+		"PLATFORM_AUDIT_CLIENT_ID":             c.PlatformAuditClientID,
+		"PLATFORM_AUDIT_CLIENT_SECRET":         c.PlatformAuditClientSecret,
+		"PLATFORM_APPLICATION_CODE":            c.PlatformApplicationCode,
+		"PLATFORM_ENVIRONMENT_CODE":            c.PlatformEnvironmentCode,
+		"PLATFORM_AUDIT_WORKER_ID":             c.PlatformAuditWorkerID,
 	}
 	for key, value := range required {
 		if strings.TrimSpace(value) == "" {
@@ -149,6 +178,19 @@ func (c Config) validate() error {
 	}
 	if len(c.EncryptionKey) != 32 || len(c.ReportIngestDescriptorKey) != 32 || len(c.HMACKey) < 32 {
 		return fmt.Errorf("Portal encryption keys must each decode to 32 bytes and HMAC key to at least 32 bytes")
+	}
+	if c.PlatformApplicationCode != "customer_portal" {
+		return fmt.Errorf("PLATFORM_APPLICATION_CODE must be customer_portal")
+	}
+	parsedPlatform, err := url.ParseRequestURI(c.PlatformBaseURL)
+	if err != nil || (parsedPlatform.Scheme != "http" && parsedPlatform.Scheme != "https") || parsedPlatform.Host == "" || parsedPlatform.User != nil || (parsedPlatform.Path != "" && parsedPlatform.Path != "/") || parsedPlatform.RawQuery != "" || parsedPlatform.Fragment != "" {
+		return fmt.Errorf("PORTAL_PLATFORM_BASE_URL must be an HTTP(S) origin")
+	}
+	if c.PlatformAuditPollInterval < 100*time.Millisecond || c.PlatformAuditPollInterval > time.Minute {
+		return fmt.Errorf("PLATFORM_AUDIT_POLL_INTERVAL must be between 100ms and 1m")
+	}
+	if c.PlatformAuditBatchSize < 1 || c.PlatformAuditBatchSize > 100 {
+		return fmt.Errorf("PLATFORM_AUDIT_BATCH_SIZE must be between 1 and 100")
 	}
 	if string(c.EncryptionKey) == string(c.ReportIngestDescriptorKey) {
 		// 通用敏感数据与报告摄取描述符使用独立密钥域，避免一种密文协议中的泄漏扩大到另一域。
@@ -168,10 +210,6 @@ func (c Config) validate() error {
 			if strings.TrimSpace(value) == "" {
 				return fmt.Errorf("%s is required when PORTAL_AUTHORIZATION_CATALOG_SYNC_ENABLED=true", key)
 			}
-		}
-		parsed, err := url.ParseRequestURI(c.PlatformBaseURL)
-		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || parsed.User != nil || (parsed.Path != "" && parsed.Path != "/") || parsed.RawQuery != "" || parsed.Fragment != "" {
-			return fmt.Errorf("PORTAL_PLATFORM_BASE_URL must be an HTTP(S) origin")
 		}
 	}
 	if c.SessionTTL <= 0 || c.SessionTTL > maxSessionTTL {

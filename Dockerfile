@@ -10,12 +10,17 @@ RUN go mod download
 
 COPY . ./
 
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w' -o /out/crm-server ./cmd/crm-server \
-    && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w' -o /out/portal-server ./cmd/portal-server \
-    && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w' -o /out/presale-worker ./cmd/presale-worker \
-    && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w' -o /out/authz-catalog ./cmd/authz-catalog \
-    && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w' -o /out/production-migrate ./cmd/production-migrate \
-    && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w' -o /out/local-migrate ./cmd/local-migrate
+RUN set -eu; \
+    for command in \
+      crm-server portal-server authz-catalog production-migrate local-migrate \
+      presale-integration-mock \
+      contract-transfer-worker opportunity-alert-worker opportunity-owner-notification-worker \
+      portal-access-disable-worker portal-feedback-worker portal-invite-compensation-worker \
+      portal-project-export-worker portal-project-worker portal-report-worker \
+      presale-alert-worker presale-assignment-notification-worker presale-engineer-sync-worker \
+      presale-progress-notification-worker presale-report-aggregate-worker presale-worker; do \
+      CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w' -o "/out/${command}" "./cmd/${command}"; \
+    done
 
 FROM alpine:3.21 AS runtime-base
 
@@ -31,6 +36,7 @@ COPY migrations ./migrations
 FROM runtime-base AS crm-runtime
 
 COPY --from=builder /out/crm-server ./crm-server
+COPY --from=builder /out/*-worker ./
 
 EXPOSE 8090
 
@@ -42,9 +48,18 @@ COPY --from=builder /out/presale-worker ./presale-worker
 
 CMD ["./presale-worker"]
 
+FROM runtime-base AS presale-integration-mock-runtime
+
+COPY --from=builder /out/presale-integration-mock ./presale-integration-mock
+
+EXPOSE 8092
+
+CMD ["./presale-integration-mock"]
+
 FROM runtime-base AS portal-runtime
 
 COPY --from=builder /out/portal-server ./portal-server
+COPY --from=builder /out/*-worker ./
 
 EXPOSE 8091
 

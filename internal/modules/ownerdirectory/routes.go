@@ -6,5 +6,9 @@ import (
 )
 
 func RegisterRoutes(router *gin.RouterGroup, handler *Handler) {
-	router.GET("/owner-directory", middleware.RequireAnyPermission("customer.create", "customer.update", "opportunity.create", "opportunity.owner.change"), handler.List)
+	router.GET("/owner-directory", middleware.RequireAnyPermission(
+		"customer.read", "customer.create", "customer.update",
+		"opportunity.create", "opportunity.owner.change", "opportunity.team.manage",
+		"presale.report",
+	), handler.List)
 }

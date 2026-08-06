@@ -47,7 +47,7 @@ func main() {
 	}
 
 	summary, err := seeddemo.Run(ctx, seeddemo.Dependencies{
-		DB: db, Codec: codec, TenantID: tenant, ActorID: actor, ActorName: actorDisplayName,
+		DB: db, Codec: codec, TenantID: tenant, ActorID: actor, ActorName: actorDisplayName, Owners: ownerOverrides(),
 	})
 	if err != nil {
 		fatalf("seed demo data: %v", err)
@@ -71,6 +71,25 @@ func main() {
 		fmt.Printf("  [%s] %s (%s) id=%d stage=%s %s\n", item.Key, item.Name, item.OpportunityNo, item.ID, item.Stage, action)
 	}
 	fmt.Println("演示数据初始化完成；重复执行不会产生重复客户或商机。")
+}
+
+// ownerOverrides 从环境变量读取每个演示人员的真实平台用户映射：
+// CRM_SEED_OWNER_<拼音>_SUB / CRM_SEED_OWNER_<拼音>_ORG（例如 CRM_SEED_OWNER_ZHANGWEI_SUB）。
+func ownerOverrides() map[string]seeddemo.Person {
+	keys := map[string]string{
+		"张伟": "ZHANGWEI", "李娜": "LINA", "王强": "WANGQIANG",
+		"陈晨": "CHENCHEN", "刘洋": "LIUYANG",
+	}
+	result := make(map[string]seeddemo.Person, len(keys))
+	for name, pinyin := range keys {
+		sub := strings.TrimSpace(os.Getenv("CRM_SEED_OWNER_" + pinyin + "_SUB"))
+		org := strings.TrimSpace(os.Getenv("CRM_SEED_OWNER_" + pinyin + "_ORG"))
+		if sub == "" {
+			continue
+		}
+		result[name] = seeddemo.Person{Sub: sub, Name: name, OrgID: org}
+	}
+	return result
 }
 
 func sensitiveCodec() (*security.SensitiveCodec, error) {

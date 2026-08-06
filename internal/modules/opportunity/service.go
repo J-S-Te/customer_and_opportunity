@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"html"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -39,6 +40,7 @@ func (s *Service) Board(ctx context.Context, query ListQuery) ([]BoardColumn, er
 	if err != nil {
 		return nil, err
 	}
+	s.enrichSignedContractCounts(ctx, items)
 	return groupBoard(items), nil
 }
 
@@ -175,14 +177,15 @@ func (s *Service) CompleteTerminalTodo(ctx context.Context, id uint64, input Ter
 }
 
 type Service struct {
-	db         *gorm.DB
-	repo       Repository
-	audit      audit.Writer
-	contracts  ContractVerifier
-	qbStatuses QBStatusReader
-	launches   *ExternalLaunchSigner
-	owners     ownerdirectory.Catalog
-	now        func() time.Time
+	db              *gorm.DB
+	repo            Repository
+	audit           audit.Writer
+	contracts       ContractVerifier
+	signedContracts SignedContractCounter
+	qbStatuses      QBStatusReader
+	launches        *ExternalLaunchSigner
+	owners          ownerdirectory.Catalog
+	now             func() time.Time
 	// 仅在服务单元测试中注入；生产构造始终使用共享 GORM 事务边界。
 	createTransaction func(context.Context, func(context.Context) error) error
 	// 转合同命令保持与生产相同的事务语义，同时让聚焦测试无需连接真实 MySQL。
@@ -191,6 +194,11 @@ type Service struct {
 
 func (s *Service) UseQBStatusReader(reader QBStatusReader) *Service {
 	s.qbStatuses = reader
+	return s
+}
+
+func (s *Service) UseSignedContractCounter(counter SignedContractCounter) *Service {
+	s.signedContracts = counter
 	return s
 }
 
@@ -229,7 +237,7 @@ func (s *Service) Create(ctx context.Context, input CreateRequest) (*Response, e
 	if len(key) > 128 {
 		return nil, ErrIdempotencyKeyTooLong
 	}
-	input = normalizeCreateRequest(input)
+	input = inheritCreateOwner(normalizeCreateRequest(input), principal)
 	input.IdempotencyKey = key
 	if s.owners != nil {
 		if err = s.owners.Validate(ctx, input.OwnerUserID, input.OwnerOrgID); err != nil {
@@ -324,6 +332,13 @@ func normalizeCreateRequest(input CreateRequest) CreateRequest {
 	input.CompetitorInfo = strings.TrimSpace(input.CompetitorInfo)
 	input.OwnerUserID = strings.TrimSpace(input.OwnerUserID)
 	input.OwnerOrgID = strings.TrimSpace(input.OwnerOrgID)
+	return input
+}
+
+// inheritCreateOwner 使用可信认证主体确定新商机的初始负责人；客户端兼容字段不能覆盖归属。
+func inheritCreateOwner(input CreateRequest, principal auth.Principal) CreateRequest {
+	input.OwnerUserID = strings.TrimSpace(principal.UserID)
+	input.OwnerOrgID = strings.TrimSpace(principal.PrimaryOrgID)
 	return input
 }
 
@@ -584,6 +599,9 @@ func (s *Service) Get(ctx context.Context, id uint64) (*Response, error) {
 		return nil, err
 	}
 	result.Members = memberResponses(members)
+	values := []Response{result}
+	s.enrichSignedContractCounts(ctx, values)
+	result = values[0]
 	return &result, nil
 }
 
@@ -596,7 +614,49 @@ func (s *Service) List(ctx context.Context, query ListQuery) (pagination.Page[Re
 	if err != nil {
 		return pagination.Page[Response]{}, err
 	}
-	return s.repo.List(ctx, principal, query)
+	result, err := s.repo.List(ctx, principal, query)
+	if err != nil {
+		return pagination.Page[Response]{}, err
+	}
+	s.enrichSignedContractCounts(ctx, result.Items)
+	return result, nil
+}
+
+func (s *Service) enrichSignedContractCounts(ctx context.Context, items []Response) {
+	if s.signedContracts == nil || len(items) == 0 {
+		return
+	}
+	ids := make([]uint64, 0, len(items))
+	seen := make(map[uint64]struct{}, len(items))
+	for i := range items {
+		if items[i].ID == 0 {
+			continue
+		}
+		if _, duplicate := seen[items[i].ID]; duplicate {
+			continue
+		}
+		seen[items[i].ID] = struct{}{}
+		ids = append(ids, items[i].ID)
+	}
+	if len(ids) == 0 {
+		return
+	}
+	counts, err := s.signedContracts.CountSignedContracts(ctx, ids)
+	if err != nil {
+		slog.WarnContext(ctx, "signed contract count lookup failed", "module", "opportunity", "error", err)
+		return
+	}
+	for _, id := range ids {
+		if _, ok := counts[id]; !ok {
+			slog.WarnContext(ctx, "signed contract count response omitted opportunity", "module", "opportunity")
+			return
+		}
+	}
+	for i := range items {
+		count := counts[items[i].ID]
+		value := count
+		items[i].SignedContractCount = &value
+	}
 }
 
 func validateListQuery(query ListQuery) (ListQuery, error) {

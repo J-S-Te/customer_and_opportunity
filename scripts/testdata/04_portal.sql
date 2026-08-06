@@ -4,7 +4,7 @@
 SET NAMES utf8mb4;
 SET @tenant = '01J00000000000000000000000';
 SET @zero_hash = '0000000000000000000000000000000000000000000000000000000000000000';
-SET @actor = 'oidc-sub-demo-seed';
+SET @actor = '01KYDVHC00000000000000000C';
 SET @account = 'EXT-01KZ1KD4XSR8ZFBP5T41PPDZTQ';
 SET @customer = 5;
 SET @project = 'PRJ-TEST-2026-001';
@@ -36,8 +36,8 @@ VALUES
 INSERT INTO portal_project_team
   (id, tenant_id, customer_id, project_id, person_ref, name, role, contact_masked)
 VALUES
-  (9301, @tenant, @customer, @project, 'oidc-sub-chen-haoran', '陈浩然', '项目经理', '138****6789'),
-  (9302, @tenant, @customer, @project, 'oidc-sub-wang-jianguo', '王建国', '安全工程师', '138****6890');
+  (9301, @tenant, @customer, @project, '01KYDVHC00000000000000000C', '张伟', '项目经理', '138****6789'),
+  (9302, @tenant, @customer, @project, '01KYDVHC00000000000000000F', '陈晨', '安全工程师', '138****6890');
 
 -- ============ 项目沟通 ============
 INSERT INTO portal_project_conversations

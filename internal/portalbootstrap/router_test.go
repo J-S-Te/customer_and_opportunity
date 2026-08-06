@@ -108,6 +108,22 @@ func TestPortalRouterPreservesEncodedSeparatorInsideOpaqueProjectID(t *testing.T
 	}
 }
 
+func TestPortalRouterSeparatesLivenessAndReadiness(t *testing.T) {
+	config := Config{PathPrefix: "/customer-portal", PublicOrigin: "https://portal.example"}
+	router := NewRouter(RouterDependencies{Config: config, DatabaseHealthy: func() bool { return false }})
+
+	live := httptest.NewRecorder()
+	router.ServeHTTP(live, httptest.NewRequest(http.MethodGet, "/customer-portal/livez", nil))
+	if live.Code != http.StatusOK || live.Body.String() != `{"status":"alive"}` {
+		t.Fatalf("liveness status=%d body=%s", live.Code, live.Body.String())
+	}
+	ready := httptest.NewRecorder()
+	router.ServeHTTP(ready, httptest.NewRequest(http.MethodGet, "/customer-portal/readyz", nil))
+	if ready.Code != http.StatusServiceUnavailable || ready.Body.String() != `{"status":"not_ready"}` {
+		t.Fatalf("readiness status=%d body=%s", ready.Code, ready.Body.String())
+	}
+}
+
 func TestPublicReportDoesNotExposeSensitivePersistenceFields(t *testing.T) {
 	value := report.Request{ActorModel: report.ActorModel{ID: 42, TenantID: "tenant-secret", CreatedBy: "actor", Version: 3}, RequestNo: "RR-1", ReceiveEmailCipher: []byte("cipher-secret"), IdempotencyKey: "idem-secret", RequestHash: "hash-secret"}
 	raw, err := json.Marshal(publicReport(&value))

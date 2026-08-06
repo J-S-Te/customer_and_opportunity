@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/ownerdirectory"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/auth"
 )
 
@@ -58,6 +59,45 @@ func TestSameMemberSetIgnoresOrderButNotRole(t *testing.T) {
 	desired[0].Role = MemberRoleBusinessSupport
 	if sameMemberSet(current, desired) {
 		t.Fatal("role change treated as same set")
+	}
+}
+
+type teamDirectoryStub struct {
+	users map[string]ownerdirectory.User
+	err   error
+}
+
+func (stub teamDirectoryStub) List(context.Context, ownerdirectory.Query) (ownerdirectory.Page, error) {
+	return ownerdirectory.Page{}, stub.err
+}
+
+func (stub teamDirectoryStub) Validate(context.Context, string, string) error { return stub.err }
+
+func (stub teamDirectoryStub) Resolve(context.Context, []string) (map[string]ownerdirectory.User, error) {
+	return stub.users, stub.err
+}
+
+func TestTeamMembersMustResolveToActivePlatformUsers(t *testing.T) {
+	members := []Member{{UserID: "user-active", Role: MemberRoleTechnicalSupport}}
+	service := &Service{owners: teamDirectoryStub{users: map[string]ownerdirectory.User{
+		"user-active": {ID: "user-active", DisplayName: "张三", Organizations: []ownerdirectory.Organization{{ID: "org-1", Name: "技术中心", IsPrimary: true}}},
+	}}}
+	users, err := service.validateTeamUsers(context.Background(), members)
+	if err != nil || users["user-active"].DisplayName != "张三" {
+		t.Fatalf("users=%#v err=%v", users, err)
+	}
+	response := teamResponseWithUsers(7, 3, members, users)
+	if !response.DirectoryAvailable || response.Members[0].DisplayName != "张三" || response.Members[0].Organizations[0].Name != "技术中心" || response.Members[0].DirectoryStatus != "ACTIVE" {
+		t.Fatalf("response=%#v", response)
+	}
+
+	service.owners = teamDirectoryStub{users: map[string]ownerdirectory.User{}}
+	if _, err = service.validateTeamUsers(context.Background(), members); err != ErrInvalidTeamMember {
+		t.Fatalf("missing user error=%v", err)
+	}
+	service.owners = teamDirectoryStub{err: ownerdirectory.ErrUnavailable}
+	if _, err = service.validateTeamUsers(context.Background(), members); !errors.Is(err, ownerdirectory.ErrUnavailable) {
+		t.Fatalf("directory failure error=%v", err)
 	}
 }
 

@@ -25,7 +25,9 @@ type Dependencies struct {
 	TenantID  string
 	ActorID   string
 	ActorName string
-	Now       time.Time
+	// Owners 可选：把演示人员（按姓名）映射到平台真实用户，避免负责人显示为占位 ID。
+	Owners map[string]Person
+	Now    time.Time
 }
 
 type CustomerResult struct {
@@ -60,6 +62,7 @@ type seeder struct {
 	tenantID        string
 	actorID         string
 	actorName       string
+	owners          map[string]Person
 	now             time.Time
 	audit           audit.Writer
 	customer        *customer.Service
@@ -90,7 +93,7 @@ func Run(ctx context.Context, deps Dependencies) (Summary, error) {
 
 	auditWriter := audit.NewGORMWriter(deps.DB)
 	seed := &seeder{
-		db: deps.DB, codec: deps.Codec, tenantID: tenantID, actorID: actorID, actorName: actorName, now: now,
+		db: deps.DB, codec: deps.Codec, tenantID: tenantID, actorID: actorID, actorName: actorName, owners: deps.Owners, now: now,
 		audit:           auditWriter,
 		customer:        customer.NewService(deps.DB, customer.NewGORMRepository(deps.DB), auditWriter, deps.Codec),
 		opportunityRepo: opportunity.NewGORMRepository(deps.DB),
@@ -135,6 +138,15 @@ func Run(ctx context.Context, deps Dependencies) (Summary, error) {
 	return summary, nil
 }
 
+// resolveOwner 优先使用显式真实用户覆盖；未覆盖时回退到当前 actor（真实用户），
+// 不再把原型占位 subject 当作负责人写入业务数据。
+func (seed *seeder) resolveOwner(key string) Person {
+	if override, ok := seed.owners[key]; ok && strings.TrimSpace(override.Sub) != "" {
+		return override
+	}
+	return Person{Sub: seed.actorID, Name: seed.actorName}
+}
+
 func (seed *seeder) seedCustomer(ctx context.Context, item customerSeed) (CustomerResult, error) {
 	// 先按业务唯一语义查找，再使用稳定幂等键调用正式创建服务；并发执行时最终仍由服务端
 	// 幂等记录和数据库约束收敛。
@@ -149,7 +161,7 @@ func (seed *seeder) seedCustomer(ctx context.Context, item customerSeed) (Custom
 		return CustomerResult{}, err
 	}
 
-	owner := People()[item.OwnerKey]
+	owner := seed.resolveOwner(item.OwnerKey)
 	contacts := make([]customer.ContactInput, 0, len(item.Contacts))
 	for _, contact := range item.Contacts {
 		contacts = append(contacts, customer.ContactInput{
@@ -255,7 +267,7 @@ func (seed *seeder) seedOpportunity(ctx context.Context, item opportunitySeed, c
 		return OpportunityResult{}, err
 	}
 
-	owner := People()[item.OwnerKey]
+	owner := seed.resolveOwner(item.OwnerKey)
 	input := opportunity.CreateRequest{
 		Name: item.Name, CustomerID: customerID, Type: item.Type, Source: item.Source,
 		ExpectedAmount: item.ExpectedAmount, ExpectedSignDate: item.ExpectedSignDate,

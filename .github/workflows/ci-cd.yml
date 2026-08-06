@@ -26,10 +26,33 @@ jobs:
       - run: go vet ./...
       - name: Validate CRM and Portal OpenAPI contracts
         run: go run ./cmd/openapi-check
+      - name: Validate CRM and Portal migration plans
+        run: |
+          go run ./cmd/migration-plan -schema crm -dir migrations >/tmp/crm-migration-plan.json
+          go run ./cmd/migration-plan -schema portal -dir migrations >/tmp/portal-migration-plan.json
+
+  frontend-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+      - name: Run frontend tests
+        working-directory: frontend
+        run: npm test
+      - name: Build frontend production bundle
+        working-directory: frontend
+        run: npm run build
 
   image:
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
-    needs: test
+    needs: [test, frontend-test]
     runs-on: ubuntu-latest
     permissions:
       contents: read

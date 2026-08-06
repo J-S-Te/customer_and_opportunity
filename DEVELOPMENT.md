@@ -78,7 +78,7 @@ Vite 开发代理默认把 `/customer-opportunity` 转发到 `http://localhost:8
 
 ## 健康检查与访问日志
 
-CRM 和 Portal 分别提供 `<path_prefix>/healthz`，不经过登录，只探测各自 MySQL 连接并返回 `status=ok|unhealthy`，不暴露 DSN、库名、主机或其他配置。部署网关必须按 CRM、Portal 的独立 `path_prefix` 配置探针；当前尚未签版单独的 readiness 路径，因此不得把未定义的 `/readyz` 加入生产编排。
+CRM 和 Portal 分别提供 `<path_prefix>/healthz`、`<path_prefix>/livez` 和 `<path_prefix>/readyz`，均不经过登录。`healthz` 保留兼容语义并探测 MySQL；`livez` 只表示进程存活；`readyz` 在数据库连接失败或必需依赖未就绪时返回 503。部署网关必须按 CRM、Portal 的独立 `path_prefix` 配置三类探针；探针已纳入 OpenAPI 和 CI 路由契约。
 
 `/customer-opportunity/healthz` 与 `/customer-portal/healthz` 只表示对应进程及核心数据库可用，不代表对象存储、病毒扫描、审批、PMS、报价/投标、公安提交等可选外部能力已经就绪。登录后前端分别读取 `/customer-opportunity/api/v1/capabilities` 与 `/customer-portal/api/v1/capabilities`；服务端只根据本地已注入适配器、启用开关和数据库中的新鲜 Worker 心跳返回稳定的 `available/mode/reason_code`，不在页面请求内探测远端，也不返回 URL、Client、scope、密钥等部署信息。能力查询失败时前端安全关闭相关按钮，实际写接口仍执行同一服务端检查并作为最终权威，不能依靠前端能力位绕过校验。
 
@@ -92,14 +92,14 @@ CRM 和 Portal 分别提供 `<path_prefix>/healthz`，不经过登录，只探�
 
 生产 CRM 和 Portal 分别使用基础平台 OIDC Authorization Code + PKCE S256，并分别维护 HttpOnly 服务端会话 Cookie。两个 Cookie、OAuth Client、数据库和加密密钥不得复用。
 
-CRM 生产模式要求：
+CRM 与本地开发模式均要求：
 
-- `DEV_AUTH_ENABLED=false`；
+- `DEV_AUTH_ENABLED=false`；任何环境设为 `true` 都会在监听端口前失败退出；
 - 配置基础平台 Discovery issuer、CRM Client、租户、授权目录哈希和公开 Origin；
 - 浏览器非安全方法必须同时携带匹配的 `Origin` 和 `X-CSRF-Token: 1`；
 - `/api/v1/internal` 不接受浏览器会话，必须使用基础平台 `client_credentials` 机器 Token，并校验 audience、scope、`token_use=application`、时间戳和单次 nonce。
 
-开发态只有显式 `DEV_AUTH_ENABLED=true` 才接受 `X-Dev-*` 头。该模式只能用于本机联调，不得出现在共享或生产环境。
+CRM 不接受任何客户端传入的用户、角色或权限请求头。本地联调也必须先通过基础平台 OIDC 登录；机器接口只接受基础平台签发的单 scope 应用令牌。
 
 Portal 只保存 `OIDC sub ↔ customerId` 映射和本地会话，不保存客户密码，也不签发独立身份 JWT。密码、MFA、找回和账户锁定均由基础平台负责。
 
@@ -279,6 +279,8 @@ CUS-004 浏览器接口位于 `/customer-portal/api/v1/filings`。客户数据�
 
 `MATERIALS` 已提供受控创建上传、对象直传、完成核验和机器扫描回调；只保存加密对象引用、不可变版本、SHA/MIME/大小和扫描证据，且并发同幂等键会严格重读赢家，不泄露唯一键错误。前端已接真实上传与扫描状态。默认对象存储和扫描适配器为 unavailable，因此正式 Provider 未注入时返回 503；身份证、动态子系统清单等未签版字段、正式 2025 模板、PDF 生成及公安外部提交仍不臆造，`POST /filings/{id}/exports` 继续明确返回 503。
 
+> **范围说明（2026-08-05，已确认）**：客户自助门户**不涉及与公安相关的对接**。本段及下文“公安提交 Worker / 回执 / SUBMITTED”属于超出门户范围的既有实现，按边界保留；门户验收与后续开发不再以公安对接为准，正式公安 Provider 契约与门户无关。
+
 公安提交已实现 provider-neutral Worker 核心。它只领取 `WAITING_CONTRACT` 的不可变快照，原子切换为 `SUBMITTING`，解密并复核 canonical snapshot 摘要及所有材料的不可变对象版本、SHA-256、`CLEAN` 扫描编号和时间，再以稳定 `event_id` 调用正式 Provider。Provider 必须对该事件幂等返回同一已验签回执；回执证据在落库前计算明文 SHA-256 并加密。只有回执、备案状态和 outbox 在同一事务提交成功后才使用 `SUBMITTED`，七次失败后进入 `SUBMISSION_FAILED`，不会把本地快照误称公安已受理。正式 2025 请求 schema、签名验签、回执格式和 Provider 未签版，因此当前不提供会伪造外部成功的可运行适配器。
 
 ## 当前外部依赖缺口
@@ -333,4 +335,4 @@ npm test
 npm run build
 ```
 
-2026-08-02 CRM 44 个文件已在 MySQL 8.4 全新数据库执行至 `000071`，combined checksum `sha256:047aea0f5a1664b98982d1884873f8ef7afc773caed644d694f39455f0b5d01c`，包含日报、Portal 禁用 Saga 和预警接收人命名空间；Portal 27 个文件已在 MySQL 8.4 全新数据库执行至 `000070`，combined checksum `sha256:b9b8b281741b4ec28662d04c2ffab82e850f6fb849709b914807262236637ae3`，禁用事务的审计失败回滚、会话撤销和业务幂等另以真实 MySQL 集成测试验证。合同仓库仍为独立清单。空库验证只能证明 SQL、外键、CHECK 和 collation 可执行，上一版本增量升级、在线 DDL、metadata lock、回滚和生产规模性能仍必须演练；Go 单元测试不能替代这些验证。
+当前源码 migration plan 校验结果为 CRM 47 个文件至 `000075`，combined checksum `sha256:994e286df8a5c8152bfff9498d449a089a5ce029cbed47b8314f36f3607afef7`；Portal 30 个文件至 `000077`，combined checksum `sha256:c3f82ff64488ccb9b0218f3594294ae906647d59dd958cd49f454023e9a41299`。该校验只验证文件归属、顺序和 checksum，不等于 MySQL 空库或存量库已执行。2026-08-02 的真实空库/集成证据仍覆盖 CRM 至 `000071`、Portal 至 `000070`；新增迁移仍需补做上一版本增量升级、在线 DDL、metadata lock、回滚和生产规模性能演练。

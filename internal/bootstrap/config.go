@@ -21,7 +21,6 @@ type Config struct {
 	MySQLDSN                  string
 	PathPrefix                string
 	PublicOrigin              string
-	DevelopmentAuth           bool
 	EncryptionKey             []byte
 	HMACKey                   []byte
 	OIDCIssuer                string
@@ -96,6 +95,12 @@ type Config struct {
 	ContractSummaryClientID          string
 	ContractSummaryClientSecret      string
 	ContractSummaryScope             string
+	ContractSignedCountEnabled       bool
+	ContractSignedCountURL           string
+	ContractSignedCountTokenURL      string
+	ContractSignedCountClientID      string
+	ContractSignedCountClientSecret  string
+	ContractSignedCountScope         string
 	QBStatusQueryEnabled             bool
 	QBStatusURL                      string
 	QBStatusTokenURL                 string
@@ -109,6 +114,13 @@ type Config struct {
 	QBLaunchSigningKey               []byte
 	QBLaunchTTL                      time.Duration
 	PlatformBaseURL                  string
+	PlatformApplicationCode          string
+	PlatformEnvironmentCode          string
+	PlatformAuditClientID            string
+	PlatformAuditClientSecret        string
+	PlatformAuditWorkerID            string
+	PlatformAuditPollInterval        time.Duration
+	PlatformAuditBatchSize           int
 	CatalogSyncEnabled               bool
 	CatalogApplicationID             string
 	CatalogClientID                  string
@@ -122,6 +134,9 @@ func LoadConfig() (Config, error) {
 	developmentAuth, err := strconv.ParseBool(valueOrDefault("DEV_AUTH_ENABLED", "false"))
 	if err != nil {
 		return Config{}, fmt.Errorf("DEV_AUTH_ENABLED: %w", err)
+	}
+	if developmentAuth {
+		return Config{}, fmt.Errorf("DEV_AUTH_ENABLED is no longer supported; CRM identity and authorization must use the base platform")
 	}
 	encryptionKey, err := base64.StdEncoding.DecodeString(os.Getenv("SENSITIVE_ENCRYPTION_KEY_BASE64"))
 	if err != nil {
@@ -192,6 +207,10 @@ func LoadConfig() (Config, error) {
 	if err != nil {
 		return Config{}, fmt.Errorf("CONTRACT_VERIFICATION_ENABLED: %w", err)
 	}
+	contractSignedCountEnabled, err := strconv.ParseBool(valueOrDefault("CONTRACT_SIGNED_COUNT_ENABLED", "false"))
+	if err != nil {
+		return Config{}, fmt.Errorf("CONTRACT_SIGNED_COUNT_ENABLED: %w", err)
+	}
 	qbStatusQueryEnabled, err := strconv.ParseBool(valueOrDefault("QB_STATUS_QUERY_ENABLED", "false"))
 	if err != nil {
 		return Config{}, fmt.Errorf("QB_STATUS_QUERY_ENABLED: %w", err)
@@ -216,12 +235,20 @@ func LoadConfig() (Config, error) {
 	if err != nil {
 		return Config{}, fmt.Errorf("PRESALE_WORKER_HEARTBEAT_MAX_AGE: %w", err)
 	}
+	platformAuditPollInterval, err := time.ParseDuration(valueOrDefault("PLATFORM_AUDIT_POLL_INTERVAL", "1s"))
+	if err != nil {
+		return Config{}, fmt.Errorf("PLATFORM_AUDIT_POLL_INTERVAL: %w", err)
+	}
+	platformAuditBatchSize, err := strconv.Atoi(valueOrDefault("PLATFORM_AUDIT_BATCH_SIZE", "100"))
+	if err != nil {
+		return Config{}, fmt.Errorf("PLATFORM_AUDIT_BATCH_SIZE: %w", err)
+	}
 	catalogSyncEnabled, err := strconv.ParseBool(valueOrDefault("PLATFORM_AUTHORIZATION_CATALOG_SYNC_ENABLED", "false"))
 	if err != nil {
 		return Config{}, fmt.Errorf("PLATFORM_AUTHORIZATION_CATALOG_SYNC_ENABLED: %w", err)
 	}
 	config := Config{
-		Address: valueOrDefault("HTTP_ADDRESS", ":8090"), MySQLDSN: os.Getenv("MYSQL_DSN"), PathPrefix: valueOrDefault("APP_PATH_PREFIX", "/customer-opportunity"), PublicOrigin: os.Getenv("APP_PUBLIC_ORIGIN"), DevelopmentAuth: developmentAuth, EncryptionKey: encryptionKey, HMACKey: hmacKey,
+		Address: valueOrDefault("HTTP_ADDRESS", ":8090"), MySQLDSN: os.Getenv("MYSQL_DSN"), PathPrefix: valueOrDefault("APP_PATH_PREFIX", "/customer-opportunity"), PublicOrigin: os.Getenv("APP_PUBLIC_ORIGIN"), EncryptionKey: encryptionKey, HMACKey: hmacKey,
 		OIDCIssuer: os.Getenv("OIDC_ISSUER"), OIDCBackchannelBaseURL: os.Getenv("OIDC_BACKCHANNEL_BASE_URL"),
 		OIDCClientID: os.Getenv("OIDC_CLIENT_ID"), OIDCClientSecret: os.Getenv("OIDC_CLIENT_SECRET"), OIDCRedirectURI: os.Getenv("OIDC_REDIRECT_URI"), OIDCPostLogoutRedirectURI: os.Getenv("OIDC_POST_LOGOUT_REDIRECT_URI"),
 		OIDCScopes: splitFields(valueOrDefault("OIDC_SCOPES", "openid profile")), OIDCTenantID: os.Getenv("OIDC_TENANT_ID"), OIDCRoleConfigHash: os.Getenv("OIDC_ROLE_CONFIG_HASH"),
@@ -281,9 +308,15 @@ func LoadConfig() (Config, error) {
 		ContractVerificationEnabled: contractVerificationEnabled,
 		ContractSummaryURL:          os.Getenv("CONTRACT_SUMMARY_URL"), ContractSummaryTokenURL: os.Getenv("CONTRACT_SUMMARY_TOKEN_URL"),
 		ContractSummaryClientID: os.Getenv("CONTRACT_SUMMARY_CLIENT_ID"), ContractSummaryClientSecret: os.Getenv("CONTRACT_SUMMARY_CLIENT_SECRET"),
-		ContractSummaryScope: valueOrDefault("CONTRACT_SUMMARY_SCOPE", "contract.summary.read"),
-		QBStatusQueryEnabled: qbStatusQueryEnabled,
-		QBStatusURL:          os.Getenv("QB_STATUS_URL"), QBStatusTokenURL: os.Getenv("QB_STATUS_TOKEN_URL"),
+		ContractSummaryScope:            valueOrDefault("CONTRACT_SUMMARY_SCOPE", "contract.summary.read"),
+		ContractSignedCountEnabled:      contractSignedCountEnabled,
+		ContractSignedCountURL:          os.Getenv("CONTRACT_SIGNED_COUNT_URL"),
+		ContractSignedCountTokenURL:     os.Getenv("CONTRACT_SIGNED_COUNT_TOKEN_URL"),
+		ContractSignedCountClientID:     os.Getenv("CONTRACT_SIGNED_COUNT_CLIENT_ID"),
+		ContractSignedCountClientSecret: os.Getenv("CONTRACT_SIGNED_COUNT_CLIENT_SECRET"),
+		ContractSignedCountScope:        valueOrDefault("CONTRACT_SIGNED_COUNT_SCOPE", "contract.opportunity_signed_count.read"),
+		QBStatusQueryEnabled:            qbStatusQueryEnabled,
+		QBStatusURL:                     os.Getenv("QB_STATUS_URL"), QBStatusTokenURL: os.Getenv("QB_STATUS_TOKEN_URL"),
 		QBStatusClientID: os.Getenv("QB_STATUS_CLIENT_ID"), QBStatusClientSecret: os.Getenv("QB_STATUS_CLIENT_SECRET"),
 		QBStatusScope: valueOrDefault("QB_STATUS_SCOPE", "opportunity.status.read"),
 		QBStatusTLS: integrationhttp.TLSOptions{
@@ -292,8 +325,16 @@ func LoadConfig() (Config, error) {
 		},
 		QBLaunchEnabled: qbLaunchEnabled, QBQuotationPublicURL: os.Getenv("QB_QUOTATION_PUBLIC_URL"),
 		QBBidPublicURL: os.Getenv("QB_BID_PUBLIC_URL"), QBLaunchSigningKey: qbLaunchSigningKey, QBLaunchTTL: qbLaunchTTL,
-		PlatformBaseURL: os.Getenv("PLATFORM_BASE_URL"), CatalogSyncEnabled: catalogSyncEnabled,
-		CatalogApplicationID: os.Getenv("PLATFORM_AUTHORIZATION_CATALOG_APPLICATION_ID"), CatalogClientID: os.Getenv("PLATFORM_AUTHORIZATION_CATALOG_CLIENT_ID"),
+		PlatformBaseURL:           os.Getenv("PLATFORM_BASE_URL"),
+		PlatformApplicationCode:   valueOrDefault("PLATFORM_APPLICATION_CODE", "customer_and_opportunity"),
+		PlatformEnvironmentCode:   valueOrDefault("PLATFORM_ENVIRONMENT_CODE", "dev"),
+		PlatformAuditClientID:     os.Getenv("PLATFORM_AUDIT_CLIENT_ID"),
+		PlatformAuditClientSecret: os.Getenv("PLATFORM_AUDIT_CLIENT_SECRET"),
+		PlatformAuditWorkerID:     valueOrDefault("PLATFORM_AUDIT_WORKER_ID", "crm-api-audit"),
+		PlatformAuditPollInterval: platformAuditPollInterval,
+		PlatformAuditBatchSize:    platformAuditBatchSize,
+		CatalogSyncEnabled:        catalogSyncEnabled,
+		CatalogApplicationID:      os.Getenv("PLATFORM_AUTHORIZATION_CATALOG_APPLICATION_ID"), CatalogClientID: os.Getenv("PLATFORM_AUTHORIZATION_CATALOG_CLIENT_ID"),
 		CatalogClientSecret:          os.Getenv("PLATFORM_AUTHORIZATION_CATALOG_CLIENT_SECRET"),
 		PresaleWorkerHeartbeatMaxAge: presaleWorkerHeartbeatMaxAge,
 	}
@@ -305,6 +346,30 @@ func LoadConfig() (Config, error) {
 	}
 	if config.PresaleWorkerHeartbeatMaxAge < 5*time.Second || config.PresaleWorkerHeartbeatMaxAge > 5*time.Minute {
 		return Config{}, fmt.Errorf("PRESALE_WORKER_HEARTBEAT_MAX_AGE must be between 5s and 5m")
+	}
+	for key, value := range map[string]string{
+		"PLATFORM_BASE_URL":            config.PlatformBaseURL,
+		"PLATFORM_AUDIT_CLIENT_ID":     config.PlatformAuditClientID,
+		"PLATFORM_AUDIT_CLIENT_SECRET": config.PlatformAuditClientSecret,
+		"PLATFORM_APPLICATION_CODE":    config.PlatformApplicationCode,
+		"PLATFORM_ENVIRONMENT_CODE":    config.PlatformEnvironmentCode,
+		"PLATFORM_AUDIT_WORKER_ID":     config.PlatformAuditWorkerID,
+	} {
+		if strings.TrimSpace(value) == "" || strings.TrimSpace(value) != value {
+			return Config{}, fmt.Errorf("%s is required and must be trimmed", key)
+		}
+	}
+	if config.PlatformApplicationCode != "customer_and_opportunity" {
+		return Config{}, fmt.Errorf("PLATFORM_APPLICATION_CODE must be customer_and_opportunity")
+	}
+	if err := validateHTTPOrigin("PLATFORM_BASE_URL", config.PlatformBaseURL); err != nil {
+		return Config{}, err
+	}
+	if config.PlatformAuditPollInterval < 100*time.Millisecond || config.PlatformAuditPollInterval > time.Minute {
+		return Config{}, fmt.Errorf("PLATFORM_AUDIT_POLL_INTERVAL must be between 100ms and 1m")
+	}
+	if config.PlatformAuditBatchSize < 1 || config.PlatformAuditBatchSize > 100 {
+		return Config{}, fmt.Errorf("PLATFORM_AUDIT_BATCH_SIZE must be between 1 and 100")
 	}
 	if config.PortalInviteEnabled && len(config.PortalInvitePepper) < 32 {
 		return Config{}, fmt.Errorf("PORTAL_INVITE_PEPPER_BASE64 must decode to at least 32 bytes")
@@ -471,6 +536,30 @@ func LoadConfig() (Config, error) {
 			}
 		}
 	}
+	if config.ContractSignedCountEnabled {
+		for key, value := range map[string]string{
+			"CONTRACT_SIGNED_COUNT_URL":           config.ContractSignedCountURL,
+			"CONTRACT_SIGNED_COUNT_TOKEN_URL":     config.ContractSignedCountTokenURL,
+			"CONTRACT_SIGNED_COUNT_CLIENT_ID":     config.ContractSignedCountClientID,
+			"CONTRACT_SIGNED_COUNT_CLIENT_SECRET": config.ContractSignedCountClientSecret,
+		} {
+			if strings.TrimSpace(value) == "" {
+				return Config{}, fmt.Errorf("%s is required when CONTRACT_SIGNED_COUNT_ENABLED=true", key)
+			}
+		}
+		if config.ContractSignedCountScope != "contract.opportunity_signed_count.read" {
+			return Config{}, fmt.Errorf("CONTRACT_SIGNED_COUNT_SCOPE must be contract.opportunity_signed_count.read")
+		}
+		for key, value := range map[string]string{
+			"CONTRACT_SIGNED_COUNT_URL":       config.ContractSignedCountURL,
+			"CONTRACT_SIGNED_COUNT_TOKEN_URL": config.ContractSignedCountTokenURL,
+		} {
+			parsed, parseErr := url.ParseRequestURI(value)
+			if parseErr != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+				return Config{}, fmt.Errorf("%s must be a valid HTTP(S) URL without credentials, query or fragment", key)
+			}
+		}
+	}
 	if config.QBStatusQueryEnabled {
 		for key, value := range map[string]string{
 			"QB_STATUS_URL": config.QBStatusURL, "QB_STATUS_TOKEN_URL": config.QBStatusTokenURL,
@@ -525,12 +614,10 @@ func LoadConfig() (Config, error) {
 	if config.PathPrefix == "/" || !strings.HasPrefix(config.PathPrefix, "/") || strings.HasSuffix(config.PathPrefix, "/") {
 		return Config{}, fmt.Errorf("APP_PATH_PREFIX must be a non-root absolute path without trailing slash")
 	}
-	if !config.DevelopmentAuth {
-		if err := config.validateOIDC(); err != nil {
-			return Config{}, err
-		}
+	if err := config.validateOIDC(); err != nil {
+		return Config{}, err
 	}
-	if config.CatalogSyncEnabled && !config.DevelopmentAuth && config.OIDCRoleConfigHash == "" {
+	if config.CatalogSyncEnabled && config.OIDCRoleConfigHash == "" {
 		return Config{}, fmt.Errorf("OIDC_ROLE_CONFIG_HASH is required for CRM authorization catalog compatibility")
 	}
 	return config, nil
@@ -542,7 +629,7 @@ func (c Config) validateOIDC() error {
 	required := map[string]string{"OIDC_ISSUER": c.OIDCIssuer, "OIDC_CLIENT_ID": c.OIDCClientID, "OIDC_CLIENT_SECRET": c.OIDCClientSecret, "OIDC_REDIRECT_URI": c.OIDCRedirectURI, "OIDC_TENANT_ID": c.OIDCTenantID, "OIDC_ROLE_CONFIG_HASH": c.OIDCRoleConfigHash, "OIDC_SESSION_COOKIE_NAME": c.OIDCSessionCookieName, "MACHINE_TOKEN_ISSUER": c.MachineTokenIssuer, "MACHINE_TOKEN_AUDIENCE": c.MachineTokenAudience, "MACHINE_TOKEN_PUBLIC_KEY_PATH": c.MachineTokenPublicKeyPath}
 	for key, value := range required {
 		if strings.TrimSpace(value) == "" {
-			return fmt.Errorf("%s is required when DEV_AUTH_ENABLED=false", key)
+			return fmt.Errorf("%s is required", key)
 		}
 	}
 	if c.OIDCSessionTTL <= 0 || c.OIDCSessionTTL > maxOIDCSessionTTL {

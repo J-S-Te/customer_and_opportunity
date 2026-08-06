@@ -2,6 +2,7 @@ package bootstrap
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"sort"
@@ -20,6 +21,7 @@ import (
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/apperror"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/audit"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/auth"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/requestaudit"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/response"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/security"
 	"gorm.io/driver/mysql"
@@ -27,10 +29,12 @@ import (
 )
 
 type App struct {
-	Config Config
-	DB     *gorm.DB
-	Router *gin.Engine
-	Server *http.Server
+	Config      Config
+	DB          *gorm.DB
+	Router      *gin.Engine
+	Server      *http.Server
+	auditCancel context.CancelFunc
+	auditDone   chan struct{}
 }
 
 func New(config Config) (*App, error) {
@@ -44,62 +48,73 @@ func New(config Config) (*App, error) {
 	if err != nil {
 		return nil, err
 	}
+	auditStore := requestaudit.NewStore(db)
+	auditDispatcher, err := requestaudit.NewDispatcher(auditStore, requestaudit.DispatcherOptions{
+		PlatformBaseURL: config.PlatformBaseURL, ClientID: config.PlatformAuditClientID,
+		ClientSecret: config.PlatformAuditClientSecret, ApplicationCode: config.PlatformApplicationCode,
+		EnvironmentCode: config.PlatformEnvironmentCode, WorkerID: config.PlatformAuditWorkerID,
+		PollInterval: config.PlatformAuditPollInterval, BatchSize: config.PlatformAuditBatchSize,
+	})
+	if err != nil {
+		return nil, err
+	}
 	router := gin.New()
 	// RequestID 必须位于最外层，使恢复与访问日志共享同一追踪号；访问日志包住恢复中间件，
 	// 因而能够记录 panic 被转换后实际写出的状态码和字节数。
-	router.Use(middleware.RequestID(), middleware.AccessLog(slog.Default(), "crm", nil), middleware.Recovery(slog.Default(), "crm"))
+	router.Use(
+		middleware.RequestID(),
+		middleware.RequestAudit(auditStore, middleware.RequestAuditOptions{
+			TenantID: config.OIDCTenantID, ApplicationCode: config.PlatformApplicationCode,
+			EnvironmentCode: config.PlatformEnvironmentCode,
+		}),
+		middleware.AccessLog(slog.Default(), "crm", nil),
+		middleware.Recovery(slog.Default(), "crm"),
+	)
 	base := router.Group(strings.TrimRight(config.PathPrefix, "/"))
-	base.GET("/healthz", func(c *gin.Context) {
+	databaseHealthy := func(ctx context.Context) bool {
 		sqlDB, pingErr := db.DB()
-		if pingErr != nil || sqlDB.PingContext(c.Request.Context()) != nil {
+		return pingErr == nil && sqlDB.PingContext(ctx) == nil
+	}
+	base.GET("/livez", livenessHandler)
+	base.GET("/readyz", readinessHandler(databaseHealthy))
+	base.GET("/healthz", func(c *gin.Context) {
+		if !databaseHealthy(c.Request.Context()) {
 			c.JSON(503, gin.H{"status": "unhealthy"})
 			return
 		}
 		c.JSON(200, gin.H{"status": "ok"})
 	})
-	var authMiddleware gin.HandlerFunc
-	var internalAuthMiddleware gin.HandlerFunc
-	if config.DevelopmentAuth {
-		// 开发认证只用于本地联调，并同时替代浏览器会话和内部机器令牌；配置校验确保正式环境
-		// 不会在缺少 OIDC/机器验签材料时静默降级到请求头身份。
-		authMiddleware = middleware.DevelopmentAuth(true)
-		internalAuthMiddleware = middleware.DevelopmentAuth(true)
-	} else {
-		// 浏览器和机器调用使用两条独立信任链：前者只认服务端会话 Cookie，后者只认平台
-		// 应用令牌。内部路由不会复用浏览器权限，避免用户会话越过系统间接口边界。
-		oidcClient, oidcErr := crmauth.NewPlatformOIDCClient(context.Background(), crmauth.OIDCOptions{
-			Issuer: config.OIDCIssuer, BackchannelBaseURL: config.OIDCBackchannelBaseURL,
-			ClientID: config.OIDCClientID, ClientSecret: config.OIDCClientSecret,
-			RedirectURI: config.OIDCRedirectURI, Scopes: config.OIDCScopes,
-		})
-		if oidcErr != nil {
-			return nil, oidcErr
-		}
-		authService, authErr := crmauth.NewService(crmauth.NewGORMRepository(db), oidcClient, config.EncryptionKey, crmauth.Options{
-			TenantID: config.OIDCTenantID, RoleConfigHash: config.OIDCRoleConfigHash,
-			SessionTTL: config.OIDCSessionTTL, MaxRoles: config.OIDCMaxRoles,
-		})
-		if authErr != nil {
-			return nil, authErr
-		}
-		authHandler := crmauth.NewHandler(authService, crmauth.HTTPOptions{
-			PathPrefix: config.PathPrefix, PublicOrigin: config.PublicOrigin, CookieName: config.OIDCSessionCookieName,
-			Issuer: config.OIDCIssuer, ClientID: config.OIDCClientID, CookieSecure: config.OIDCSessionSecure, PostLogoutRedirectURI: config.OIDCPostLogoutRedirectURI,
-		})
-		base.GET("/auth/login", authHandler.Login)
-		base.GET("/auth/callback", authHandler.Callback)
-		base.POST("/auth/logout", authHandler.RequireSameOrigin, authHandler.Logout)
-		authMiddleware = middleware.SessionAuth(authService, config.OIDCSessionCookieName)
-		machineAuth, machineErr := crmauth.NewMachineAuthenticator(context.Background(), db, crmauth.MachineOptions{Issuer: config.MachineTokenIssuer, Audience: config.MachineTokenAudience, PublicKeyPath: config.MachineTokenPublicKeyPath, TenantID: config.OIDCTenantID})
-		if machineErr != nil {
-			return nil, machineErr
-		}
-		internalAuthMiddleware = middleware.MachineAuth(machineAuth)
+	// 浏览器和机器调用使用两条独立的基础平台信任链：前者只认服务端 OIDC 会话 Cookie，
+	// 后者只认平台应用令牌。不存在请求头身份或本地权限降级路径。
+	oidcClient, oidcErr := crmauth.NewPlatformOIDCClient(context.Background(), crmauth.OIDCOptions{
+		Issuer: config.OIDCIssuer, BackchannelBaseURL: config.OIDCBackchannelBaseURL,
+		ClientID: config.OIDCClientID, ClientSecret: config.OIDCClientSecret,
+		RedirectURI: config.OIDCRedirectURI, Scopes: config.OIDCScopes,
+	})
+	if oidcErr != nil {
+		return nil, oidcErr
 	}
-	apiMiddlewares := []gin.HandlerFunc{presale.ContactPhoneNoStore(), authMiddleware}
-	if !config.DevelopmentAuth {
-		apiMiddlewares = append(apiMiddlewares, middleware.RequireSameOriginWrite(config.PublicOrigin))
+	authService, authErr := crmauth.NewService(crmauth.NewGORMRepository(db), oidcClient, config.EncryptionKey, crmauth.Options{
+		TenantID: config.OIDCTenantID, RoleConfigHash: config.OIDCRoleConfigHash,
+		SessionTTL: config.OIDCSessionTTL, MaxRoles: config.OIDCMaxRoles,
+	})
+	if authErr != nil {
+		return nil, authErr
 	}
+	authHandler := crmauth.NewHandler(authService, crmauth.HTTPOptions{
+		PathPrefix: config.PathPrefix, PublicOrigin: config.PublicOrigin, CookieName: config.OIDCSessionCookieName,
+		Issuer: config.OIDCIssuer, ClientID: config.OIDCClientID, CookieSecure: config.OIDCSessionSecure, PostLogoutRedirectURI: config.OIDCPostLogoutRedirectURI,
+	})
+	authMiddleware := middleware.SessionAuth(authService, config.OIDCSessionCookieName)
+	base.GET("/auth/login", authHandler.Login)
+	base.GET("/auth/callback", authHandler.Callback)
+	base.POST("/auth/logout", authMiddleware, authHandler.RequireSameOrigin, authHandler.Logout)
+	machineAuth, machineErr := crmauth.NewMachineAuthenticator(context.Background(), db, crmauth.MachineOptions{Issuer: config.MachineTokenIssuer, Audience: config.MachineTokenAudience, PublicKeyPath: config.MachineTokenPublicKeyPath, TenantID: config.OIDCTenantID})
+	if machineErr != nil {
+		return nil, machineErr
+	}
+	internalAuthMiddleware := middleware.MachineAuth(machineAuth)
+	apiMiddlewares := []gin.HandlerFunc{presale.ContactPhoneNoStore(), authMiddleware, middleware.RequireSameOriginWrite(config.PublicOrigin)}
 	api := base.Group("/api/v1", apiMiddlewares...)
 	api.GET("/auth/me", func(c *gin.Context) {
 		principal, ok := auth.FromContext(c.Request.Context())
@@ -137,7 +152,7 @@ func New(config Config) (*App, error) {
 		ownerCatalog = ownerClient
 	}
 	ownerdirectory.RegisterRoutes(api, ownerdirectory.NewHandler(ownerCatalog))
-	auditWriter := audit.NewGORMWriter(db)
+	auditWriter := audit.NewGORMWriter(db).UsePlatformOutbox(auditStore, config.PlatformEnvironmentCode)
 	customerRepo := customer.NewGORMRepository(db)
 	customerService := customer.NewService(db, customerRepo, auditWriter, codec)
 	if config.OwnerDirectoryEnabled {
@@ -220,6 +235,17 @@ func New(config Config) (*App, error) {
 		}
 	}
 	opportunityService := opportunity.NewService(db, opportunityRepo, auditWriter, contractVerifier)
+	if config.ContractSignedCountEnabled {
+		counter, counterErr := opportunity.NewHTTPSignedContractCounter(context.Background(), opportunity.SignedContractCounterOptions{
+			Endpoint: config.ContractSignedCountURL, TokenURL: config.ContractSignedCountTokenURL,
+			ClientID: config.ContractSignedCountClientID, ClientSecret: config.ContractSignedCountClientSecret,
+			Scope: config.ContractSignedCountScope,
+		})
+		if counterErr != nil {
+			return nil, counterErr
+		}
+		opportunityService.UseSignedContractCounter(counter)
+	}
 	if config.OwnerDirectoryEnabled {
 		opportunityService.UseOwnerDirectory(ownerCatalog)
 	}
@@ -284,18 +310,31 @@ func New(config Config) (*App, error) {
 	opportunity.RegisterIntegrationRoutes(internal, opportunityHandler)
 	presale.RegisterInternalRoutes(internal, presaleHandler)
 	server := &http.Server{Addr: config.Address, Handler: router, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second}
-	return &App{Config: config, DB: db, Router: router, Server: server}, nil
+	auditContext, auditCancel := context.WithCancel(context.Background())
+	auditDone := make(chan struct{})
+	go func() {
+		defer close(auditDone)
+		auditDispatcher.Run(auditContext)
+	}()
+	return &App{Config: config, DB: db, Router: router, Server: server, auditCancel: auditCancel, auditDone: auditDone}, nil
 }
 
 func (a *App) Close(ctx context.Context) error {
 	// 先让 HTTP 在途请求收敛，再关闭共享连接池，避免请求持有的事务在优雅停机期间被截断。
 	shutdownErr := a.Server.Shutdown(ctx)
+	if a.auditCancel != nil {
+		a.auditCancel()
+	}
+	if a.auditDone != nil {
+		select {
+		case <-a.auditDone:
+		case <-ctx.Done():
+			shutdownErr = errors.Join(shutdownErr, ctx.Err())
+		}
+	}
 	sqlDB, dbErr := a.DB.DB()
 	if dbErr == nil {
 		dbErr = sqlDB.Close()
 	}
-	if shutdownErr != nil {
-		return shutdownErr
-	}
-	return dbErr
+	return errors.Join(shutdownErr, dbErr)
 }

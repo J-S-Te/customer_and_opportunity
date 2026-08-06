@@ -107,6 +107,7 @@ func enumSet(values ...string) map[string]struct{} {
 var filingSchemas = map[string]sectionSchema{
 	SectionOrganization: {
 		fields: map[string]fieldRule{
+			"unit_name":          stringRule(true, 200),
 			"social_credit_code": withFormat(stringRule(true, 18), "credit_code"),
 			"province":           stringRule(true, 64), "city": stringRule(true, 64), "district": stringRule(true, 64),
 			"address": stringRule(true, 300), "postal_code": withFormat(stringRule(false, 6), "postal_code"),

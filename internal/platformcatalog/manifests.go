@@ -81,6 +81,7 @@ func PortalManifest() Manifest {
 		permission("filing.create", "创建备案", "filing", "create", "MEDIUM"),
 		permission("filing.update", "维护备案草稿", "filing", "update", "MEDIUM"),
 		permission("filing.submit", "提交备案", "filing", "submit", "HIGH"),
+		permission("filing.delete", "删除备案草稿", "filing", "delete", "HIGH"),
 		permission("evaluation.read", "查看本人服务评价", "evaluation", "read", "LOW"),
 		permission("evaluation.create", "提交服务评价", "evaluation", "create", "MEDIUM"),
 		permission("feedback.read", "查看本人反馈", "feedback", "read", "LOW"),

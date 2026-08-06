@@ -65,3 +65,39 @@ func TestValidatePairRejectsMissingOrUnrelatedOrganization(t *testing.T) {
 		}
 	}
 }
+
+func TestResolveReturnsOnlyExactActiveDirectoryUsers(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/oauth2/token":
+			writer.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(writer).Encode(map[string]any{"access_token": "token", "token_type": "Bearer", "expires_in": 300})
+		case "/api/v1/internal/owner-directory":
+			userID := request.URL.Query().Get("user_id")
+			items := []User{}
+			if userID == "user-active" {
+				items = append(items, User{ID: userID, DisplayName: "真实人员"})
+			}
+			writer.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(writer).Encode(map[string]any{
+				"code": "OK", "message": "success", "request_id": "request-resolve",
+				"data": Page{Items: items, Page: 1, PageSize: 1, Total: int64(len(items))},
+			})
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer server.Close()
+
+	client, err := NewHTTPClient(context.Background(), HTTPOptions{
+		Endpoint: server.URL + "/api/v1/internal/owner-directory", TokenURL: server.URL + "/oauth2/token",
+		ClientID: "crm-owner-reader", ClientSecret: "secret", Scope: ownerDirectoryScope, HTTPClient: server.Client(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	users, err := client.Resolve(context.Background(), []string{" user-active ", "user-missing", "user-active"})
+	if err != nil || len(users) != 1 || users["user-active"].DisplayName != "真实人员" {
+		t.Fatalf("users=%#v err=%v", users, err)
+	}
+}

@@ -30,12 +30,14 @@ type UpdateContactInput struct {
 }
 
 type CreateRequest struct {
-	Name                    string         `json:"name" binding:"required,max=200"`
-	UnifiedCreditCode       string         `json:"unified_credit_code" binding:"omitempty,max=64"`
-	CustomerType            string         `json:"customer_type" binding:"required,max=64"`
-	Industry                string         `json:"industry" binding:"required,max=64"`
-	Region                  string         `json:"region" binding:"required,max=64"`
-	OwnerUserID             string         `json:"owner_user_id" binding:"required,max=64"`
+	Name              string `json:"name" binding:"required,max=200"`
+	UnifiedCreditCode string `json:"unified_credit_code" binding:"omitempty,max=64"`
+	CustomerType      string `json:"customer_type" binding:"required,max=64"`
+	Industry          string `json:"industry" binding:"required,max=64"`
+	Region            string `json:"region" binding:"required,max=64"`
+	// OwnerUserID 与 OwnerOrgID 仅为旧客户端兼容字段；创建服务始终使用认证主体及其主组织，
+	// 不信任客户端指定的负责人。
+	OwnerUserID             string         `json:"owner_user_id,omitempty" binding:"omitempty,max=64"`
 	OwnerOrgID              string         `json:"owner_org_id" binding:"omitempty,max=64"`
 	Contacts                []ContactInput `json:"contacts" binding:"required,min=1,dive"`
 	DuplicateOverride       bool           `json:"duplicate_override"`

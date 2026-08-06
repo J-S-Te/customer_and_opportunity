@@ -13,14 +13,15 @@ import (
 
 // 审批引擎与 PMS 使用相互独立的 OAuth 客户端，单个机器凭据不能同时获得两类集成权限。
 type Config struct {
-	MySQLDSN        string
-	WorkerID        string
-	PollInterval    time.Duration
-	LeaseDuration   time.Duration
-	HeartbeatMaxAge time.Duration
-	BatchSize       int
-	Approval        HTTPPortConfig
-	PMS             HTTPPortConfig
+	MySQLDSN          string
+	WorkerID          string
+	PollInterval      time.Duration
+	LeaseDuration     time.Duration
+	HeartbeatMaxAge   time.Duration
+	BatchSize         int
+	AllowInsecureHTTP bool
+	Approval          HTTPPortConfig
+	PMS               HTTPPortConfig
 }
 
 type HTTPPortConfig struct {
@@ -43,13 +44,18 @@ func LoadConfig() (Config, error) {
 	if err != nil {
 		return Config{}, fmt.Errorf("PMS_TLS_REQUIRE_MTLS: %w", err)
 	}
+	allowInsecureHTTP, err := boolEnv("PRESALE_WORKER_ALLOW_INSECURE_HTTP", false)
+	if err != nil {
+		return Config{}, fmt.Errorf("PRESALE_WORKER_ALLOW_INSECURE_HTTP: %w", err)
+	}
 	cfg := Config{
-		MySQLDSN:        os.Getenv("MYSQL_DSN"),
-		WorkerID:        env("PRESALE_WORKER_ID", hostname()),
-		PollInterval:    durationEnv("PRESALE_WORKER_POLL_INTERVAL", time.Second),
-		LeaseDuration:   durationEnv("PRESALE_WORKER_LEASE_DURATION", 30*time.Second),
-		HeartbeatMaxAge: durationEnv("PRESALE_WORKER_HEARTBEAT_MAX_AGE", 15*time.Second),
-		BatchSize:       intEnv("PRESALE_WORKER_BATCH_SIZE", 20),
+		MySQLDSN:          os.Getenv("MYSQL_DSN"),
+		WorkerID:          env("PRESALE_WORKER_ID", hostname()),
+		PollInterval:      durationEnv("PRESALE_WORKER_POLL_INTERVAL", time.Second),
+		LeaseDuration:     durationEnv("PRESALE_WORKER_LEASE_DURATION", 30*time.Second),
+		HeartbeatMaxAge:   durationEnv("PRESALE_WORKER_HEARTBEAT_MAX_AGE", 15*time.Second),
+		BatchSize:         intEnv("PRESALE_WORKER_BATCH_SIZE", 20),
+		AllowInsecureHTTP: allowInsecureHTTP,
 		Approval: HTTPPortConfig{TokenURL: os.Getenv("APPROVAL_TOKEN_URL"), ClientID: os.Getenv("APPROVAL_CLIENT_ID"), ClientSecret: os.Getenv("APPROVAL_CLIENT_SECRET"), Scope: env("APPROVAL_SCOPE", "presale.approval.write"), StartURL: os.Getenv("APPROVAL_START_URL"), ActionURL: os.Getenv("APPROVAL_ACTION_URL"), TLS: integrationhttp.TLSOptions{
 			RootCAFile: os.Getenv("APPROVAL_TLS_ROOT_CA_FILE"), ClientCertFile: os.Getenv("APPROVAL_TLS_CLIENT_CERT_FILE"), ClientKeyFile: os.Getenv("APPROVAL_TLS_CLIENT_KEY_FILE"), ServerName: os.Getenv("APPROVAL_TLS_SERVER_NAME"), RequireMTLS: approvalRequireMTLS,
 		}},
@@ -67,16 +73,16 @@ func LoadConfig() (Config, error) {
 	if cfg.HeartbeatMaxAge < cfg.PollInterval+10*time.Second || cfg.HeartbeatMaxAge > 5*time.Minute {
 		return Config{}, fmt.Errorf("PRESALE_WORKER_HEARTBEAT_MAX_AGE must cover poll interval, integration timeout and jitter")
 	}
-	if err := validatePort("approval", cfg.Approval, true); err != nil {
+	if err := validatePort("approval", cfg.Approval, true, allowInsecureHTTP); err != nil {
 		return Config{}, err
 	}
-	if err := validatePort("PMS", cfg.PMS, false); err != nil {
+	if err := validatePort("PMS", cfg.PMS, false, allowInsecureHTTP); err != nil {
 		return Config{}, err
 	}
 	return cfg, nil
 }
 
-func validatePort(name string, cfg HTTPPortConfig, approval bool) error {
+func validatePort(name string, cfg HTTPPortConfig, approval bool, allowInsecureHTTP bool) error {
 	required := map[string]string{"token URL": cfg.TokenURL, "client ID": cfg.ClientID, "client secret": cfg.ClientSecret, "scope": cfg.Scope}
 	if approval {
 		required["start URL"], required["action URL"] = cfg.StartURL, cfg.ActionURL
@@ -99,8 +105,11 @@ func validatePort(name string, cfg HTTPPortConfig, approval bool) error {
 	}
 	for _, endpoint := range endpoints {
 		parsed, err := url.ParseRequestURI(endpoint)
-		if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
-			return fmt.Errorf("%s endpoint must be a valid HTTPS URL without credentials, query or fragment", name)
+		if err != nil || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+			return fmt.Errorf("%s endpoint must be a valid URL without credentials, query or fragment", name)
+		}
+		if parsed.Scheme != "https" && !allowInsecureHTTP {
+			return fmt.Errorf("%s endpoint must use HTTPS unless PRESALE_WORKER_ALLOW_INSECURE_HTTP=true", name)
 		}
 	}
 	if err := cfg.TLS.ValidateEndpoints(endpoints...); err != nil {

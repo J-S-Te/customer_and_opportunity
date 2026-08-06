@@ -9,7 +9,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/middleware"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/portal/account"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/portal/capability"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/portal/evaluation"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/portal/feedback"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/portal/filing"
@@ -20,14 +22,17 @@ import (
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/portal/report"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/portal/workerruntime"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/request"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/requestaudit"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
 )
 
 type App struct {
-	Config Config
-	DB     *gorm.DB
-	Server *http.Server
+	Config      Config
+	DB          *gorm.DB
+	Server      *http.Server
+	auditCancel context.CancelFunc
+	auditDone   chan struct{}
 }
 
 func New(ctx context.Context, config Config) (*App, error) {
@@ -45,6 +50,16 @@ func New(ctx context.Context, config Config) (*App, error) {
 	defer cancel()
 	if err := sqlDB.PingContext(pingCtx); err != nil {
 		return nil, fmt.Errorf("ping Portal database: %w", err)
+	}
+	auditStore := requestaudit.NewPortalStore(db)
+	auditDispatcher, err := requestaudit.NewDispatcher(auditStore, requestaudit.DispatcherOptions{
+		PlatformBaseURL: config.PlatformBaseURL, ClientID: config.PlatformAuditClientID,
+		ClientSecret: config.PlatformAuditClientSecret, ApplicationCode: config.PlatformApplicationCode,
+		EnvironmentCode: config.PlatformEnvironmentCode, WorkerID: config.PlatformAuditWorkerID,
+		PollInterval: config.PlatformAuditPollInterval, BatchSize: config.PlatformAuditBatchSize,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("initialize Portal request audit: %w", err)
 	}
 	oidcAdapter, err := NewOIDCAdapter(ctx, config)
 	if err != nil {
@@ -76,6 +91,7 @@ func New(ctx context.Context, config Config) (*App, error) {
 	// 尚未接入的项目源、文件读取和恶意文件扫描均使用失败关闭适配器。读模型可以继续提供
 	// 已同步数据，但不能伪装实时同步或安全下载能力可用。
 	workerReadiness := workerruntime.NewRepository(db)
+	customerCapabilities := capability.NewCachedReader(capability.NewGORMStore(db), 30*time.Second)
 	projectExportService := projectexport.NewService(projectexport.NewGORMRepository(db), projectService, systemClock{}, requestIDGenerator{}, 15*time.Minute).
 		UseWorkerReadiness(workerReadiness, workerruntime.HeartbeatMaxAge)
 	projectMessageService := projectmessage.NewService(projectmessage.NewGORMRepository(db), systemClock{}, requestIDGenerator{})
@@ -95,19 +111,37 @@ func New(ctx context.Context, config Config) (*App, error) {
 	filingRepository := filing.NewGORMRepository(db)
 	filingService := filing.NewService(filingRepository, filingProtector{codec: codec}, projectAccess{projects: projectService}, systemClock{}, requestIDGenerator{})
 	filingMaterialService := filing.NewMaterialService(filingRepository, filingProtector{codec: codec}, filing.UnavailableMaterialObjectStore{}, filing.UnavailableMaterialScanner{}, systemClock{}, requestIDGenerator{})
-	router := NewRouter(RouterDependencies{Config: config, Account: accountService, Projects: projectService, ProjectExports: projectExportService, ProjectMessages: projectMessageService, Reports: reportService, ReportDownloads: reportDownloadService, WorkerReadiness: workerReadiness, WorkerHeartbeatMaxAge: workerruntime.HeartbeatMaxAge, ReportDownloadError: func(ctx context.Context, err error) {
+	router := NewRouter(RouterDependencies{Config: config, RequestAudit: middleware.RequestAudit(auditStore, middleware.RequestAuditOptions{
+		TenantID: config.TenantID, ApplicationCode: config.PlatformApplicationCode, EnvironmentCode: config.PlatformEnvironmentCode,
+	}), Account: accountService, Projects: projectService, ProjectExports: projectExportService, ProjectMessages: projectMessageService, Reports: reportService, ReportDownloads: reportDownloadService, WorkerReadiness: workerReadiness, WorkerHeartbeatMaxAge: workerruntime.HeartbeatMaxAge, ReportDownloadError: func(ctx context.Context, err error) {
 		slog.Default().ErrorContext(ctx, "Portal report download completion audit failed", "error", err)
-	}, Feedback: feedbackService, Evaluations: evaluationService, Filings: filingService, FilingMaterials: filingMaterialService, MachineAuthenticator: machineAuthenticator, DatabaseHealthy: func() bool {
+	}, Feedback: feedbackService, Evaluations: evaluationService, Filings: filingService, FilingMaterials: filingMaterialService, MachineAuthenticator: machineAuthenticator, CustomerCapabilities: customerCapabilities, DatabaseHealthy: func() bool {
 		pingCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 		return sqlDB.PingContext(pingCtx) == nil
 	}, Logger: slog.Default()})
-	return &App{Config: config, DB: db, Server: &http.Server{Addr: config.Address, Handler: router, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second}}, nil
+	auditContext, auditCancel := context.WithCancel(context.Background())
+	auditDone := make(chan struct{})
+	go func() {
+		defer close(auditDone)
+		auditDispatcher.Run(auditContext)
+	}()
+	return &App{Config: config, DB: db, Server: &http.Server{Addr: config.Address, Handler: router, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second}, auditCancel: auditCancel, auditDone: auditDone}, nil
 }
 
 func (a *App) Close(ctx context.Context) error {
 	// HTTP 停机与连接池关闭的错误都要保留，便于编排器区分在途请求超时和数据库释放失败。
 	shutdownErr := a.Server.Shutdown(ctx)
+	if a.auditCancel != nil {
+		a.auditCancel()
+	}
+	if a.auditDone != nil {
+		select {
+		case <-a.auditDone:
+		case <-ctx.Done():
+			shutdownErr = errors.Join(shutdownErr, ctx.Err())
+		}
+	}
 	sqlDB, err := a.DB.DB()
 	if err == nil {
 		err = sqlDB.Close()

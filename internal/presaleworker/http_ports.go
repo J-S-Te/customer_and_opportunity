@@ -29,11 +29,11 @@ type httpPorts struct {
 	nonceReader    io.Reader
 }
 
-func NewHTTPPorts(approval, pms HTTPPortConfig) (presale.ApprovalCommandPort, presale.PMSPublisher, error) {
-	if err := validatePort("approval", approval, true); err != nil {
+func NewHTTPPorts(approval, pms HTTPPortConfig, allowInsecureHTTP bool) (presale.ApprovalCommandPort, presale.PMSPublisher, error) {
+	if err := validatePort("approval", approval, true, allowInsecureHTTP); err != nil {
 		return nil, nil, err
 	}
-	if err := validatePort("PMS", pms, false); err != nil {
+	if err := validatePort("PMS", pms, false, allowInsecureHTTP); err != nil {
 		return nil, nil, err
 	}
 	approvalClient, err := oauthClient(approval)

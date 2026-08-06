@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"gorm.io/gorm"
 )
 
 type memoryRepository struct {
@@ -31,7 +33,7 @@ func (r *memoryRepository) Create(_ context.Context, v *Filing) error {
 func (r *memoryRepository) FindCreateAction(_ context.Context, a Actor, key string) (*Filing, error) {
 	for i := range r.filings {
 		v := &r.filings[i]
-		if v.TenantID == a.TenantID && v.CustomerID == a.CustomerID && v.AccountID == a.AccountID && v.CreateIdempotencyKey == key {
+		if v.TenantID == a.TenantID && v.CustomerID == a.CustomerID && v.AccountID == a.AccountID && v.CreateIdempotencyKey == key && !v.DeletedAt.Valid {
 			return v, nil
 		}
 	}
@@ -40,7 +42,7 @@ func (r *memoryRepository) FindCreateAction(_ context.Context, a Actor, key stri
 func (r *memoryRepository) ListOwned(_ context.Context, a Actor, _, _ int) ([]Filing, int64, error) {
 	var out []Filing
 	for _, v := range r.filings {
-		if v.TenantID == a.TenantID && v.CustomerID == a.CustomerID {
+		if v.TenantID == a.TenantID && v.CustomerID == a.CustomerID && !v.DeletedAt.Valid {
 			out = append(out, v)
 		}
 	}
@@ -49,7 +51,7 @@ func (r *memoryRepository) ListOwned(_ context.Context, a Actor, _, _ int) ([]Fi
 func (r *memoryRepository) FindOwned(_ context.Context, a Actor, id string) (*Filing, error) {
 	for i := range r.filings {
 		v := &r.filings[i]
-		if v.TenantID == a.TenantID && v.CustomerID == a.CustomerID && v.PublicID == id {
+		if v.TenantID == a.TenantID && v.CustomerID == a.CustomerID && v.PublicID == id && !v.DeletedAt.Valid {
 			return v, nil
 		}
 	}
@@ -58,6 +60,43 @@ func (r *memoryRepository) FindOwned(_ context.Context, a Actor, id string) (*Fi
 func (r *memoryRepository) FindOwnedForUpdate(ctx context.Context, a Actor, id string) (*Filing, error) {
 	return r.FindOwned(ctx, a, id)
 }
+func (r *memoryRepository) DeleteDraftData(_ context.Context, tenant string, filingID uint64) error {
+	var sections []Section
+	for _, v := range r.sections {
+		if v.TenantID != tenant || v.FilingID != filingID {
+			sections = append(sections, v)
+		}
+	}
+	r.sections = sections
+	var matrices []MatrixSelection
+	for _, v := range r.matrices {
+		if v.TenantID != tenant || v.FilingID != filingID {
+			matrices = append(matrices, v)
+		}
+	}
+	r.matrices = matrices
+	var materials []Material
+	for _, v := range r.materials {
+		if v.TenantID != tenant || v.FilingID != filingID {
+			materials = append(materials, v)
+		}
+	}
+	r.materials = materials
+	return nil
+}
+func (r *memoryRepository) SoftDeleteFiling(_ context.Context, tenant string, filingID uint64, actor string, at time.Time) error {
+	for i := range r.filings {
+		v := &r.filings[i]
+		if v.TenantID == tenant && v.ID == filingID {
+			v.DeletedAt = gorm.DeletedAt{Time: at, Valid: true}
+			v.UpdatedBy = actor
+			v.UpdatedAt = at
+			return nil
+		}
+	}
+	return ErrNotFound
+}
+
 func (r *memoryRepository) FindInternalForUpdate(_ context.Context, tenant string, customer uint64, id string) (*Filing, error) {
 	for i := range r.filings {
 		v := &r.filings[i]
@@ -116,6 +155,21 @@ func (r *memoryRepository) ListSections(_ context.Context, t string, id uint64) 
 	for _, v := range r.sections {
 		if v.TenantID == t && v.FilingID == id {
 			out = append(out, v)
+		}
+	}
+	return out, nil
+}
+func (r *memoryRepository) ListSectionsByFilingIDs(_ context.Context, t string, ids []uint64) ([]Section, error) {
+	var out []Section
+	byID := make(map[uint64]struct{}, len(ids))
+	for _, id := range ids {
+		byID[id] = struct{}{}
+	}
+	for _, v := range r.sections {
+		if v.TenantID == t {
+			if _, ok := byID[v.FilingID]; ok {
+				out = append(out, v)
+			}
 		}
 	}
 	return out, nil
@@ -564,7 +618,7 @@ func TestMigrationStoresOnlyCiphertextBodies(t *testing.T) {
 func validSection(code string) map[string]any {
 	switch code {
 	case SectionOrganization:
-		return map[string]any{"social_credit_code": "91440300100008888K", "province": "广东省", "city": "深圳市", "district": "福田区", "address": "福华路1号", "organization_leader_name": "周明", "security_department": "信息部", "security_contact_name": "陈工", "affiliation": "CITY", "organization_type": "ENTERPRISE", "industry_code": "27", "level2_object_count": 0, "level3_object_count": 1, "level4_object_count": 0, "level5_object_count": 0}
+		return map[string]any{"unit_name": "华兴证券股份有限公司", "social_credit_code": "91440300100008888K", "province": "广东省", "city": "深圳市", "district": "福田区", "address": "福华路1号", "organization_leader_name": "周明", "security_department": "信息部", "security_contact_name": "陈工", "affiliation": "CITY", "organization_type": "ENTERPRISE", "industry_code": "27", "level2_object_count": 0, "level3_object_count": 1, "level4_object_count": 0, "level5_object_count": 0}
 	case SectionClassifiedObject:
 		return map[string]any{"system_name": "核心系统", "object_types": []string{"DATA_RESOURCE"}, "business_type": "PUBLIC_SERVICE", "business_description": "核心业务", "service_scope": "NATIONAL", "service_audience": "PUBLIC", "deployment_scope": "WAN", "network_nature": "INTERNET", "launched_on": "2026-01-01", "is_subsystem": false}
 	case SectionClassification:
@@ -593,4 +647,82 @@ func hasIssue(values []ValidationIssue, path, code string) bool {
 		}
 	}
 	return false
+}
+
+func TestDeleteDraftRemovesOnlyOwnDraftAndKeepsAudit(t *testing.T) {
+	service, repo, _ := testService()
+	draft, err := service.Create(context.Background(), actorA(), CreateCommand{IdempotencyKey: "create-delete-key"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = service.SaveSection(context.Background(), actorA(), draft.ID, SectionOrganization, SaveSectionCommand{Data: mustJSON(validSection(SectionOrganization)), IdempotencyKey: "delete-section-key"}); err != nil {
+		t.Fatal(err)
+	}
+	repo.materials = append(repo.materials, Material{ID: 1, TenantID: "tenant-a", PublicID: "material-delete", FilingID: repo.filings[0].ID, MaterialCode: "NETWORK_TOPOLOGY", ObjectVersion: "version-1", FileName: "topology.pdf", MIMEType: "application/pdf", SizeBytes: 3, SHA256: strings.Repeat("a", 64), ScanStatus: MaterialPendingUpload, Version: 1})
+
+	deleted, err := service.DeleteDraft(context.Background(), actorA(), draft.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deleted.ID != draft.ID || !repo.filings[0].DeletedAt.Valid {
+		t.Fatalf("deleted=%#v filing=%#v", deleted, repo.filings[0])
+	}
+	if len(repo.sections) != 0 || len(repo.materials) != 0 {
+		t.Fatalf("draft children not removed: sections=%d materials=%d", len(repo.sections), len(repo.materials))
+	}
+	found := false
+	for _, action := range repo.actions {
+		if action.Action == "DELETE" && action.ActorID == "sub-a" && action.FilingID == repo.filings[0].ID {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("delete audit action missing")
+	}
+	if _, err = service.Get(context.Background(), actorA(), draft.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("get after delete err=%v", err)
+	}
+	if _, err = service.DeleteDraft(context.Background(), actorA(), draft.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("second delete err=%v", err)
+	}
+}
+
+func TestDeleteDraftRejectsLockedForeignAndInvalidActor(t *testing.T) {
+	service, repo, _ := testService()
+	draft, err := service.Create(context.Background(), actorA(), CreateCommand{IdempotencyKey: "create-locked-key"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo.filings[0].Status = StatusWaitingContract
+	if _, err = service.DeleteDraft(context.Background(), actorA(), draft.ID); !errors.Is(err, ErrInvalidState) {
+		t.Fatalf("locked delete err=%v", err)
+	}
+	repo.filings[0].Status = StatusDraft
+	if _, err = service.DeleteDraft(context.Background(), Actor{TenantID: "tenant-b", CustomerID: 8, AccountID: "sub-b"}, draft.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("foreign delete err=%v", err)
+	}
+	if _, err = service.DeleteDraft(context.Background(), Actor{TenantID: "", CustomerID: 0, AccountID: ""}, draft.ID); !errors.Is(err, ErrValidation) {
+		t.Fatalf("invalid actor delete err=%v", err)
+	}
+}
+
+func TestListIncludesUnitNameAndSystemName(t *testing.T) {
+	service, _, _ := testService()
+	view, err := service.Create(context.Background(), actorA(), CreateCommand{IdempotencyKey: "create-list-key"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = service.SaveSection(context.Background(), actorA(), view.ID, SectionOrganization, SaveSectionCommand{Data: mustJSON(validSection(SectionOrganization)), IdempotencyKey: "list-org-key"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = service.SaveSection(context.Background(), actorA(), view.ID, SectionClassifiedObject, SaveSectionCommand{Data: mustJSON(validSection(SectionClassifiedObject)), IdempotencyKey: "list-object-key"}); err != nil {
+		t.Fatal(err)
+	}
+	result, err := service.List(context.Background(), actorA(), 1, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Items) != 1 || result.Items[0].UnitName != "华兴证券股份有限公司" || result.Items[0].SystemName != "核心系统" {
+		t.Fatalf("list summary=%#v", result.Items)
+	}
 }

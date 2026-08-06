@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/integrationhttp"
@@ -123,6 +124,85 @@ func (client *HTTPClient) Validate(ctx context.Context, userID, organizationID s
 		return normalizeError(err)
 	}
 	return validatePair(page, userID, organizationID)
+}
+
+// Resolve resolves at most one authoritative directory record for every requested platform subject.
+// Exact lookups are bounded so a large opportunity team cannot create an unbounded request burst.
+func (client *HTTPClient) Resolve(ctx context.Context, userIDs []string) (map[string]User, error) {
+	unique := make([]string, 0, len(userIDs))
+	seen := make(map[string]struct{}, len(userIDs))
+	for _, raw := range userIDs {
+		userID := strings.TrimSpace(raw)
+		if userID == "" {
+			continue
+		}
+		if _, exists := seen[userID]; exists {
+			continue
+		}
+		seen[userID] = struct{}{}
+		unique = append(unique, userID)
+	}
+	resolved := make(map[string]User, len(unique))
+	if len(unique) == 0 {
+		return resolved, nil
+	}
+
+	type lookupResult struct {
+		userID string
+		user   *User
+		err    error
+	}
+	lookupContext, cancel := context.WithCancel(ctx)
+	defer cancel()
+	results := make(chan lookupResult, len(unique))
+	semaphore := make(chan struct{}, 8)
+	var wait sync.WaitGroup
+	for _, userID := range unique {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			select {
+			case semaphore <- struct{}{}:
+			case <-lookupContext.Done():
+				results <- lookupResult{userID: userID, err: lookupContext.Err()}
+				return
+			}
+			defer func() { <-semaphore }()
+			page, err := client.List(lookupContext, Query{UserID: userID, Page: 1, PageSize: 1})
+			if err != nil {
+				results <- lookupResult{userID: userID, err: err}
+				return
+			}
+			for index := range page.Items {
+				if page.Items[index].ID == userID {
+					user := page.Items[index]
+					results <- lookupResult{userID: userID, user: &user}
+					return
+				}
+			}
+			results <- lookupResult{userID: userID}
+		}()
+	}
+	go func() {
+		wait.Wait()
+		close(results)
+	}()
+
+	var lookupErr error
+	for result := range results {
+		if result.err != nil {
+			lookupErr = result.err
+			cancel()
+			continue
+		}
+		if result.user != nil {
+			resolved[result.userID] = *result.user
+		}
+	}
+	if lookupErr != nil {
+		return nil, ErrUnavailable
+	}
+	return resolved, nil
 }
 
 func rejectRedirect(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }

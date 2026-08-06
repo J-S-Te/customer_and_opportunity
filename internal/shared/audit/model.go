@@ -3,10 +3,12 @@ package audit
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"time"
 
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/database"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/request"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/requestaudit"
 	"gorm.io/gorm"
 )
 
@@ -35,9 +37,19 @@ type Writer interface {
 	Write(context.Context, Event) error
 }
 
-type GORMWriter struct{ db *gorm.DB }
+type GORMWriter struct {
+	db              *gorm.DB
+	platformOutbox  *requestaudit.Store
+	environmentCode string
+}
 
 func NewGORMWriter(db *gorm.DB) *GORMWriter { return &GORMWriter{db: db} }
+
+func (w *GORMWriter) UsePlatformOutbox(outbox *requestaudit.Store, environmentCode string) *GORMWriter {
+	w.platformOutbox = outbox
+	w.environmentCode = environmentCode
+	return w
+}
 
 func (w *GORMWriter) Write(ctx context.Context, event Event) error {
 	// 优先复用上下文中的业务事务，使状态变化与审计事件同成同败；没有事务时才使用共享连接。
@@ -48,7 +60,32 @@ func (w *GORMWriter) Write(ctx context.Context, event Event) error {
 	// 应用代码、追踪号和发生时间由服务端覆盖，调用方只能提供业务快照，不能伪造审计来源。
 	event.RequestID = request.ID(ctx)
 	event.OccurredAt = time.Now().UTC()
-	return database.FromContext(ctx, w.db).Create(&event).Error
+	if err := database.FromContext(ctx, w.db).Create(&event).Error; err != nil {
+		return err
+	}
+	if w.platformOutbox == nil {
+		return nil
+	}
+	result := "SUCCESS"
+	switch event.Result {
+	case "REJECTED", "DENIED":
+		result = "DENIED"
+	case "FAILED", "FAILURE":
+		result = "FAILURE"
+	}
+	actorType := "USER"
+	if strings.HasPrefix(event.ActorID, "machine:") || strings.HasSuffix(event.ActorID, "-machine") {
+		actorType = "MACHINE"
+	} else if event.ActorID == "" || strings.HasPrefix(event.ActorID, "system") {
+		actorType = "SYSTEM"
+	}
+	return w.platformOutbox.Publish(ctx, requestaudit.BusinessEvent{
+		EventID: event.EventID, TenantID: event.TenantID, ApplicationCode: event.ApplicationCode,
+		EnvironmentCode: w.environmentCode, ActorType: actorType, ActorID: event.ActorID,
+		ActorName: event.ActorNameSnapshot, Action: event.Module + "." + event.Operation,
+		ResourceType: event.ResourceType, ResourceID: event.ResourceID, RequestID: event.RequestID,
+		Result: result, RiskLevel: "HIGH", OccurredAt: event.OccurredAt,
+	})
 }
 
 func JSON(value any) []byte {

@@ -14,7 +14,7 @@ type App struct {
 }
 
 func New(cfg Config) (*App, error) {
-	approval, pms, err := NewHTTPPorts(cfg.Approval, cfg.PMS)
+	approval, pms, err := NewHTTPPorts(cfg.Approval, cfg.PMS, cfg.AllowInsecureHTTP)
 	if err != nil {
 		return nil, err
 	}

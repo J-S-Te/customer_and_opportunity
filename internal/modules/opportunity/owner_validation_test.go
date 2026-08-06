@@ -26,17 +26,21 @@ func (probe *ownerCatalogProbe) Validate(_ context.Context, userID, organization
 	return probe.err
 }
 
+func (probe *ownerCatalogProbe) Resolve(context.Context, []string) (map[string]ownerdirectory.User, error) {
+	return nil, probe.err
+}
+
 func TestOpportunityCreateAndOwnerChangeFailClosedBeforePersistence(t *testing.T) {
 	directoryErr := errors.New("authoritative owner directory unavailable")
 	probe := &ownerCatalogProbe{err: directoryErr}
 	repository := &createIdempotencyRepository{GORMRepository: &GORMRepository{}, visible: true}
 	service := createTestService(repository, &countingAuditWriter{}).UseOwnerDirectory(probe)
-	ctx := auth.WithPrincipal(context.Background(), auth.Principal{TenantID: "tenant-a", UserID: "actor-a"})
+	ctx := auth.WithPrincipal(context.Background(), auth.Principal{TenantID: "tenant-a", UserID: "actor-a", PrimaryOrgID: "org-a", OrganizationIDs: []string{"org-a"}})
 
 	if result, err := service.Create(ctx, createTestInput()); result != nil || !errors.Is(err, directoryErr) {
 		t.Fatalf("create result=%#v err=%v", result, err)
 	}
-	if probe.userID != "owner-a" || probe.organizationID != "org-a" {
+	if probe.userID != "actor-a" || probe.organizationID != "org-a" {
 		t.Fatalf("create pair=(%q,%q)", probe.userID, probe.organizationID)
 	}
 	if repository.visibilityChecks != 0 || repository.findCalls != 0 || repository.created != 0 {

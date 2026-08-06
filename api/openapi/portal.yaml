@@ -18,6 +18,10 @@ tags:
   - {name: Filing}
   - {name: Machine integration}
 paths:
+  /livez:
+    get: {$ref: '#/components/x-operations/portalLive'}
+  /readyz:
+    get: {$ref: '#/components/x-operations/portalReady'}
   /healthz:
     get: {$ref: '#/components/x-operations/portalHealth'}
   /auth/login:
@@ -109,6 +113,7 @@ paths:
     post: {$ref: '#/components/x-operations/createFiling'}
   /api/v1/filings/{id}:
     get: {$ref: '#/components/x-operations/getFiling'}
+    delete: {$ref: '#/components/x-operations/deleteFiling'}
   /api/v1/filings/{id}/sections/{code}:
     put: {$ref: '#/components/x-operations/saveFilingSection'}
   /api/v1/filings/{id}/matrix/{code}:
@@ -159,6 +164,9 @@ paths:
     post: {$ref: '#/components/x-operations/filingMaterialScanCallback'}
   /internal/customers/{customerID}/projects:
     get: {$ref: '#/components/x-operations/listProjectHistoryForCRM'}
+  /internal/customers/{customerID}/capabilities:
+    get: {$ref: '#/components/x-operations/getCustomerCapabilities'}
+    put: {$ref: '#/components/x-operations/updateCustomerCapabilities'}
   /internal/project-conversations:
     get: {$ref: '#/components/x-operations/listConversationsForManager'}
   /internal/project-conversations/{id}:
@@ -268,6 +276,8 @@ components:
     SaveFilingSection: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/SaveFilingSection'}}}}
     SaveFilingMatrix: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/SaveFilingMatrix'}}}}
   x-operations:
+    portalLive: {operationId: portalLive, tags: [Authentication], security: [], responses: {'200': {description: Process is alive}}}
+    portalReady: {operationId: portalReady, tags: [Authentication], security: [], responses: {'200': {description: Ready for traffic}, '503': {description: Database is not ready}}}
     portalHealth: {operationId: portalHealth, tags: [Authentication], security: [], responses: {'200': {description: Healthy}, '503': {description: Database unhealthy}}}
     portalLogin: {operationId: portalLogin, tags: [Authentication], security: [], responses: {'302': {description: Redirect to platform OIDC Authorization Code + PKCE}, '400': {$ref: '#/components/responses/Error'}}}
     portalActivate: {operationId: portalActivate, tags: [Authentication], security: [], parameters: [{name: token, in: query, required: true, schema: {type: string}}], responses: {'302': {description: Validate invite and redirect to platform OIDC}, '400': {$ref: '#/components/responses/Error'}}}
@@ -326,6 +336,7 @@ components:
     listFilings: &filingRead {<<: *portalRead, operationId: listFilings, tags: [Filing], x-permission: filing.read}
     createFiling: {<<: *filingRead, operationId: createFiling, x-permission: filing.create, parameters: [{$ref: '#/components/parameters/IdempotencyKey'}], requestBody: {$ref: '#/components/requestBodies/CreateFiling'}}
     getFiling: {<<: *filingRead, operationId: getFiling, parameters: [{$ref: '#/components/parameters/ID'}]}
+    deleteFiling: {<<: *filingRead, operationId: deleteFiling, x-permission: filing.delete, parameters: [{$ref: '#/components/parameters/ID'}], description: Deletes the caller's own draft filing only; locked or submitted filings are rejected.}
     saveFilingSection: {<<: *filingRead, operationId: saveFilingSection, x-permission: filing.update, parameters: [{$ref: '#/components/parameters/ID'}, {name: code, in: path, required: true, schema: {type: string}}, {$ref: '#/components/parameters/IdempotencyKey'}], requestBody: {$ref: '#/components/requestBodies/SaveFilingSection'}}
     saveFilingMatrix: {<<: *filingRead, operationId: saveFilingMatrix, x-permission: filing.update, parameters: [{$ref: '#/components/parameters/ID'}, {name: code, in: path, required: true, schema: {type: string}}, {$ref: '#/components/parameters/IdempotencyKey'}], requestBody: {$ref: '#/components/requestBodies/SaveFilingMatrix'}}
     validateFiling: {<<: *filingRead, operationId: validateFiling, parameters: [{$ref: '#/components/parameters/ID'}]}
@@ -351,6 +362,8 @@ components:
     unlockFiling: {<<: *machineProvision, operationId: unlockFiling, x-scope: portal.filing.unlock, security: [{machineJWT: [portal.filing.unlock]}], parameters: [{$ref: '#/components/parameters/ID'}, {$ref: '#/components/parameters/IdempotencyKey'}]}
     filingMaterialScanCallback: {<<: *machineProvision, operationId: filingMaterialScanCallback, x-scope: portal.filing_material.scan.write, security: [{machineJWT: [portal.filing_material.scan.write]}]}
     listProjectHistoryForCRM: {<<: *machineProvision, operationId: listProjectHistoryForCRM, x-scope: portal.project_history.read, security: [{machineJWT: [portal.project_history.read]}], parameters: [{name: customerID, in: path, required: true, schema: {type: integer, format: uint64, minimum: 1}}]}
+    getCustomerCapabilities: {<<: *machineProvision, operationId: getCustomerCapabilities, x-scope: portal.customer_capabilities.read, security: [{machineJWT: [portal.customer_capabilities.read]}], parameters: [{name: customerID, in: path, required: true, schema: {type: integer, format: uint64, minimum: 1}}]}
+    updateCustomerCapabilities: {<<: *machineProvision, operationId: updateCustomerCapabilities, x-scope: portal.customer_capabilities.manage, security: [{machineJWT: [portal.customer_capabilities.manage]}], parameters: [{name: customerID, in: path, required: true, schema: {type: integer, format: uint64, minimum: 1}}], requestBody: {required: true, content: {application/json: {schema: {type: object, additionalProperties: false, required: [capabilities], properties: {capabilities: {type: object, additionalProperties: false, properties: {project_enabled: {type: boolean}, report_enabled: {type: boolean}, filing_enabled: {type: boolean}, feedback_enabled: {type: boolean}, evaluation_enabled: {type: boolean}}}}}}}}}
     listConversationsForManager: &machineMessage {<<: *machineProvision, operationId: listConversationsForManager, x-scope: portal.project_message.manage, security: [{machineJWT: [portal.project_message.manage]}]}
     getConversationForManager: {<<: *machineMessage, operationId: getConversationForManager, parameters: [{$ref: '#/components/parameters/ID'}]}
     sendConversationMessageForManager: {<<: *machineMessage, operationId: sendConversationMessageForManager, parameters: [{$ref: '#/components/parameters/ID'}]}

@@ -26,6 +26,10 @@ func (probe *ownerCatalogProbe) Validate(_ context.Context, userID, organization
 	return probe.err
 }
 
+func (probe *ownerCatalogProbe) Resolve(context.Context, []string) (map[string]ownerdirectory.User, error) {
+	return nil, probe.err
+}
+
 func TestCustomerWritesFailClosedBeforePersistenceWhenOwnerDirectoryRejectsSelection(t *testing.T) {
 	directoryErr := errors.New("authoritative owner directory unavailable")
 	probe := &ownerCatalogProbe{err: directoryErr}
@@ -36,7 +40,7 @@ func TestCustomerWritesFailClosedBeforePersistenceWhenOwnerDirectoryRejectsSelec
 	if result, err := service.Create(ctx, createTestRequest("owner-validation")); result != nil || !errors.Is(err, directoryErr) {
 		t.Fatalf("create result=%#v err=%v", result, err)
 	}
-	if probe.userID != "owner-a" || probe.organizationID != "org-a" {
+	if probe.userID != "actor-a" || probe.organizationID != "org-a" {
 		t.Fatalf("create pair=(%q,%q)", probe.userID, probe.organizationID)
 	}
 	if repository.findReplayCalls != 0 || repository.nextNumberCalls != 0 || repository.createCalls != 0 {

@@ -17,10 +17,13 @@ type Repository interface {
 	ListOwned(context.Context, Actor, int, int) ([]Filing, int64, error)
 	FindOwned(context.Context, Actor, string) (*Filing, error)
 	FindOwnedForUpdate(context.Context, Actor, string) (*Filing, error)
+	DeleteDraftData(context.Context, string, uint64) error
+	SoftDeleteFiling(context.Context, string, uint64, string, time.Time) error
 	FindInternalForUpdate(context.Context, string, uint64, string) (*Filing, error)
 	UpdateFiling(context.Context, *Filing, uint64, map[string]any) error
 	FindSection(context.Context, string, uint64, string) (*Section, error)
 	ListSections(context.Context, string, uint64) ([]Section, error)
+	ListSectionsByFilingIDs(context.Context, string, []uint64) ([]Section, error)
 	CreateSection(context.Context, *Section) error
 	UpdateSection(context.Context, *Section, uint64, []byte, string, string, time.Time) error
 	FindMatrix(context.Context, string, uint64, string) (*MatrixSelection, error)
@@ -79,6 +82,19 @@ func (r *GORMRepository) FindOwnedForUpdate(ctx context.Context, actor Actor, pu
 	err := r.tx(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).Where("tenant_id=? AND customer_id=? AND public_id=? AND deleted_at IS NULL", actor.TenantID, actor.CustomerID, publicID).Take(&value).Error
 	return filingResult(&value, err)
 }
+func (r *GORMRepository) DeleteDraftData(ctx context.Context, tenant string, filingID uint64) error {
+	// 草稿删除只清理可变子资源；Action 审计账本保持只追加，不随草稿删除。
+	if err := r.tx(ctx).Where("tenant_id=? AND filing_id=?", tenant, filingID).Delete(&Material{}).Error; err != nil {
+		return err
+	}
+	if err := r.tx(ctx).Where("tenant_id=? AND filing_id=?", tenant, filingID).Delete(&Section{}).Error; err != nil {
+		return err
+	}
+	return r.tx(ctx).Where("tenant_id=? AND filing_id=?", tenant, filingID).Delete(&MatrixSelection{}).Error
+}
+func (r *GORMRepository) SoftDeleteFiling(ctx context.Context, tenant string, filingID uint64, actor string, at time.Time) error {
+	return r.tx(ctx).Model(&Filing{}).Where("id=? AND tenant_id=?", filingID, tenant).Updates(map[string]any{"deleted_at": at, "updated_by": actor, "updated_at": at}).Error
+}
 func (r *GORMRepository) FindInternalForUpdate(ctx context.Context, tenant string, customerID uint64, publicID string) (*Filing, error) {
 	var value Filing
 	err := r.tx(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).Where("tenant_id=? AND customer_id=? AND public_id=? AND deleted_at IS NULL", tenant, customerID, publicID).Take(&value).Error
@@ -104,6 +120,14 @@ func (r *GORMRepository) FindSection(ctx context.Context, tenant string, filingI
 func (r *GORMRepository) ListSections(ctx context.Context, tenant string, filingID uint64) ([]Section, error) {
 	values := []Section{}
 	err := r.tx(ctx).Where("tenant_id=? AND filing_id=?", tenant, filingID).Find(&values).Error
+	return values, err
+}
+func (r *GORMRepository) ListSectionsByFilingIDs(ctx context.Context, tenant string, filingIDs []uint64) ([]Section, error) {
+	values := []Section{}
+	if len(filingIDs) == 0 {
+		return values, nil
+	}
+	err := r.tx(ctx).Where("tenant_id=? AND filing_id IN ?", tenant, filingIDs).Find(&values).Error
 	return values, err
 }
 func (r *GORMRepository) CreateSection(ctx context.Context, value *Section) error {

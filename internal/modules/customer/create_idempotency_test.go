@@ -108,17 +108,17 @@ func TestCustomerCreateHandlerReadsIdempotencyKey(t *testing.T) {
 	service := newCreateTestService(t, repo, &createAuditStub{})
 	recorder := httptest.NewRecorder()
 	ginContext, _ := gin.CreateTestContext(recorder)
-	ginContext.Request = httptest.NewRequest(http.MethodPost, "/customers", strings.NewReader(`{"name":"示例客户","unified_credit_code":"91310000TEST","customer_type":"企业","industry":"软件","region":"华东","owner_user_id":"owner-a","owner_org_id":"org-a","contacts":[{"name":"张三","phone":"13800138000","email":"zhang@example.com","is_registration":true}],"reason":"新建"}`))
+	ginContext.Request = httptest.NewRequest(http.MethodPost, "/customers", strings.NewReader(`{"name":"示例客户","unified_credit_code":"91310000TEST","customer_type":"企业","industry":"软件","region":"华东","contacts":[{"name":"张三","phone":"13800138000","email":"zhang@example.com","is_registration":true}],"reason":"新建"}`))
 	ginContext.Request.Header.Set("Idempotency-Key", "handler-key")
 	ginContext.Request = ginContext.Request.WithContext(auth.WithPrincipal(ginContext.Request.Context(), createTestPrincipal("tenant-a", "user-a")))
 	NewHandler(service).Create(ginContext)
-	if recorder.Code != http.StatusCreated || repo.prior == nil || repo.prior.Key != "handler-key" {
+	if recorder.Code != http.StatusCreated || repo.prior == nil || repo.prior.Key != "handler-key" || repo.resource.OwnerUserID != "user-a" || repo.resource.OwnerOrgID != "org-a" {
 		t.Fatalf("status=%d body=%s replay=%#v", recorder.Code, recorder.Body.String(), repo.prior)
 	}
 }
 
 func createTestPrincipal(tenantID, userID string) auth.Principal {
-	return auth.Principal{TenantID: tenantID, UserID: userID, Permissions: map[string]struct{}{"customer.create": {}}}
+	return auth.Principal{TenantID: tenantID, UserID: userID, PrimaryOrgID: "org-a", OrganizationIDs: []string{"org-a"}, Permissions: map[string]struct{}{"customer.create": {}}}
 }
 
 func createTestRequest(key string) CreateRequest {
@@ -150,6 +150,23 @@ func TestCustomerCreateRequiresActorBoundIdempotencyKey(t *testing.T) {
 	}
 	if repo.findReplayCalls != 0 || repo.nextNumberCalls != 0 || repo.createCalls != 0 {
 		t.Fatalf("invalid keys reached persistence: %#v", repo)
+	}
+}
+
+func TestCustomerCreateAlwaysInheritsAuthenticatedOwner(t *testing.T) {
+	repo := &createIdempotencyRepoStub{}
+	service := newCreateTestService(t, repo, &createAuditStub{})
+	principal := createTestPrincipal("tenant-a", "sales-a")
+	principal.PrimaryOrgID = "sales-org-a"
+	input := createTestRequest("creator-owner-key")
+	input.OwnerUserID, input.OwnerOrgID = "other-user", "other-org"
+
+	result, err := service.Create(auth.WithPrincipal(context.Background(), principal), input)
+	if err != nil || result == nil || result.OwnerUserID != "sales-a" || result.OwnerOrgID != "sales-org-a" {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+	if repo.resource == nil || repo.resource.OwnerUserID != "sales-a" || repo.resource.OwnerOrgID != "sales-org-a" {
+		t.Fatalf("persisted owner=%#v", repo.resource)
 	}
 }
 
@@ -260,7 +277,7 @@ func TestCustomerCreateReplayRequiresCurrentCreatePermission(t *testing.T) {
 
 func TestCustomerCreateDuplicateKeyRaceAcceptsOnlyStrictBoundWinner(t *testing.T) {
 	actor := createTestPrincipal("tenant-a", "user-a")
-	input := normalizeCreateRequest(createTestRequest("race-key"))
+	input := inheritCreateOwner(normalizeCreateRequest(createTestRequest("race-key")), actor)
 	serviceForHash := newCreateTestService(t, &createIdempotencyRepoStub{}, &createAuditStub{})
 	hash, err := serviceForHash.createRequestHash(actor, input)
 	if err != nil {
@@ -296,7 +313,7 @@ func TestCustomerCreateDuplicateKeyRaceAcceptsOnlyStrictBoundWinner(t *testing.T
 
 func TestCustomerCreateCreditUniqueRaceRecoversOnlyAValidatedWinner(t *testing.T) {
 	actor := createTestPrincipal("tenant-a", "user-a")
-	input := normalizeCreateRequest(createTestRequest("credit-race-key"))
+	input := inheritCreateOwner(normalizeCreateRequest(createTestRequest("credit-race-key")), actor)
 	serviceForHash := newCreateTestService(t, &createIdempotencyRepoStub{}, &createAuditStub{})
 	hash, err := serviceForHash.createRequestHash(actor, input)
 	if err != nil {

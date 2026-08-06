@@ -51,7 +51,7 @@ func TestCreateHandlerRequiresIdempotencyKey(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
 	ginContext, _ := gin.CreateTestContext(recorder)
-	request := httptest.NewRequest(http.MethodPost, "/opportunities", strings.NewReader(`{"name":"n","customer_id":1,"type":"t","source":"s","expected_amount":"1","expected_sign_date":"2026-09-01","requirement_summary":"r","owner_user_id":"u"}`))
+	request := httptest.NewRequest(http.MethodPost, "/opportunities", strings.NewReader(`{"name":"n","customer_id":1,"type":"t","source":"s","expected_amount":"1","expected_sign_date":"2026-09-01","requirement_summary":"r"}`))
 	request.Header.Set("Content-Type", "application/json")
 	request = request.WithContext(auth.WithPrincipal(context.Background(), auth.Principal{TenantID: "tenant-a", UserID: "actor-a"}))
 	ginContext.Request = request

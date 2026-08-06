@@ -18,6 +18,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/middleware"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/portal/account"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/portal/capability"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/portal/evaluation"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/portal/feedback"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/portal/filing"
@@ -39,6 +40,7 @@ const (
 
 type RouterDependencies struct {
 	Config                Config
+	RequestAudit          gin.HandlerFunc
 	Account               *account.Service
 	ProvisionAccount      func(context.Context, account.ProvisionCommand) (account.ProvisionResult, error)
 	DisableAccount        func(context.Context, account.DisableCommand) (account.DisableResult, error)
@@ -55,6 +57,7 @@ type RouterDependencies struct {
 	Filings               *filing.Service
 	FilingMaterials       *filing.MaterialService
 	MachineAuthenticator  machineAuthenticator
+	CustomerCapabilities  capability.Reader
 	DatabaseHealthy       func() bool
 	Logger                *slog.Logger
 }
@@ -66,12 +69,29 @@ type runtimeCapability struct {
 }
 
 type runtimeCapabilities struct {
-	ReportRequestSubmission runtimeCapability `json:"report_request_submission"`
-	ProjectExport           runtimeCapability `json:"project_export"`
-	ReportDownload          runtimeCapability `json:"report_download"`
-	FilingMaterialUpload    runtimeCapability `json:"filing_material_upload"`
-	FilingExport            runtimeCapability `json:"filing_export"`
-	FilingPoliceSubmission  runtimeCapability `json:"filing_police_submission"`
+	ReportRequestSubmission runtimeCapability    `json:"report_request_submission"`
+	ProjectExport           runtimeCapability    `json:"project_export"`
+	ReportDownload          runtimeCapability    `json:"report_download"`
+	FilingMaterialUpload    runtimeCapability    `json:"filing_material_upload"`
+	FilingExport            runtimeCapability    `json:"filing_export"`
+	FilingPoliceSubmission  runtimeCapability    `json:"filing_police_submission"`
+	Customer                customerCapabilities `json:"customer"`
+}
+
+type customerCapabilities struct {
+	ProjectEnabled    bool `json:"project_enabled"`
+	ReportEnabled     bool `json:"report_enabled"`
+	FilingEnabled     bool `json:"filing_enabled"`
+	FeedbackEnabled   bool `json:"feedback_enabled"`
+	EvaluationEnabled bool `json:"evaluation_enabled"`
+}
+
+func capabilityOptionsToResponse(options capability.Options) customerCapabilities {
+	return customerCapabilities{
+		ProjectEnabled: options.ProjectEnabled, ReportEnabled: options.ReportEnabled,
+		FilingEnabled: options.FilingEnabled, FeedbackEnabled: options.FeedbackEnabled,
+		EvaluationEnabled: options.EvaluationEnabled,
+	}
 }
 
 type machineAuthenticator interface {
@@ -86,13 +106,27 @@ func NewRouter(deps RouterDependencies) *gin.Engine {
 	}
 	router := gin.New()
 	configureOpaquePathRouting(router)
-	router.Use(
-		middleware.RequestID(),
+	globalMiddleware := []gin.HandlerFunc{middleware.RequestID()}
+	if deps.RequestAudit != nil {
+		globalMiddleware = append(globalMiddleware, deps.RequestAudit)
+	}
+	globalMiddleware = append(globalMiddleware,
 		middleware.AccessLog(logger, "portal", portalAccessLogActor),
 		middleware.Recovery(logger, "portal"),
 		secureHeaders(),
 	)
+	router.Use(globalMiddleware...)
 	base := router.Group(deps.Config.PathPrefix)
+	base.GET("/livez", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"status": "alive"})
+	})
+	base.GET("/readyz", func(c *gin.Context) {
+		if deps.DatabaseHealthy == nil || !deps.DatabaseHealthy() {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"status": "not_ready"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"status": "ready"})
+	})
 	base.GET("/healthz", func(c *gin.Context) {
 		if deps.DatabaseHealthy != nil && !deps.DatabaseHealthy() {
 			c.JSON(http.StatusServiceUnavailable, gin.H{"status": "unhealthy"})
@@ -119,6 +153,8 @@ func NewRouter(deps RouterDependencies) *gin.Engine {
 	internal := base.Group("/internal", machineAuth(deps.MachineAuthenticator))
 	internal.POST("/accounts/provision", requireMachineScope("portal.identity_mapping.provision"), requireMachineClientSubject(deps.Config.CRMProvisionClientSubject), provision(deps))
 	internal.POST("/accounts/disable", requireMachineScope("portal.identity_mapping.disable"), requireMachineClientSubject(deps.Config.CRMDisableClientSubject), disableAccount(deps))
+	internal.GET("/customers/:customerID/capabilities", requireMachineScope("portal.customer_capabilities.read"), getCustomerCapabilities(deps))
+	internal.PUT("/customers/:customerID/capabilities", requireMachineScope("portal.customer_capabilities.manage"), updateCustomerCapabilities(deps))
 	internal.POST("/report-callbacks", requireMachineScope("report.callback.write"), reportCallback(deps))
 	internal.GET("/report-risk-alerts", requireMachineScope("portal.report.risk.manage"), listReportRiskAlertsForReview(deps))
 	internal.POST("/report-risk-alerts/:id/review", requireMachineScope("portal.report.risk.manage"), reviewReportRiskAlert(deps))
@@ -184,6 +220,7 @@ func NewRouter(deps RouterDependencies) *gin.Engine {
 	api.PUT("/filings/:id/matrix/:code", requirePermission("filing.update"), originAndCSRF(deps.Config), saveFilingMatrix(deps))
 	api.POST("/filings/:id/validate", requirePermission("filing.read"), originAndCSRF(deps.Config), validateFiling(deps))
 	api.POST("/filings/:id/submit", requirePermission("filing.submit"), originAndCSRF(deps.Config), submitFiling(deps))
+	api.DELETE("/filings/:id", requirePermission("filing.delete"), originAndCSRF(deps.Config), deleteFiling(deps))
 	api.POST("/filings/:id/material-uploads", requirePermission("filing.update"), originAndCSRF(deps.Config), createFilingMaterialUpload(deps))
 	api.POST("/filings/:id/materials/:materialID/complete", requirePermission("filing.update"), originAndCSRF(deps.Config), completeFilingMaterialUpload(deps))
 	api.POST("/filings/:id/exports", requirePermission("filing.read"), originAndCSRF(deps.Config), unsupported("PORTAL_FILING_EXPORT_NOT_CONFIGURED"))
@@ -220,12 +257,92 @@ func capabilities(deps RouterDependencies) gin.HandlerFunc {
 		if deps.FilingMaterials != nil && deps.FilingMaterials.RuntimeAvailable() {
 			value.FilingMaterialUpload = runtimeCapability{Available: true, Mode: "READY"}
 		}
+		if deps.CustomerCapabilities != nil {
+			options, optionsErr := deps.CustomerCapabilities.Get(c.Request.Context(), deps.Config.TenantID, currentSession(c).CustomerID)
+			if optionsErr != nil && deps.Logger != nil {
+				deps.Logger.Error("customer capabilities read failed", "error", optionsErr)
+			} else if optionsErr == nil {
+				value.Customer = capabilityOptionsToResponse(options)
+			}
+		}
 		response.OK(c, value)
 	}
 }
 
 func unavailableCapability(reason string) runtimeCapability {
 	return runtimeCapability{Available: false, Mode: "UNAVAILABLE", ReasonCode: reason}
+}
+
+func getCustomerCapabilities(deps RouterDependencies) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if deps.CustomerCapabilities == nil {
+			response.Error(c, apperror.New(http.StatusServiceUnavailable, "PORTAL_CUSTOMER_CAPABILITIES_UNAVAILABLE", "customer capabilities store is not configured"))
+			return
+		}
+		customerID, err := strconv.ParseUint(c.Param("customerID"), 10, 64)
+		if err != nil || customerID == 0 {
+			response.Error(c, apperror.ErrNotFound)
+			return
+		}
+		principal, ok := sharedauth.FromContext(c.Request.Context())
+		if !ok || strings.TrimSpace(principal.TenantID) == "" {
+			response.Error(c, apperror.ErrForbidden)
+			return
+		}
+		options, err := deps.CustomerCapabilities.Get(c.Request.Context(), principal.TenantID, customerID)
+		if err != nil {
+			response.Error(c, apperror.New(http.StatusServiceUnavailable, "PORTAL_CUSTOMER_CAPABILITIES_UNAVAILABLE", "customer capabilities unavailable"))
+			return
+		}
+		response.OK(c, capabilityOptionsToResponse(options))
+	}
+}
+
+func updateCustomerCapabilities(deps RouterDependencies) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		writer, ok := deps.CustomerCapabilities.(capability.Writer)
+		if !ok || writer == nil {
+			response.Error(c, apperror.New(http.StatusServiceUnavailable, "PORTAL_CUSTOMER_CAPABILITIES_UNAVAILABLE", "customer capabilities store is not configured"))
+			return
+		}
+		customerID, err := strconv.ParseUint(c.Param("customerID"), 10, 64)
+		if err != nil || customerID == 0 {
+			response.Error(c, apperror.ErrNotFound)
+			return
+		}
+		principal, ok := sharedauth.FromContext(c.Request.Context())
+		if !ok || strings.TrimSpace(principal.TenantID) == "" {
+			response.Error(c, apperror.ErrForbidden)
+			return
+		}
+		var body struct {
+			Capabilities map[string]bool `json:"capabilities"`
+		}
+		if err := requestbody.DecodeJSON(c, &body); err != nil {
+			response.Error(c, apperror.New(http.StatusBadRequest, "COMMON_INVALID_ARGUMENT", "invalid request body"))
+			return
+		}
+		for key := range body.Capabilities {
+			valid := false
+			for _, allowed := range capability.AllKeys {
+				if key == allowed {
+					valid = true
+					break
+				}
+			}
+			if !valid {
+				response.Error(c, apperror.New(http.StatusBadRequest, "COMMON_INVALID_ARGUMENT", "unknown capability key"))
+				return
+			}
+		}
+		options := capability.OptionsFromMap(body.Capabilities)
+		updated, err := writer.Upsert(c.Request.Context(), principal.TenantID, customerID, options)
+		if err != nil {
+			response.Error(c, apperror.New(http.StatusServiceUnavailable, "PORTAL_CUSTOMER_CAPABILITIES_UNAVAILABLE", "customer capabilities update failed"))
+			return
+		}
+		response.OK(c, capabilityOptionsToResponse(updated))
+	}
 }
 
 func portalAccessLogActor(c *gin.Context) (string, string) {
@@ -315,6 +432,27 @@ func authenticate(deps RouterDependencies) gin.HandlerFunc {
 			return
 		}
 		c.Set(sessionContextKey, session)
+		if deps.CustomerCapabilities != nil {
+			options, optionsErr := deps.CustomerCapabilities.Get(c.Request.Context(), session.TenantID, session.CustomerID)
+			if optionsErr != nil {
+				response.Error(c, apperror.ErrUnauthenticated)
+				c.Abort()
+				return
+			}
+			session.Permissions = capability.IntersectPermissions(session.Permissions, options)
+		}
+		permissions := make(map[string]struct{}, len(session.Permissions))
+		for _, permission := range session.Permissions {
+			permissions[permission] = struct{}{}
+		}
+		// 请求审计和业务处理共享同一个基础平台主体；Portal 本地会话只缓存平台已签名且
+		// 周期性重验的声明，不创建第二套身份或权限来源。
+		principal := sharedauth.Principal{
+			UserID: session.PlatformUserID, TenantID: session.TenantID,
+			Roles: append([]string(nil), session.Roles...), Permissions: permissions,
+			ScopeMode: sharedauth.ScopeSelf, RoleConfigHash: session.RoleConfigHash, AuthzRevision: session.AuthzRevision,
+		}
+		c.Request = c.Request.WithContext(sharedauth.WithPrincipal(c.Request.Context(), principal))
 		c.Next()
 	}
 }
@@ -1106,6 +1244,21 @@ func getFiling(deps RouterDependencies) gin.HandlerFunc {
 	}
 }
 
+func deleteFiling(deps RouterDependencies) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if deps.Filings == nil {
+			response.Error(c, apperror.ErrNotFound)
+			return
+		}
+		value, err := deps.Filings.DeleteDraft(c.Request.Context(), filingActor(c), c.Param("id"))
+		if err != nil {
+			response.Error(c, err)
+			return
+		}
+		response.OK(c, value)
+	}
+}
+
 func saveFilingSection(deps RouterDependencies) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if deps.Filings == nil {
@@ -1536,132 +1689,4 @@ func rejectFeedbackQuery(c *gin.Context) bool {
 	}
 	response.Error(c, apperror.New(http.StatusBadRequest, "COMMON_INVALID_ARGUMENT", "invalid request"))
 	return false
-}
-
-func originAndCSRF(config Config) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		origin := c.GetHeader("Origin")
-		parsedOrigin, err := url.Parse(origin)
-		expected, _ := url.Parse(config.PublicOrigin)
-		if err != nil || origin == "" || parsedOrigin.Scheme != expected.Scheme || parsedOrigin.Host != expected.Host {
-			response.Error(c, apperror.ErrForbidden)
-			c.Abort()
-			return
-		}
-		// 除 Origin 外还要求非简单自定义头，在不向 JavaScript 暴露 CSRF 密钥的情况下保护
-		// Cookie 认证写请求。
-		if c.GetHeader("X-CSRF-Token") != "1" {
-			response.Error(c, apperror.ErrForbidden)
-			c.Abort()
-			return
-		}
-		c.Next()
-	}
-}
-func requirePermission(expected string) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		for _, permission := range currentSession(c).Permissions {
-			if permission == expected {
-				c.Next()
-				return
-			}
-		}
-		response.Error(c, apperror.ErrForbidden)
-		c.Abort()
-	}
-}
-
-// 多种能力共享的只读前置数据可接受任一权限；详情和变更接口仍由各自精确权限保护，不随此前置
-// 查询扩大授权面。
-func requireAnyPermission(expected ...string) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		for _, actual := range currentSession(c).Permissions {
-			for _, allowed := range expected {
-				if actual == allowed {
-					c.Next()
-					return
-				}
-			}
-		}
-		response.Error(c, apperror.ErrForbidden)
-		c.Abort()
-	}
-}
-
-func machineAuth(authenticator machineAuthenticator) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		if authenticator == nil {
-			response.Error(c, apperror.ErrUnauthenticated)
-			c.Abort()
-			return
-		}
-		principal, err := authenticator.Authenticate(c.Request.Context(), c.Request)
-		if err != nil {
-			response.Error(c, apperror.ErrUnauthenticated)
-			c.Abort()
-			return
-		}
-		c.Request = c.Request.WithContext(sharedauth.WithPrincipal(c.Request.Context(), principal))
-		c.Next()
-	}
-}
-
-func requireMachineScope(expected string) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		principal, ok := sharedauth.FromContext(c.Request.Context())
-		if !ok || len(principal.Permissions) != 1 || !principal.HasPermission(expected) {
-			response.Error(c, apperror.ErrForbidden)
-			c.Abort()
-			return
-		}
-		c.Next()
-	}
-}
-
-// 除 scope 外再绑定精确机器客户端 subject，防止其他集成客户端因误获同名 scope 而调用高影响
-// 账号接口。
-func requireMachineClientSubject(expected string) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		principal, ok := sharedauth.FromContext(c.Request.Context())
-		expected = strings.TrimSpace(expected)
-		if !ok || expected == "" || principal.UserID != "machine:"+expected {
-			response.Error(c, apperror.ErrForbidden)
-			c.Abort()
-			return
-		}
-		c.Next()
-	}
-}
-func secureHeaders() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		c.Header("X-Content-Type-Options", "nosniff")
-		c.Header("Referrer-Policy", "same-origin")
-		c.Header("X-Frame-Options", "DENY")
-		c.Header("Cache-Control", "no-store")
-		c.Next()
-	}
-}
-func unsupported(code string) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		response.Error(c, apperror.New(http.StatusServiceUnavailable, code, "required external adapter is not configured"))
-	}
-}
-func currentSession(c *gin.Context) *account.Session {
-	value, _ := c.Get(sessionContextKey)
-	session, _ := value.(*account.Session)
-	return session
-}
-func sessionCookie(config Config, value string, expires time.Time) *http.Cookie {
-	return &http.Cookie{Name: config.SessionCookieName, Value: value, Path: config.PathPrefix, Expires: expires, HttpOnly: true, Secure: config.SessionCookieSecure, SameSite: http.SameSiteLaxMode}
-}
-func safeLocalPath(value, prefix string) bool {
-	return strings.HasPrefix(value, prefix+"/") && !strings.HasPrefix(value, "//") && !strings.ContainsAny(value, "\r\n")
-}
-func decode(c *gin.Context, target any) bool {
-	if err := requestbody.DecodeJSON(c, target); err != nil {
-		// 不返回解析器和请求体细节，既保持错误契约稳定，也避免未知字段名或畸形敏感值被反射给调用方。
-		response.Error(c, apperror.New(http.StatusUnprocessableEntity, "COMMON_VALIDATION_ERROR", "request body is invalid"))
-		return false
-	}
-	return true
 }

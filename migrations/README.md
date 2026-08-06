@@ -51,6 +51,8 @@
 43. `000069_crm_portal_access_disable.up.sql`
 44. `000071_presale_alert_recipient_namespace.up.sql`
 45. `000072_presale_worker_heartbeats.up.sql`
+46. `000074_portal_invite_login_account.up.sql`
+47. `000075_crm_request_audit_outbox.up.sql`
 
 ## customer_portal schema
 
@@ -84,12 +86,14 @@
 26. `000068_portal_report_risk_operations.up.sql`
 27. `000070_portal_identity_disable_idempotency.up.sql`
 28. `000073_portal_worker_heartbeats.up.sql`
+29. `000076_portal_request_audit_outbox.up.sql`
 
 ## 规则
 
 - 应使用发布平台维护的 schema migration 版本表记录执行结果；应用进程不使用 GORM `AutoMigrate`。发布器必须串行化同一 schema 的发布，并对每条 MySQL DDL 记录执行前/执行后进度和不可变 checksum；发生中断后只能在验证目标列、索引、约束、表和必要回填均符合预期时收敛，不能因为 duplicate column/table/index/constraint 就笼统视为成功。
 - `down.sql` 只用于空环境或已经完成业务数据备份、影响分析和外部关联清理的受控回退；审计、身份映射、终态记录和 outbox 在生产环境优先采用前向修复。
 - 新 migration 必须注明目标 schema，并在此清单中登记顺序。
+- CRM 与 Portal 可以使用同一个 MySQL 实例，亦可按部署需要使用同一个 database/schema；两套迁移历史仍须独立记录并串行执行，运行账号按各自表收紧权限。两套审计 outbox 使用不同表名和领取租约，禁止一个进程领取另一应用的审计任务，也禁止跨模块业务事务耦合。
 
 `000047` 新建报价/投标可信回调的只读快照表，不从缺少完整来源类型和金额的旧阶段日志伪造历史；`OPPORTUNITY_SIGNED` 转合同接受态复用既有 outbox 和操作人绑定幂等表。
 
@@ -124,6 +128,8 @@
 2026-08-01 已在 MySQL 8.4 全新数据库重新执行当前完整 `up` 链：CRM 41 个文件（至 `000065`）创建 57 张表，combined checksum 为 `sha256:40384a576aee4ff20cfa786048a85dd37de52828a6ea5bcfe006c8a83583cbad`；Portal 25 个文件（至 `000066`）创建 48 张表，combined checksum 为 `sha256:55e487c054fa7f7617481f95892912a4becd2db05d477b6b9e5102cf9d920664`。已抽查邀请 saga、审批回放列、报告异步 Ingest、备案回执、回执密文字段和解锁取消 outbox 约束，临时容器已删除。合同仓库最近验证至 `000010`，创建 15 张业务表及 2 张 migration metadata 表。编号交错不表示跨 schema 执行。
 
 2026-08-02 已在 MySQL 8.4.11 全新数据库执行 CRM 42 个文件至 `000067`，创建 59 张表，combined checksum 为 `sha256:bff0fd7e919c4816e59509ab9d371d00154d186142347ceb4ff4f9728bf57003`；使用 1 条有效工时与 PMS outbox 证据连续运行聚合两次，事实表仍为 1 行、2.00 小时、PMS 分母/成功数均为 1，两次运行记录均为 `SUCCESS`，临时 schema 已删除。该验证不等于大数据量性能、存量升级或在线 DDL 验收。
+
+2026-08-06 当前源码 migration plan 检查：CRM 47 个文件至 `000075`，combined checksum 为 `sha256:994e286df8a5c8152bfff9498d449a089a5ce029cbed47b8314f36f3607afef7`；Portal 30 个文件至 `000077`，combined checksum 为 `sha256:c3f82ff64488ccb9b0218f3594294ae906647d59dd958cd49f454023e9a41299`。该命令只验证文件归属、顺序和 checksum，不代表数据库已执行；真实空库、存量增量、在线 DDL、metadata lock、回滚和生产性能仍需单独留存证据。
 
 2026-08-02 已在 MySQL 8.4 全新数据库按发布清单执行 CRM 44 个文件至 `000071`，combined checksum 为 `sha256:047aea0f5a1664b98982d1884873f8ef7afc773caed644d694f39455f0b5d01c`。已实际核查 `recipient_kind` 为无默认值的 NOT NULL 列、`recipient_id/created_by/updated_by` 为大小写敏感的 128 字符、去重键包含 `recipient_kind`、个人查询索引顺序为 `tenant_id,recipient_kind,recipient_id,status,created_at`，且 CHECK 仅允许 `USER/PERSON/LEGACY_UNKNOWN`；临时容器已删除。该空库验证不替代 `000071` 的存量 PENDING 取消结果、在线 DDL、metadata lock 或回退唯一键冲突演练。
 

@@ -4,7 +4,6 @@ import (
 	"context"
 	"net/http"
 	"net/url"
-	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/apperror"
@@ -66,47 +65,6 @@ func MachineAuth(authenticator machineAuthenticator) gin.HandlerFunc {
 			response.Error(c, apperror.ErrUnauthenticated)
 			c.Abort()
 			return
-		}
-		c.Request = c.Request.WithContext(auth.WithPrincipal(c.Request.Context(), principal))
-		c.Next()
-	}
-}
-
-// 开发认证有意使用请求头，仅用于本地联调；它仍构造与正式服务端会话相同的 Principal，
-// 但这些头没有密码学可信度，部署环境必须通过配置校验阻止启用。
-func DevelopmentAuth(enabled bool) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		if !enabled {
-			response.Error(c, apperror.New(http.StatusServiceUnavailable, "COMMON_AUTH_NOT_CONFIGURED", "production authentication is not configured"))
-			c.Abort()
-			return
-		}
-		userID := strings.TrimSpace(c.GetHeader("X-Dev-User-ID"))
-		tenantID := strings.TrimSpace(c.GetHeader("X-Dev-Tenant-ID"))
-		if userID == "" || tenantID == "" {
-			response.Error(c, apperror.ErrUnauthenticated)
-			c.Abort()
-			return
-		}
-		permissions := make(map[string]struct{})
-		for _, permission := range strings.Split(c.GetHeader("X-Dev-Permissions"), ",") {
-			if permission = strings.TrimSpace(permission); permission != "" {
-				permissions[permission] = struct{}{}
-			}
-		}
-		roles := make([]string, 0)
-		for _, role := range strings.Split(c.GetHeader("X-Dev-Roles"), ",") {
-			if role = strings.TrimSpace(role); role != "" {
-				roles = append(roles, role)
-			}
-		}
-		scope := auth.ScopeMode(strings.ToUpper(c.GetHeader("X-Dev-Scope")))
-		if scope != auth.ScopeAll && scope != auth.ScopeOrg {
-			scope = auth.ScopeSelf
-		}
-		principal := auth.Principal{
-			UserID: userID, PersonID: strings.TrimSpace(c.GetHeader("X-Dev-Person-ID")), TenantID: tenantID, DisplayName: c.GetHeader("X-Dev-Display-Name"),
-			Roles: roles, Permissions: permissions, ScopeMode: scope,
 		}
 		c.Request = c.Request.WithContext(auth.WithPrincipal(c.Request.Context(), principal))
 		c.Next()

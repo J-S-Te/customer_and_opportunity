@@ -97,6 +97,10 @@ func createTestService(repo Repository, writer audit.Writer) *Service {
 }
 
 func createTestContext(principal auth.Principal) context.Context {
+	if principal.PrimaryOrgID == "" {
+		principal.PrimaryOrgID = "org-a"
+		principal.OrganizationIDs = []string{"org-a"}
+	}
 	return auth.WithPrincipal(context.Background(), principal)
 }
 
@@ -111,6 +115,22 @@ func TestCreateRequiresBoundedIdempotencyKey(t *testing.T) {
 	input.IdempotencyKey = string(make([]byte, 129))
 	if _, err := service.Create(createTestContext(principal), input); !errors.Is(err, ErrIdempotencyKeyTooLong) {
 		t.Fatalf("long key error=%v", err)
+	}
+}
+
+func TestCreateAlwaysInheritsAuthenticatedOwner(t *testing.T) {
+	principal := auth.Principal{TenantID: "tenant-a", UserID: "sales-a", PrimaryOrgID: "sales-org-a", OrganizationIDs: []string{"sales-org-a"}}
+	repo := &createIdempotencyRepository{GORMRepository: &GORMRepository{}, visible: true}
+	service := createTestService(repo, &countingAuditWriter{})
+	input := createTestInput()
+	input.OwnerUserID, input.OwnerOrgID = "other-user", "other-org"
+
+	result, err := service.Create(createTestContext(principal), input)
+	if err != nil || result == nil || result.OwnerUserID != "sales-a" || result.OwnerOrgID != "sales-org-a" {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+	if repo.resource == nil || repo.resource.OwnerUserID != "sales-a" || repo.resource.OwnerOrgID != "sales-org-a" {
+		t.Fatalf("persisted owner=%#v", repo.resource)
 	}
 }
 
@@ -166,7 +186,8 @@ func TestCreateAuthorizationPrecedesReplayLookup(t *testing.T) {
 
 func TestCreateReplayRejectsResourceCreatedByAnotherActor(t *testing.T) {
 	principal := auth.Principal{TenantID: "tenant-a", UserID: "actor-a"}
-	input := normalizeCreateRequest(createTestInput())
+	principal.PrimaryOrgID = "org-a"
+	input := inheritCreateOwner(normalizeCreateRequest(createTestInput()), principal)
 	hash, err := createRequestHash(input)
 	if err != nil {
 		t.Fatal(err)
@@ -189,7 +210,8 @@ func TestCreateReplayRejectsResourceCreatedByAnotherActor(t *testing.T) {
 
 func TestCreateDuplicateKeyRaceRecoversOnlyStrictWinner(t *testing.T) {
 	principal := auth.Principal{TenantID: "tenant-a", UserID: "actor-a"}
-	input := normalizeCreateRequest(createTestInput())
+	principal.PrimaryOrgID = "org-a"
+	input := inheritCreateOwner(normalizeCreateRequest(createTestInput()), principal)
 	hash, _ := createRequestHash(input)
 	response := Response{ID: 17, CustomerID: 3, OpportunityNo: "SJ202608010001", Version: 1}
 	encoded := audit.JSON(response)
@@ -232,7 +254,8 @@ func TestCreateDoesNotRecoverUnrelatedBusinessDuplicate(t *testing.T) {
 
 func TestCreateReplayRejectsTamperedResponseSnapshot(t *testing.T) {
 	principal := auth.Principal{TenantID: "tenant-a", UserID: "actor-a"}
-	input := normalizeCreateRequest(createTestInput())
+	principal.PrimaryOrgID = "org-a"
+	input := inheritCreateOwner(normalizeCreateRequest(createTestInput()), principal)
 	hash, _ := createRequestHash(input)
 	encoded := audit.JSON(Response{ID: 17, CustomerID: 3, OpportunityNo: "SJ202608010001", Version: 1})
 	replay := &CreateIdempotency{TenantID: principal.TenantID, ActorID: principal.UserID, Key: "create-key", CustomerID: 3, OpportunityID: 17, RequestHash: hash, ResponseHash: bytesHash(encoded), ResponseJSON: encoded}

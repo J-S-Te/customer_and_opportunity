@@ -21,6 +21,10 @@ tags:
   - {name: Portal invite}
   - {name: Machine integration}
 paths:
+  /livez:
+    get: {$ref: '#/components/x-operations/crmLive'}
+  /readyz:
+    get: {$ref: '#/components/x-operations/crmReady'}
   /healthz:
     get: {$ref: '#/components/x-operations/crmHealth'}
   /auth/login:
@@ -439,6 +443,8 @@ components:
     PresaleCreate: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/PresaleCreate'}}}}
     ExternalStatusEvent: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ExternalStatusEvent'}}}}
   x-operations:
+    crmLive: {operationId: crmLive, tags: [Authentication], security: [], responses: {'200': {description: Process is alive}}}
+    crmReady: {operationId: crmReady, tags: [Authentication], security: [], responses: {'200': {description: Ready for traffic}, '503': {description: Database is not ready}}}
     crmHealth: &publicGet {operationId: crmHealth, tags: [Authentication], security: [], responses: {'200': {description: Healthy}, '503': {description: Database unhealthy}}}
     crmLogin: {operationId: crmLogin, tags: [Authentication], security: [], parameters: [{name: return_to, in: query, schema: {type: string}}], responses: {'302': {description: Redirect to the platform authorization endpoint}, '400': {$ref: '#/components/responses/Error'}}}
     crmCallback: {operationId: crmCallback, tags: [Authentication], security: [], parameters: [{name: code, in: query, schema: {type: string}}, {name: state, in: query, schema: {type: string}}], responses: {'302': {description: Establish session and redirect}, '401': {$ref: '#/components/responses/Error'}}}

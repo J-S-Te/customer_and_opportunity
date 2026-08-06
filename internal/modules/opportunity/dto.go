@@ -13,9 +13,10 @@ type CreateRequest struct {
 	SystemCount        uint32 `json:"system_count"`
 	PainPoints         string `json:"pain_points" binding:"omitempty,max=10000"`
 	CompetitorInfo     string `json:"competitor_info" binding:"omitempty,max=10000"`
-	OwnerUserID        string `json:"owner_user_id" binding:"required,max=64"`
-	OwnerOrgID         string `json:"owner_org_id" binding:"omitempty,max=64"`
-	IdempotencyKey     string `json:"-"`
+	// OwnerUserID 与 OwnerOrgID 只用于兼容旧客户端；创建服务始终绑定认证主体及其主组织。
+	OwnerUserID    string `json:"owner_user_id,omitempty" binding:"omitempty,max=64"`
+	OwnerOrgID     string `json:"owner_org_id" binding:"omitempty,max=64"`
+	IdempotencyKey string `json:"-"`
 }
 
 // UpdateRequest 只承载普通主数据字段；客户归属、负责人、阶段和生命周期变化必须走专用操作，
@@ -59,19 +60,29 @@ type ReplaceMembersRequest struct {
 }
 
 type MemberResponse struct {
-	ID        uint64     `json:"id"`
-	UserID    string     `json:"user_id"`
-	Role      string     `json:"role"`
-	IsActive  bool       `json:"is_active"`
-	EndedAt   *time.Time `json:"ended_at,omitempty"`
-	CreatedAt time.Time  `json:"created_at"`
-	UpdatedAt time.Time  `json:"updated_at"`
+	ID              uint64                       `json:"id"`
+	UserID          string                       `json:"user_id"`
+	DisplayName     string                       `json:"display_name,omitempty"`
+	Organizations   []MemberOrganizationResponse `json:"organizations,omitempty"`
+	DirectoryStatus string                       `json:"directory_status,omitempty"`
+	Role            string                       `json:"role"`
+	IsActive        bool                         `json:"is_active"`
+	EndedAt         *time.Time                   `json:"ended_at,omitempty"`
+	CreatedAt       time.Time                    `json:"created_at"`
+	UpdatedAt       time.Time                    `json:"updated_at"`
+}
+
+type MemberOrganizationResponse struct {
+	ID        string `json:"organization_id"`
+	Name      string `json:"organization_name"`
+	IsPrimary bool   `json:"is_primary"`
 }
 
 type TeamResponse struct {
-	OpportunityID uint64           `json:"opportunity_id"`
-	Version       uint64           `json:"version"`
-	Members       []MemberResponse `json:"members"`
+	OpportunityID      uint64           `json:"opportunity_id"`
+	Version            uint64           `json:"version"`
+	DirectoryAvailable bool             `json:"directory_available"`
+	Members            []MemberResponse `json:"members"`
 }
 
 type MemberTermResponse struct {
@@ -233,6 +244,7 @@ type Response struct {
 	CreatedAt           time.Time        `json:"created_at"`
 	UpdatedAt           time.Time        `json:"updated_at"`
 	Members             []MemberResponse `json:"members,omitempty"`
+	SignedContractCount *uint64          `json:"signed_contract_count"`
 }
 
 type ListQuery struct {

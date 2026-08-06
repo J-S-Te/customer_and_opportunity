@@ -93,7 +93,7 @@ func (s *Service) Create(ctx context.Context, request CreateRequest) (*Response,
 	if s.create == nil {
 		return nil, ErrCreateIdempotencyUnavailable
 	}
-	request = normalizeCreateRequest(request)
+	request = inheritCreateOwner(normalizeCreateRequest(request), principal)
 	if s.owners != nil {
 		if err = s.owners.Validate(ctx, request.OwnerUserID, request.OwnerOrgID); err != nil {
 			return nil, err
@@ -208,6 +208,14 @@ func normalizeCreateRequest(input CreateRequest) CreateRequest {
 		input.Contacts[index].Phone = strings.TrimSpace(input.Contacts[index].Phone)
 		input.Contacts[index].Email = strings.TrimSpace(input.Contacts[index].Email)
 	}
+	return input
+}
+
+// inheritCreateOwner 把新客户归属绑定到可信认证主体。请求中的负责人字段只为旧客户端
+// 保持反序列化兼容，不能改变新客户的初始负责人或组织归属。
+func inheritCreateOwner(input CreateRequest, principal auth.Principal) CreateRequest {
+	input.OwnerUserID = strings.TrimSpace(principal.UserID)
+	input.OwnerOrgID = strings.TrimSpace(principal.PrimaryOrgID)
 	return input
 }
 

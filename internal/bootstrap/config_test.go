@@ -11,6 +11,22 @@ func setBaseConfig(t *testing.T) {
 	t.Setenv("MYSQL_DSN", "crm:test@tcp(localhost:3306)/crm")
 	t.Setenv("SENSITIVE_ENCRYPTION_KEY_BASE64", base64.StdEncoding.EncodeToString([]byte(strings.Repeat("e", 32))))
 	t.Setenv("SENSITIVE_HMAC_KEY_BASE64", base64.StdEncoding.EncodeToString([]byte(strings.Repeat("h", 32))))
+	t.Setenv("DEV_AUTH_ENABLED", "false")
+	t.Setenv("OIDC_ISSUER", "https://identity.example.com")
+	t.Setenv("OIDC_CLIENT_ID", "crm")
+	t.Setenv("OIDC_CLIENT_SECRET", "secret")
+	t.Setenv("OIDC_REDIRECT_URI", "https://crm.example.com/customer-opportunity/auth/callback")
+	t.Setenv("OIDC_TENANT_ID", "tenant-1")
+	t.Setenv("OIDC_ROLE_CONFIG_HASH", "hash-1")
+	t.Setenv("MACHINE_TOKEN_ISSUER", "basic-platform")
+	t.Setenv("MACHINE_TOKEN_AUDIENCE", "basic-platform-application")
+	t.Setenv("MACHINE_TOKEN_PUBLIC_KEY_PATH", "/run/secrets/basic-platform-application-jwt-public.pem")
+	t.Setenv("APP_PUBLIC_ORIGIN", "https://crm.example.com")
+	t.Setenv("PLATFORM_BASE_URL", "https://identity.example.com")
+	t.Setenv("PLATFORM_APPLICATION_CODE", "customer_and_opportunity")
+	t.Setenv("PLATFORM_ENVIRONMENT_CODE", "test")
+	t.Setenv("PLATFORM_AUDIT_CLIENT_ID", "crm-audit")
+	t.Setenv("PLATFORM_AUDIT_CLIENT_SECRET", "audit-secret")
 }
 
 func setPortalDisableConfig(t *testing.T) {
@@ -27,18 +43,16 @@ func setPlatformRoleRevokeConfig(t *testing.T) {
 	t.Setenv("PLATFORM_ROLE_REVOKE_CLIENT_SECRET", "secret-c")
 }
 
-func TestLoadConfigDevelopmentModeDoesNotRequireOIDC(t *testing.T) {
+func TestLoadConfigRejectsDevelopmentHeaderAuthentication(t *testing.T) {
 	setBaseConfig(t)
 	t.Setenv("DEV_AUTH_ENABLED", "true")
-	config, err := LoadConfig()
-	if err != nil || !config.DevelopmentAuth {
-		t.Fatalf("LoadConfig() = %+v, %v", config, err)
+	if _, err := LoadConfig(); err == nil || !strings.Contains(err.Error(), "no longer supported") {
+		t.Fatalf("LoadConfig() error = %v", err)
 	}
 }
 
 func TestLoadConfigPresaleWorkerHeartbeatFreshnessWindow(t *testing.T) {
 	setBaseConfig(t)
-	t.Setenv("DEV_AUTH_ENABLED", "true")
 	config, err := LoadConfig()
 	if err != nil || config.PresaleWorkerHeartbeatMaxAge.String() != "15s" {
 		t.Fatalf("default config=%+v err=%v", config, err)
@@ -51,7 +65,7 @@ func TestLoadConfigPresaleWorkerHeartbeatFreshnessWindow(t *testing.T) {
 
 func TestLoadConfigProductionRequiresCompleteOIDC(t *testing.T) {
 	setBaseConfig(t)
-	t.Setenv("DEV_AUTH_ENABLED", "false")
+	t.Setenv("OIDC_CLIENT_SECRET", "")
 	if _, err := LoadConfig(); err == nil || !strings.Contains(err.Error(), "required") {
 		t.Fatalf("LoadConfig() error = %v", err)
 	}
@@ -71,7 +85,7 @@ func TestLoadConfigProductionOIDC(t *testing.T) {
 	t.Setenv("MACHINE_TOKEN_PUBLIC_KEY_PATH", "/run/secrets/basic-platform-application-jwt-public.pem")
 	t.Setenv("APP_PUBLIC_ORIGIN", "https://crm.example.com")
 	config, err := LoadConfig()
-	if err != nil || config.DevelopmentAuth || config.OIDCSessionCookieName != "customer_opportunity_session" {
+	if err != nil || config.OIDCSessionCookieName != "customer_opportunity_session" {
 		t.Fatalf("LoadConfig() = %+v, %v", config, err)
 	}
 }
@@ -138,7 +152,6 @@ func TestLoadConfigExplicitInsecureHTTPSessionAllowsNonLoopbackHTTP(t *testing.T
 
 func TestLoadConfigPortalInviteRequiresMachineProvisionContract(t *testing.T) {
 	setBaseConfig(t)
-	t.Setenv("DEV_AUTH_ENABLED", "true")
 	t.Setenv("PORTAL_INVITE_ENABLED", "true")
 	if _, err := LoadConfig(); err == nil || !strings.Contains(err.Error(), "PORTAL_PROVISION") {
 		t.Fatalf("LoadConfig() error = %v", err)
@@ -147,7 +160,6 @@ func TestLoadConfigPortalInviteRequiresMachineProvisionContract(t *testing.T) {
 
 func TestLoadConfigPortalInviteMachineScopeIsFixed(t *testing.T) {
 	setBaseConfig(t)
-	t.Setenv("DEV_AUTH_ENABLED", "true")
 	t.Setenv("PORTAL_INVITE_ENABLED", "true")
 	t.Setenv("PORTAL_PROVISION_URL", "https://portal.example/customer-portal/internal/accounts/provision")
 	t.Setenv("PORTAL_PROVISION_TOKEN_URL", "https://identity.example/oauth2/token")
@@ -162,7 +174,6 @@ func TestLoadConfigPortalInviteMachineScopeIsFixed(t *testing.T) {
 
 func TestLoadConfigPortalProvisionMTLSRequiresClientIdentity(t *testing.T) {
 	setBaseConfig(t)
-	t.Setenv("DEV_AUTH_ENABLED", "true")
 	t.Setenv("PORTAL_INVITE_ENABLED", "true")
 	t.Setenv("PORTAL_PROVISION_URL", "https://portal.example/customer-portal/internal/accounts/provision")
 	t.Setenv("PORTAL_PROVISION_TOKEN_URL", "https://identity.example/oauth2/token")
@@ -177,7 +188,6 @@ func TestLoadConfigPortalProvisionMTLSRequiresClientIdentity(t *testing.T) {
 
 func TestLoadConfigPlatformExternalIdentityRequiresSeparateExactScopes(t *testing.T) {
 	setBaseConfig(t)
-	t.Setenv("DEV_AUTH_ENABLED", "true")
 	t.Setenv("PLATFORM_EXTERNAL_IDENTITY_ENABLED", "true")
 	if _, err := LoadConfig(); err == nil || !strings.Contains(err.Error(), "PLATFORM_EXTERNAL") {
 		t.Fatalf("incomplete platform external identity error = %v", err)
@@ -204,7 +214,6 @@ func TestLoadConfigPlatformExternalIdentityRequiresSeparateExactScopes(t *testin
 
 func TestLoadConfigApprovalTaskResolverIsOptionalAndExactlyScoped(t *testing.T) {
 	setBaseConfig(t)
-	t.Setenv("DEV_AUTH_ENABLED", "true")
 	t.Setenv("APPROVAL_TASK_RESOLVER_ENABLED", "true")
 	if _, err := LoadConfig(); err == nil || !strings.Contains(err.Error(), "APPROVAL_TASK") {
 		t.Fatalf("incomplete approval task resolver error = %v", err)
@@ -226,7 +235,6 @@ func TestLoadConfigApprovalTaskResolverIsOptionalAndExactlyScoped(t *testing.T) 
 
 func TestLoadConfigCatalogSynchronizationIsOptionalButCompleteWhenEnabled(t *testing.T) {
 	setBaseConfig(t)
-	t.Setenv("DEV_AUTH_ENABLED", "true")
 	t.Setenv("PLATFORM_AUTHORIZATION_CATALOG_SYNC_ENABLED", "true")
 	if _, err := LoadConfig(); err == nil || !strings.Contains(err.Error(), "PLATFORM_AUTHORIZATION_CATALOG") {
 		t.Fatalf("LoadConfig() incomplete catalog error = %v", err)
@@ -243,7 +251,6 @@ func TestLoadConfigCatalogSynchronizationIsOptionalButCompleteWhenEnabled(t *tes
 
 func TestLoadConfigProjectHistoryIsOptionalButCompleteAndMinimumScopedWhenEnabled(t *testing.T) {
 	setBaseConfig(t)
-	t.Setenv("DEV_AUTH_ENABLED", "true")
 	t.Setenv("PORTAL_PROJECT_HISTORY_ENABLED", "true")
 	if _, err := LoadConfig(); err == nil || !strings.Contains(err.Error(), "PORTAL_PROJECT_HISTORY") {
 		t.Fatalf("incomplete project history error=%v", err)
@@ -265,7 +272,6 @@ func TestLoadConfigProjectHistoryIsOptionalButCompleteAndMinimumScopedWhenEnable
 
 func TestLoadConfigContractVerificationIsOptionalButCompleteAndExactlyScopedWhenEnabled(t *testing.T) {
 	setBaseConfig(t)
-	t.Setenv("DEV_AUTH_ENABLED", "true")
 	config, err := LoadConfig()
 	if err != nil || config.ContractVerificationEnabled {
 		t.Fatalf("default config=%#v err=%v", config, err)
@@ -289,9 +295,37 @@ func TestLoadConfigContractVerificationIsOptionalButCompleteAndExactlyScopedWhen
 	}
 }
 
+func TestLoadConfigSignedContractCountIsOptionalButCompleteAndExactlyScopedWhenEnabled(t *testing.T) {
+	setBaseConfig(t)
+	config, err := LoadConfig()
+	if err != nil || config.ContractSignedCountEnabled {
+		t.Fatalf("default config=%#v err=%v", config, err)
+	}
+	t.Setenv("CONTRACT_SIGNED_COUNT_ENABLED", "true")
+	if _, err = LoadConfig(); err == nil || !strings.Contains(err.Error(), "CONTRACT_SIGNED_COUNT") {
+		t.Fatalf("incomplete signed contract count error=%v", err)
+	}
+	t.Setenv("CONTRACT_SIGNED_COUNT_URL", "https://contract.example/contract_management/internal/opportunity-contract-counts/query")
+	t.Setenv("CONTRACT_SIGNED_COUNT_TOKEN_URL", "https://identity.example/oauth2/token")
+	t.Setenv("CONTRACT_SIGNED_COUNT_CLIENT_ID", "crm-contract-count")
+	t.Setenv("CONTRACT_SIGNED_COUNT_CLIENT_SECRET", "secret")
+	t.Setenv("CONTRACT_SIGNED_COUNT_SCOPE", "contract.opportunity_signed_count.read contract.read")
+	if _, err = LoadConfig(); err == nil || !strings.Contains(err.Error(), "CONTRACT_SIGNED_COUNT_SCOPE") {
+		t.Fatalf("over-scoped signed contract count error=%v", err)
+	}
+	t.Setenv("CONTRACT_SIGNED_COUNT_SCOPE", "contract.opportunity_signed_count.read")
+	config, err = LoadConfig()
+	if err != nil || !config.ContractSignedCountEnabled {
+		t.Fatalf("config=%#v err=%v", config, err)
+	}
+	t.Setenv("CONTRACT_SIGNED_COUNT_URL", "ftp://contract.example/query")
+	if _, err = LoadConfig(); err == nil || !strings.Contains(err.Error(), "valid HTTP(S) URL") {
+		t.Fatalf("invalid signed contract count URL error=%v", err)
+	}
+}
+
 func TestLoadConfigOwnerDirectoryIsOptionalButCompleteAndExactlyScopedWhenEnabled(t *testing.T) {
 	setBaseConfig(t)
-	t.Setenv("DEV_AUTH_ENABLED", "true")
 	config, err := LoadConfig()
 	if err != nil || config.OwnerDirectoryEnabled {
 		t.Fatalf("default config=%#v err=%v", config, err)
@@ -317,7 +351,6 @@ func TestLoadConfigOwnerDirectoryIsOptionalButCompleteAndExactlyScopedWhenEnable
 
 func TestLoadConfigQBStatusAndLaunchAreOptionalAndFailClosed(t *testing.T) {
 	setBaseConfig(t)
-	t.Setenv("DEV_AUTH_ENABLED", "true")
 	t.Setenv("QB_STATUS_QUERY_ENABLED", "true")
 	if _, err := LoadConfig(); err == nil || !strings.Contains(err.Error(), "QB_STATUS") {
 		t.Fatalf("incomplete status query error=%v", err)

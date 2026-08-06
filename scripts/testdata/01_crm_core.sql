@@ -7,8 +7,8 @@
 SET NAMES utf8mb4;
 SET @tenant = '01J00000000000000000000000';
 SET @zero_hash = '0000000000000000000000000000000000000000000000000000000000000000';
-SET @actor = 'oidc-sub-demo-seed';
-SET @actor_name = '测试数据导入';
+SET @actor = '01KYDVHC00000000000000000C';
+SET @actor_name = '张伟';
 SET @now = NOW(3);
 
 -- 联系人密文常量（与现有种子同一密钥）
@@ -26,16 +26,16 @@ INSERT INTO crm_customers
    created_by, updated_by, created_at, updated_at, deleted_at, version)
 VALUES
   (2001, @tenant, 'KH20260804TEST001', '云启科技（广州）有限公司', '云启科技广州有限公司', NULL, NULL,
-   '业主', '软件', '华南', 'oidc-sub-chen-haoran', 'org-demo-east1', 'ACTIVE', NULL, NULL,
+   '业主', '软件', '华南', '01KYDVHC00000000000000000C', '01KYDVHC000000000000000002', 'ACTIVE', NULL, NULL,
    @actor, @actor, @now, @now, NULL, 1),
   (2002, @tenant, 'KH20260804TEST002', '明德医疗集团股份有限公司', '明德医疗集团股份有限公司', NULL, NULL,
-   '三方', '医疗', '华北', 'oidc-sub-liu-ming', 'org-demo-east1', 'ACTIVE', NULL, NULL,
+   '三方', '医疗', '华北', '01KYDVHC00000000000000000D', '01KYDVHC000000000000000002', 'ACTIVE', NULL, NULL,
    @actor, @actor, @now, @now, NULL, 1),
   (2003, @tenant, 'KH20260804TEST003', '澄海物流有限公司', '澄海物流有限公司', NULL, NULL,
-   '三方', '物流', '华东', 'oidc-sub-wang-jianguo', 'org-demo-east1', 'ACTIVE', NULL, NULL,
+   '三方', '物流', '华东', '01KYDVHC00000000000000000F', '01KYDVHC000000000000000005', 'ACTIVE', NULL, NULL,
    @actor, @actor, @now, @now, NULL, 1),
   (2004, @tenant, 'KH20260804TEST004', '华岳智能制造有限公司', '华岳智能制造有限公司', NULL, NULL,
-   '业主', '制造', '华中', 'oidc-sub-zhao-xiaoyan', 'org-demo-south1', 'ACTIVE', NULL, NULL,
+   '业主', '制造', '华中', '01KYDVHC00000000000000000G', '01KYDVHC000000000000000006', 'ACTIVE', NULL, NULL,
    @actor, @actor, @now, @now, NULL, 1);
 
 -- ============ 联系人 ============
@@ -77,10 +77,10 @@ INSERT INTO crm_customer_followups
   (id, tenant_id, customer_id, type, content, followed_at, followed_by, next_follow_at,
    created_by, updated_by, created_at, updated_at, deleted_at, version)
 VALUES
-  (2401, @tenant, 2001, 'PHONE', '初次拜访，沟通工业云平台等保测评需求。', '2026-08-01 10:00:00.000', 'oidc-sub-chen-haoran', '2026-08-10 09:00:00.000', @actor, @actor, @now, @now, NULL, 1),
-  (2402, @tenant, 2001, 'VISIT', '现场调研数据中心与云平台边界。', '2026-08-02 14:00:00.000', 'oidc-sub-chen-haoran', NULL, @actor, @actor, @now, @now, NULL, 1),
-  (2403, @tenant, 2002, 'PHONE', '确认医院信息系统测评范围与时间窗口。', '2026-07-30 15:00:00.000', 'oidc-sub-liu-ming', '2026-08-08 11:00:00.000', @actor, @actor, @now, @now, NULL, 1),
-  (2404, @tenant, 2004, 'VISIT', '华岳制造现场踏勘，评估生产网安全现状。', '2026-07-28 09:30:00.000', 'oidc-sub-zhao-xiaoyan', '2026-08-12 10:00:00.000', @actor, @actor, @now, @now, NULL, 1);
+  (2401, @tenant, 2001, 'PHONE', '初次拜访，沟通工业云平台等保测评需求。', '2026-08-01 10:00:00.000', '01KYDVHC00000000000000000C', '2026-08-10 09:00:00.000', @actor, @actor, @now, @now, NULL, 1),
+  (2402, @tenant, 2001, 'VISIT', '现场调研数据中心与云平台边界。', '2026-08-02 14:00:00.000', '01KYDVHC00000000000000000C', NULL, @actor, @actor, @now, @now, NULL, 1),
+  (2403, @tenant, 2002, 'PHONE', '确认医院信息系统测评范围与时间窗口。', '2026-07-30 15:00:00.000', '01KYDVHC00000000000000000D', '2026-08-08 11:00:00.000', @actor, @actor, @now, @now, NULL, 1),
+  (2404, @tenant, 2004, 'VISIT', '华岳制造现场踏勘，评估生产网安全现状。', '2026-07-28 09:30:00.000', '01KYDVHC00000000000000000G', '2026-08-12 10:00:00.000', @actor, @actor, @now, @now, NULL, 1);
 
 -- ============ 商机 ============
 INSERT INTO crm_opportunities
@@ -90,28 +90,28 @@ INSERT INTO crm_opportunities
    external_status_changed_at, end_date, status_before_void, created_by, updated_by, created_at, updated_at, deleted_at, version)
 VALUES
   (3001, @tenant, 'SJ20260804TEST001', '工业互联网云平台等保测评', 2001, '新购', '自主开发', 68.00, '2026-09-30',
-   '云平台三级等保测评、整改协助与安全运营。', 2, '生产系统不能中断，测评窗口有限。', '安恒信息报价偏高。', 'oidc-sub-chen-haoran', 'org-demo-east1',
+   '云平台三级等保测评、整改协助与安全运营。', 2, '生产系统不能中断，测评窗口有限。', '安恒信息报价偏高。', '01KYDVHC00000000000000000C', '01KYDVHC000000000000000002',
    '初步接触', 'FOLLOWING', NULL, NULL, 'NONE', '2026-08-01 10:00:00.000', NULL, NULL, NULL, @actor, @actor, @now, @now, NULL, 1),
   (3002, @tenant, 'SJ20260804TEST002', '医院信息系统等保测评', 2002, '新购', '老客户转介绍', 92.00, '2026-10-15',
-   '医院核心信息系统三级测评与整改。', 1, '临床业务 7x24 小时在线。', '两家本地机构进入比价。', 'oidc-sub-liu-ming', 'org-demo-east1',
+   '医院核心信息系统三级测评与整改。', 1, '临床业务 7x24 小时在线。', '两家本地机构进入比价。', '01KYDVHC00000000000000000D', '01KYDVHC000000000000000002',
    '需求沟通', 'FOLLOWING', NULL, NULL, 'NONE', '2026-07-30 15:00:00.000', NULL, NULL, NULL, @actor, @actor, @now, @now, NULL, 1),
   (3003, @tenant, 'SJ20260804TEST003', 'ERP与MES安全加固', 2004, '服务', '渠道合作', 45.50, '2026-11-20',
-   'ERP、MES 安全加固与上线前渗透测试。', 2, '车间网络与办公网互联风险高。', '无强竞品。', 'oidc-sub-wang-jianguo', 'org-demo-east1',
+   'ERP、MES 安全加固与上线前渗透测试。', 2, '车间网络与办公网互联风险高。', '无强竞品。', '01KYDVHC00000000000000000F', '01KYDVHC000000000000000005',
    '方案制定', 'FOLLOWING', NULL, NULL, 'NONE', '2026-07-28 09:30:00.000', NULL, NULL, NULL, @actor, @actor, @now, @now, NULL, 1),
   (3004, @tenant, 'SJ20260804TEST004', '数据中台安全咨询', 2001, '服务', '自主开发', 28.00, '2026-09-10',
-   '数据分级分类与安全合规差距咨询。', 1, '数据量大，分类规则复杂。', '绿盟进入二轮比价。', 'oidc-sub-zhao-xiaoyan', 'org-demo-south1',
+   '数据分级分类与安全合规差距咨询。', 1, '数据量大，分类规则复杂。', '绿盟进入二轮比价。', '01KYDVHC00000000000000000G', '01KYDVHC000000000000000006',
    '报价', 'FOLLOWING', NULL, NULL, 'NONE', '2026-08-02 16:00:00.000', NULL, NULL, NULL, @actor, @actor, @now, @now, NULL, 1),
   (3005, @tenant, 'SJ20260804TEST005', '互联网医院渗透测试', 2002, '服务', '公开招标', 33.00, '2026-12-31',
-   '互联网医院系统渗透测试与代码审计。', 1, '上线时间紧，测试需按版本锁定。', '两家本地测评机构参与投标。', 'oidc-sub-li-tingfang', 'org-demo-south1',
+   '互联网医院系统渗透测试与代码审计。', 1, '上线时间紧，测试需按版本锁定。', '两家本地测评机构参与投标。', '01KYDVHC00000000000000000E', '01KYDVHC000000000000000003',
    '投标', 'FOLLOWING', NULL, NULL, 'NONE', '2026-07-26 11:00:00.000', NULL, NULL, NULL, @actor, @actor, @now, @now, NULL, 1),
   (3006, @tenant, 'SJ20260804TEST006', '华岳生产网等保测评', 2004, '新购', '老客户转介绍', 120.00, '2026-08-18',
-   '生产制造执行系统等保三级测评。', 2, '停机窗口短。', '无。', 'oidc-sub-chen-haoran', 'org-demo-east1',
+   '生产制造执行系统等保三级测评。', 2, '停机窗口短。', '无。', '01KYDVHC00000000000000000C', '01KYDVHC000000000000000002',
    '已签约', 'CLOSED', 'HT-2026-TEST1001', NULL, 'NONE', '2026-07-20 10:00:00.000', NULL, '2026-08-18', NULL, @actor, @actor, @now, @now, NULL, 1),
   (3007, @tenant, 'SJ20260804TEST007', '澄海TMS系统安全评估', 2003, '服务', '线索', 16.00, '2026-08-05',
-   '运输管理系统安全评估与加固建议。', 1, '预算有限。', '本地集成商低价竞争。', 'oidc-sub-liu-ming', 'org-demo-east1',
+   '运输管理系统安全评估与加固建议。', 1, '预算有限。', '本地集成商低价竞争。', '01KYDVHC00000000000000000D', '01KYDVHC000000000000000002',
    '失败', 'CLOSED', NULL, '预算不足', 'NONE', '2026-07-25 14:00:00.000', NULL, '2026-07-25', NULL, @actor, @actor, @now, @now, NULL, 1),
   (3008, @tenant, 'SJ20260804TEST008', '云启供应链安全专项', 2001, '新购', '自主开发', 55.00, '2026-10-31',
-   '供应链安全专项评估。', 1, '供应商众多，边界难定义。', '无。', 'oidc-sub-zhao-xiaoyan', 'org-demo-south1',
+   '供应链安全专项评估。', 1, '供应商众多，边界难定义。', '无。', '01KYDVHC00000000000000000G', '01KYDVHC000000000000000006',
    '初步接触', 'FOLLOWING', NULL, NULL, 'NONE', '2026-08-03 09:00:00.000', NULL, NULL, NULL, @actor, @actor, @now, @now, NULL, 1);
 
 -- ============ 商机阶段日志 ============
@@ -133,34 +133,34 @@ INSERT INTO crm_opportunity_members
   (id, tenant_id, created_by, updated_by, created_at, updated_at, deleted_at, version,
    opportunity_id, user_id, role, is_active, ended_at)
 VALUES
-  (3201, @tenant, @actor, @actor, @now, @now, NULL, 1, 3001, 'oidc-sub-wang-jianguo', 'TECHNICAL_SUPPORT', 1, NULL),
-  (3202, @tenant, @actor, @actor, @now, @now, NULL, 1, 3002, 'oidc-sub-chen-haoran', 'SALES_SUPPORT', 1, NULL),
-  (3203, @tenant, @actor, @actor, @now, @now, NULL, 1, 3003, 'oidc-sub-zhao-xiaoyan', 'TECHNICAL_SUPPORT', 1, NULL),
-  (3204, @tenant, @actor, @actor, @now, @now, NULL, 1, 3004, 'oidc-sub-liu-ming', 'BUSINESS_SUPPORT', 1, NULL),
-  (3205, @tenant, @actor, @actor, @now, @now, NULL, 1, 3005, 'oidc-sub-wang-jianguo', 'TECHNICAL_SUPPORT', 1, NULL),
-  (3206, @tenant, @actor, @actor, @now, @now, NULL, 1, 3006, 'oidc-sub-li-tingfang', 'SALES_SUPPORT', 1, NULL);
+  (3201, @tenant, @actor, @actor, @now, @now, NULL, 1, 3001, '01KYDVHC00000000000000000F', 'TECHNICAL_SUPPORT', 1, NULL),
+  (3202, @tenant, @actor, @actor, @now, @now, NULL, 1, 3002, '01KYDVHC00000000000000000C', 'SALES_SUPPORT', 1, NULL),
+  (3203, @tenant, @actor, @actor, @now, @now, NULL, 1, 3003, '01KYDVHC00000000000000000G', 'TECHNICAL_SUPPORT', 1, NULL),
+  (3204, @tenant, @actor, @actor, @now, @now, NULL, 1, 3004, '01KYDVHC00000000000000000D', 'BUSINESS_SUPPORT', 1, NULL),
+  (3205, @tenant, @actor, @actor, @now, @now, NULL, 1, 3005, '01KYDVHC00000000000000000F', 'TECHNICAL_SUPPORT', 1, NULL),
+  (3206, @tenant, @actor, @actor, @now, @now, NULL, 1, 3006, '01KYDVHC00000000000000000E', 'SALES_SUPPORT', 1, NULL);
 
 -- ============ 团队成员任期账本 ============
 INSERT INTO crm_opportunity_member_terms
   (id, tenant_id, opportunity_id, member_id, user_id, role, started_at, snapshot_at, active_at_snapshot,
    ended_at, started_by, ended_by, source_kind)
 VALUES
-  (3301, @tenant, 3001, 3201, 'oidc-sub-wang-jianguo', 'TECHNICAL_SUPPORT', '2026-08-01 10:00:00.000', NULL, NULL, NULL, @actor, NULL, 'RECORDED'),
-  (3302, @tenant, 3002, 3202, 'oidc-sub-chen-haoran', 'SALES_SUPPORT', '2026-07-30 15:00:00.000', NULL, NULL, NULL, @actor, NULL, 'RECORDED'),
-  (3303, @tenant, 3003, 3203, 'oidc-sub-zhao-xiaoyan', 'TECHNICAL_SUPPORT', '2026-07-28 09:30:00.000', NULL, NULL, NULL, @actor, NULL, 'RECORDED'),
-  (3304, @tenant, 3004, 3204, 'oidc-sub-liu-ming', 'BUSINESS_SUPPORT', '2026-08-02 16:00:00.000', NULL, NULL, NULL, @actor, NULL, 'RECORDED'),
-  (3305, @tenant, 3005, 3205, 'oidc-sub-wang-jianguo', 'TECHNICAL_SUPPORT', '2026-07-26 11:00:00.000', NULL, NULL, NULL, @actor, NULL, 'RECORDED'),
-  (3306, @tenant, 3006, 3206, 'oidc-sub-li-tingfang', 'SALES_SUPPORT', '2026-07-20 10:00:00.000', NULL, NULL, NULL, @actor, NULL, 'RECORDED');
+  (3301, @tenant, 3001, 3201, '01KYDVHC00000000000000000F', 'TECHNICAL_SUPPORT', '2026-08-01 10:00:00.000', NULL, NULL, NULL, @actor, NULL, 'RECORDED'),
+  (3302, @tenant, 3002, 3202, '01KYDVHC00000000000000000C', 'SALES_SUPPORT', '2026-07-30 15:00:00.000', NULL, NULL, NULL, @actor, NULL, 'RECORDED'),
+  (3303, @tenant, 3003, 3203, '01KYDVHC00000000000000000G', 'TECHNICAL_SUPPORT', '2026-07-28 09:30:00.000', NULL, NULL, NULL, @actor, NULL, 'RECORDED'),
+  (3304, @tenant, 3004, 3204, '01KYDVHC00000000000000000D', 'BUSINESS_SUPPORT', '2026-08-02 16:00:00.000', NULL, NULL, NULL, @actor, NULL, 'RECORDED'),
+  (3305, @tenant, 3005, 3205, '01KYDVHC00000000000000000F', 'TECHNICAL_SUPPORT', '2026-07-26 11:00:00.000', NULL, NULL, NULL, @actor, NULL, 'RECORDED'),
+  (3306, @tenant, 3006, 3206, '01KYDVHC00000000000000000E', 'SALES_SUPPORT', '2026-07-20 10:00:00.000', NULL, NULL, NULL, @actor, NULL, 'RECORDED');
 
 -- ============ 商机跟进 ============
 INSERT INTO crm_opportunity_followups
   (id, tenant_id, opportunity_id, type, content, followed_at, followed_by, next_follow_at,
    created_by, updated_by, created_at, updated_at, deleted_at, version)
 VALUES
-  (3401, @tenant, 3001, 'PHONE', '确认测评范围与报价预期。', '2026-08-02 10:30:00.000', 'oidc-sub-chen-haoran', '2026-08-12 09:00:00.000', @actor, @actor, @now, @now, NULL, 1),
-  (3402, @tenant, 3002, 'VISIT', '医院现场需求确认。', '2026-07-31 14:00:00.000', 'oidc-sub-liu-ming', '2026-08-09 11:00:00.000', @actor, @actor, @now, @now, NULL, 1),
-  (3403, @tenant, 3004, 'EMAIL', '发送正式报价单。', '2026-08-03 09:00:00.000', 'oidc-sub-zhao-xiaoyan', '2026-08-10 09:00:00.000', @actor, @actor, @now, @now, NULL, 1),
-  (3404, @tenant, 3005, 'PHONE', '投标答疑完成。', '2026-07-27 16:00:00.000', 'oidc-sub-li-tingfang', '2026-08-11 10:00:00.000', @actor, @actor, @now, @now, NULL, 1);
+  (3401, @tenant, 3001, 'PHONE', '确认测评范围与报价预期。', '2026-08-02 10:30:00.000', '01KYDVHC00000000000000000C', '2026-08-12 09:00:00.000', @actor, @actor, @now, @now, NULL, 1),
+  (3402, @tenant, 3002, 'VISIT', '医院现场需求确认。', '2026-07-31 14:00:00.000', '01KYDVHC00000000000000000D', '2026-08-09 11:00:00.000', @actor, @actor, @now, @now, NULL, 1),
+  (3403, @tenant, 3004, 'EMAIL', '发送正式报价单。', '2026-08-03 09:00:00.000', '01KYDVHC00000000000000000G', '2026-08-10 09:00:00.000', @actor, @actor, @now, @now, NULL, 1),
+  (3404, @tenant, 3005, 'PHONE', '投标答疑完成。', '2026-07-27 16:00:00.000', '01KYDVHC00000000000000000E', '2026-08-11 10:00:00.000', @actor, @actor, @now, @now, NULL, 1);
 
 -- ============ 商机附件（仅元数据，对象存储引用） ============
 INSERT INTO crm_opportunity_attachments

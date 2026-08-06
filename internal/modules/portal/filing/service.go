@@ -163,10 +163,49 @@ func (s *Service) List(ctx context.Context, actor Actor, page, pageSize int) (Li
 		return ListResult{}, err
 	}
 	result := ListResult{Items: make([]View, 0, len(values)), Page: page, PageSize: pageSize, Total: total}
+	filingIDs := make([]uint64, 0, len(values))
 	for i := range values {
-		result.Items = append(result.Items, basicView(&values[i]))
+		filingIDs = append(filingIDs, values[i].ID)
+	}
+	sections, err := s.repo.ListSectionsByFilingIDs(ctx, actor.TenantID, filingIDs)
+	if err != nil {
+		return ListResult{}, err
+	}
+	byFiling := map[uint64][]Section{}
+	for _, section := range sections {
+		byFiling[section.FilingID] = append(byFiling[section.FilingID], section)
+	}
+	for i := range values {
+		view := basicView(&values[i])
+		applyListSummary(ctx, s.protector, &view, byFiling[values[i].ID])
+		result.Items = append(result.Items, view)
 	}
 	return result, nil
+}
+
+// applyListSummary 只从草稿 section 明文提取列表展示所需的单位名称与系统名称；
+// 提取失败时保留空值，不因单条加密数据异常中断整个列表。
+func applyListSummary(ctx context.Context, protector Protector, view *View, sections []Section) {
+	for _, section := range sections {
+		plain, err := protector.Decrypt(ctx, section.DataCipher)
+		if err != nil {
+			continue
+		}
+		var data map[string]any
+		if err := json.Unmarshal(plain, &data); err != nil {
+			continue
+		}
+		switch section.SectionCode {
+		case SectionOrganization:
+			if name, ok := data["unit_name"].(string); ok && view.UnitName == "" {
+				view.UnitName = name
+			}
+		case SectionClassifiedObject:
+			if name, ok := data["system_name"].(string); ok && view.SystemName == "" {
+				view.SystemName = name
+			}
+		}
+	}
 }
 
 func (s *Service) Get(ctx context.Context, actor Actor, publicID string) (*View, error) {
@@ -493,6 +532,49 @@ func (s *Service) Submit(ctx context.Context, actor Actor, publicID string, comm
 		return s.repo.CreateAction(tx, newAction(ctx, filing, "SUBMIT", "CUSTOMER", actor.AccountID, command.IdempotencyKey, requestHash, requestCipher, responseCipher, now))
 	})
 	return &result, err
+}
+
+// DeleteDraft 只允许客户删除本人尚未提交的草稿。已锁定/提交/提交失败等状态保留
+// 不可变证据，禁止客户侧删除；删除在同一事务中完成：先追加 DELETE 审计动作，
+// 再清理草稿子资源并软删除备案头，避免审计账本与草稿清理脱节。
+func (s *Service) DeleteDraft(ctx context.Context, actor Actor, publicID string) (*View, error) {
+	actor.TenantID, actor.AccountID, publicID = strings.TrimSpace(actor.TenantID), strings.TrimSpace(actor.AccountID), strings.TrimSpace(publicID)
+	if !validActor(actor) || !validPublicID(publicID) {
+		return nil, ErrValidation
+	}
+	requestHash := hashValue(map[string]string{"public_id": publicID})
+	var result View
+	err := s.repo.WithTransaction(ctx, func(tx context.Context) error {
+		filing, findErr := s.repo.FindOwnedForUpdate(tx, actor, publicID)
+		if findErr != nil {
+			return findErr
+		}
+		if filing.Status != StatusDraft {
+			return ErrInvalidState
+		}
+		now := s.clock.Now().UTC()
+		result = basicView(filing)
+		responseJSON, _ := json.Marshal(result)
+		responseCipher, protectErr := s.protector.Encrypt(tx, responseJSON)
+		if protectErr != nil {
+			return protectErr
+		}
+		requestCipher, protectErr := s.protector.Encrypt(tx, mustMarshal(map[string]string{"public_id": publicID}))
+		if protectErr != nil {
+			return protectErr
+		}
+		if err := s.repo.CreateAction(tx, newAction(ctx, filing, "DELETE", "CUSTOMER", actor.AccountID, "delete:"+publicID, requestHash, requestCipher, responseCipher, now)); err != nil {
+			return err
+		}
+		if err := s.repo.DeleteDraftData(tx, filing.TenantID, filing.ID); err != nil {
+			return err
+		}
+		return s.repo.SoftDeleteFiling(tx, filing.TenantID, filing.ID, actor.AccountID, now)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &result, nil
 }
 
 func (s *Service) Unlock(ctx context.Context, actor InternalActor, publicID string, command UnlockCommand) (*View, error) {

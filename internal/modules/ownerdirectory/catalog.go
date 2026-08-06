@@ -42,12 +42,16 @@ type Query struct {
 type Catalog interface {
 	List(context.Context, Query) (Page, error)
 	Validate(context.Context, string, string) error
+	Resolve(context.Context, []string) (map[string]User, error)
 }
 
 type UnavailableCatalog struct{}
 
 func (UnavailableCatalog) List(context.Context, Query) (Page, error)      { return Page{}, ErrUnavailable }
 func (UnavailableCatalog) Validate(context.Context, string, string) error { return ErrUnavailable }
+func (UnavailableCatalog) Resolve(context.Context, []string) (map[string]User, error) {
+	return nil, ErrUnavailable
+}
 
 func validatePair(page Page, userID, organizationID string) error {
 	userID, organizationID = strings.TrimSpace(userID), strings.TrimSpace(organizationID)

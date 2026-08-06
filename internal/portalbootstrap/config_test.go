@@ -20,6 +20,9 @@ func validPortalConfig() Config {
 		CRMInviteBaseURL:         "https://crm.example/customer-opportunity/api/v1", CRMInviteTokenURL: "https://identity.example/oauth2/token",
 		CRMInviteClientID: "portal-crm-invite", CRMInviteClientSecret: "machine-secret", CRMInviteScope: "portal.invite.verify",
 		EncryptionKey: []byte(strings.Repeat("e", 32)), ReportIngestDescriptorKey: []byte(strings.Repeat("r", 32)), HMACKey: []byte(strings.Repeat("h", 32)),
+		PlatformBaseURL: "https://identity.example", PlatformApplicationCode: "customer_portal", PlatformEnvironmentCode: "test",
+		PlatformAuditClientID: "portal-audit", PlatformAuditClientSecret: "audit-secret", PlatformAuditWorkerID: "portal-api-audit",
+		PlatformAuditPollInterval: time.Second, PlatformAuditBatchSize: 100,
 	}
 }
 
@@ -141,6 +144,9 @@ func TestPortalConfigAllowsHTTPAccountSecurityCenterWithExplicitTestToggle(t *te
 func TestPortalConfigCatalogSynchronizationIsOptionalButCompleteWhenEnabled(t *testing.T) {
 	config := validPortalConfig()
 	config.CatalogSyncEnabled = true
+	config.CatalogApplicationID = ""
+	config.CatalogClientID = ""
+	config.CatalogClientSecret = ""
 	if err := config.validate(); err == nil || !strings.Contains(err.Error(), "PORTAL_AUTHORIZATION_CATALOG") {
 		t.Fatalf("incomplete catalog configuration error = %v", err)
 	}

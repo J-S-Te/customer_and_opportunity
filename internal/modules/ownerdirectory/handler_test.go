@@ -26,6 +26,9 @@ func (stub *catalogStub) List(_ context.Context, query Query) (Page, error) {
 }
 
 func (stub *catalogStub) Validate(context.Context, string, string) error { return stub.err }
+func (stub *catalogStub) Resolve(context.Context, []string) (map[string]User, error) {
+	return nil, stub.err
+}
 
 func TestOwnerDirectoryHandlerRejectsInvalidPageBeforeCallingCatalog(t *testing.T) {
 	gin.SetMode(gin.TestMode)
@@ -60,9 +63,9 @@ func TestOwnerDirectoryHandlerFailsClosedWhenPlatformIsUnavailable(t *testing.T)
 	}
 }
 
-func TestOwnerDirectoryRouteAllowsExactlyOneSupportedWriteCapability(t *testing.T) {
+func TestOwnerDirectoryRouteAllowsExactlyOneSupportedBusinessCapability(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	permissions := []string{"customer.create", "customer.update", "opportunity.create", "opportunity.owner.change"}
+	permissions := []string{"customer.read", "customer.create", "customer.update", "opportunity.create", "opportunity.owner.change", "opportunity.team.manage", "presale.report"}
 	for _, permission := range permissions {
 		t.Run(permission, func(t *testing.T) {
 			catalog := &catalogStub{page: Page{Items: []User{}, Page: 1, PageSize: 20}}
@@ -79,7 +82,7 @@ func TestOwnerDirectoryRouteAllowsExactlyOneSupportedWriteCapability(t *testing.
 
 func TestOwnerDirectoryRouteRejectsUnrelatedCapability(t *testing.T) {
 	catalog := &catalogStub{}
-	response := serveDirectoryRoute(catalog, map[string]struct{}{"customer.read": {}})
+	response := serveDirectoryRoute(catalog, map[string]struct{}{"customer.audit.read": {}})
 	if response.Code != http.StatusForbidden {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}

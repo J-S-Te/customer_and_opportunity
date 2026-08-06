@@ -56,7 +56,7 @@ func TestCapabilitiesRequireSessionAndExposeOnlyBoundedRuntimeState(t *testing.T
 		"filing_export":             "FILING_EXPORT_NOT_CONFIGURED",
 		"filing_police_submission":  "FILING_POLICE_SUBMISSION_CONTRACT_NOT_CONFIGURED",
 	}
-	if len(envelope.Data) != len(want) {
+	if len(envelope.Data) != len(want)+1 {
 		t.Fatalf("capabilities=%#v", envelope.Data)
 	}
 	for name, reason := range want {
@@ -64,6 +64,9 @@ func TestCapabilitiesRequireSessionAndExposeOnlyBoundedRuntimeState(t *testing.T
 		if !ok || value.Available || value.ReasonCode != reason || (value.Mode != "UNAVAILABLE" && value.Mode != "LOCAL_ONLY") {
 			t.Fatalf("capability %s=%+v", name, value)
 		}
+	}
+	if _, ok := envelope.Data["customer"]; !ok {
+		t.Fatal("customer service options must be exposed in capabilities response")
 	}
 	for _, forbidden := range []string{"client", "scope", "secret", "https://", "token", "url"} {
 		if strings.Contains(strings.ToLower(response.Body.String()), forbidden) {

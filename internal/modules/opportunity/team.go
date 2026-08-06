@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/ownerdirectory"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/apperror"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/audit"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/auth"
@@ -157,7 +158,7 @@ func (s *Service) GetMembers(ctx context.Context, id uint64, includeInactive boo
 	if err != nil {
 		return nil, err
 	}
-	return &TeamResponse{OpportunityID: id, Version: model.Version, Members: memberResponses(members)}, nil
+	return s.teamResponse(ctx, id, model.Version, members), nil
 }
 
 // ListMemberTerms 先证明父商机可见，再返回可独立查询的参与区间。LEGACY_SNAPSHOT 只记录
@@ -191,6 +192,10 @@ func (s *Service) ReplaceMembers(ctx context.Context, id uint64, input ReplaceMe
 	if err != nil {
 		return nil, err
 	}
+	resolvedUsers, err := s.validateTeamUsers(ctx, desired)
+	if err != nil {
+		return nil, err
+	}
 	model, err := s.repo.FindByID(ctx, principal, id)
 	if err != nil {
 		return nil, err
@@ -203,7 +208,7 @@ func (s *Service) ReplaceMembers(ctx context.Context, id uint64, input ReplaceMe
 		return nil, err
 	}
 	if sameMemberSet(current, desired) && model.Version == input.Version {
-		return &TeamResponse{OpportunityID: id, Version: model.Version, Members: memberResponses(current)}, nil
+		return teamResponseWithUsers(id, model.Version, current, resolvedUsers), nil
 	}
 	if model.Version != input.Version {
 		return nil, ErrVersionConflict
@@ -228,7 +233,68 @@ func (s *Service) ReplaceMembers(ctx context.Context, id uint64, input ReplaceMe
 	if err != nil {
 		return nil, err
 	}
-	return &TeamResponse{OpportunityID: id, Version: model.Version, Members: memberResponses(current)}, nil
+	return teamResponseWithUsers(id, model.Version, current, resolvedUsers), nil
+}
+
+func (s *Service) validateTeamUsers(ctx context.Context, members []Member) (map[string]ownerdirectory.User, error) {
+	if len(members) == 0 {
+		return map[string]ownerdirectory.User{}, nil
+	}
+	if s.owners == nil {
+		return nil, ownerdirectory.ErrUnavailable
+	}
+	users, err := s.owners.Resolve(ctx, memberUserIDs(members))
+	if err != nil {
+		return nil, err
+	}
+	for _, member := range members {
+		if _, exists := users[member.UserID]; !exists {
+			return nil, ErrInvalidTeamMember
+		}
+	}
+	return users, nil
+}
+
+func (s *Service) teamResponse(ctx context.Context, opportunityID, version uint64, members []Member) *TeamResponse {
+	if len(members) == 0 {
+		return teamResponseWithUsers(opportunityID, version, members, map[string]ownerdirectory.User{})
+	}
+	if s.owners == nil {
+		return &TeamResponse{OpportunityID: opportunityID, Version: version, Members: memberResponses(members)}
+	}
+	users, err := s.owners.Resolve(ctx, memberUserIDs(members))
+	if err != nil {
+		return &TeamResponse{OpportunityID: opportunityID, Version: version, Members: memberResponses(members)}
+	}
+	return teamResponseWithUsers(opportunityID, version, members, users)
+}
+
+func teamResponseWithUsers(opportunityID, version uint64, members []Member, users map[string]ownerdirectory.User) *TeamResponse {
+	responses := memberResponses(members)
+	for index := range responses {
+		user, exists := users[responses[index].UserID]
+		if !exists {
+			responses[index].DirectoryStatus = "NOT_AVAILABLE"
+			continue
+		}
+		responses[index].DisplayName = user.DisplayName
+		responses[index].DirectoryStatus = "ACTIVE"
+		responses[index].Organizations = make([]MemberOrganizationResponse, 0, len(user.Organizations))
+		for _, organization := range user.Organizations {
+			responses[index].Organizations = append(responses[index].Organizations, MemberOrganizationResponse{
+				ID: organization.ID, Name: organization.Name, IsPrimary: organization.IsPrimary,
+			})
+		}
+	}
+	return &TeamResponse{OpportunityID: opportunityID, Version: version, DirectoryAvailable: true, Members: responses}
+}
+
+func memberUserIDs(members []Member) []string {
+	result := make([]string, 0, len(members))
+	for _, member := range members {
+		result = append(result, member.UserID)
+	}
+	return result
 }
 
 func normalizeMembers(input []TeamMemberInput, principal auth.Principal, opportunityID uint64, now time.Time) ([]Member, error) {

@@ -29,13 +29,10 @@ func main() {
 		logger.Error("CRM OIDC role policy is incompatible", "expected_max_roles", manifest.Policy.MaxEffectiveRoles)
 		os.Exit(1)
 	}
-	if !config.DevelopmentAuth {
-		// 正式模式必须把二进制内置的角色—权限映射与平台声明哈希绑定；开发头认证不消费
-		// 平台签发的声明，因此不参与这项兼容性检查。
-		if err = platformcatalog.ValidateClaimsRoleConfigHash(manifest, config.OIDCRoleConfigHash); err != nil {
-			logger.Error("CRM authorization catalog is incompatible", "error", err)
-			os.Exit(1)
-		}
+	// 二进制内置角色—权限映射必须始终与基础平台声明哈希绑定，不存在本地授权降级路径。
+	if err = platformcatalog.ValidateClaimsRoleConfigHash(manifest, config.OIDCRoleConfigHash); err != nil {
+		logger.Error("CRM authorization catalog is incompatible", "error", err)
+		os.Exit(1)
 	}
 	if err = platformcatalog.Publish(context.Background(), manifest, platformcatalog.Options{
 		Enabled: config.CatalogSyncEnabled, BaseURL: config.PlatformBaseURL, ApplicationID: config.CatalogApplicationID,

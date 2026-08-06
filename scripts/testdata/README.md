@@ -3,6 +3,12 @@
 这组脚本为本地 docker 环境（`platform/compose.local.yaml`）准备覆盖各功能模块的测试数据，
 **不创建用户、角色、OIDC 会话或登录账号**，只复用已有演示人员/门户身份映射。
 
+> 用户对齐：SQL 与 `cmd/seed-demo-data` 现在都引用基础平台本地种子用户（`platform/docker/seed-local-test-data.sql`）：
+> 张伟 `01KYDVHC00000000000000000C`（平台研发部）、李娜 `...D`（平台研发部）、王强 `...E`（运维保障部）、
+> 陈晨 `...F`（产品部）、刘洋 `...G`（客户成功部）。导入前请先执行基础平台种子脚本，保证 `iam_user` 与组织存在。
+> 这些人员还要获得客户与商机应用的 CRM 角色，才会出现在 CRM 人员目录并显示姓名；
+> `import-testdata.sh` 会按目录自动解析真实负责人，也可用 `CRM_TEST_OWNER_1..5` 手动指定。
+
 ## 用法
 
 ```bash
@@ -22,26 +28,11 @@ CUSTOMER_MYSQL_CONTAINER=xxx PORTAL_MYSQL_CONTAINER=yyy bash scripts/testdata/im
 
 密码从对应 API 容器环境变量自动读取，脚本不写死任何秘密。
 
-## 推荐：JSON 请求体 + Docker 内执行（不碰正式容器）
+## JSON API 导入脚本状态
 
-如果你希望用 JSON 数据直接通过应用 HTTP API 写入，而不是直接写表，使用：
+`run-json-in-docker.sh` 原先通过无密码学可信度的开发请求头模拟用户。该认证入口已从 CRM 删除，脚本现在会明确失败，不能再启动绕过基础平台的临时容器。
 
-```bash
-# 服务器（CI/CD 部署目录）
-DEPLOY_PATH=/opt/basic-platform bash scripts/testdata/run-json-in-docker.sh
-
-# 本地
-bash scripts/testdata/run-json-in-docker.sh
-```
-
-执行过程：
-
-1. 从已运行的 `customer-api` 容器复制环境，启动一个**临时的** `DEV_AUTH_ENABLED=true`
-   CRM 容器（`crm-json-seed`），连接同一个 MySQL、挂载同一 JWT 公钥；
-2. 在临时容器内用 `curl` + `X-Dev-*` 请求头调用真实 HTTP API；
-3. 自动创建客户 → 商机 → 商机跟进 → 阶段流转 → 售前申请，并用返回的 `data.id`
-   串联后续请求；
-4. 结束后自动删除临时容器，正式业务容器和部署配置完全不变。
+如需继续使用这些 JSON 样例，调用方必须先完成基础平台 OIDC 登录，并通过 CRM 正式同源入口携带服务端会话 Cookie 与 `X-CSRF-Token: 1`。测试账号的角色、权限和数据范围均在基础平台分配；禁止在脚本、环境变量或代理层重新构造用户/角色/权限头。
 
 JSON 文件在 `scripts/testdata/json/`：
 

@@ -20,6 +20,7 @@ var (
 	ErrVoidBlocked           = apperror.New(http.StatusConflict, "CRM_OPPORTUNITY_VOID_BLOCKED", "opportunity has active dependencies")
 	ErrOwnerRequired         = apperror.New(http.StatusUnprocessableEntity, "CRM_OPPORTUNITY_OWNER_REQUIRED", "owner platform subject is required")
 	ErrInvalidMemberRole     = apperror.New(http.StatusUnprocessableEntity, "CRM_OPPORTUNITY_INVALID_MEMBER_ROLE", "opportunity member role is not supported")
+	ErrInvalidTeamMember     = apperror.New(http.StatusUnprocessableEntity, "CRM_OPPORTUNITY_MEMBER_INVALID", "opportunity team member is not an active authorized platform user")
 	ErrDuplicateMember       = apperror.New(http.StatusUnprocessableEntity, "CRM_OPPORTUNITY_DUPLICATE_MEMBER", "an opportunity team contains the same platform subject more than once")
 	ErrTeamTooLarge          = apperror.New(http.StatusUnprocessableEntity, "CRM_OPPORTUNITY_TEAM_TOO_LARGE", "an opportunity team may contain at most 50 members")
 	ErrIdempotencyRequired   = apperror.New(http.StatusBadRequest, "COMMON_IDEMPOTENCY_KEY_REQUIRED", "Idempotency-Key header is required")

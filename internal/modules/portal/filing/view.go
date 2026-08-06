@@ -40,6 +40,8 @@ type View struct {
 	ID            string          `json:"id"`
 	FilingNo      string          `json:"filing_no"`
 	ProjectID     string          `json:"project_id,omitempty"`
+	UnitName      string          `json:"unit_name,omitempty"`
+	SystemName    string          `json:"system_name,omitempty"`
 	FormVersion   string          `json:"form_version"`
 	Status        string          `json:"status"`
 	CurrentStep   uint8           `json:"current_step"`

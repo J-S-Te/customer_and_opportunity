@@ -32,3 +32,32 @@ func TestLoadConfigHeartbeatWindowCoversPollTimeoutAndJitter(t *testing.T) {
 		t.Fatalf("config=%+v err=%v", config, err)
 	}
 }
+
+func TestLoadConfigRejectsInsecureEndpointsByDefault(t *testing.T) {
+	setValidConfig(t)
+	t.Setenv("APPROVAL_TOKEN_URL", "http://identity.local/token")
+	if _, err := LoadConfig(); err == nil || !strings.Contains(err.Error(), "HTTPS") {
+		t.Fatalf("insecure endpoint was accepted without the explicit dev switch: %v", err)
+	}
+}
+
+func TestLoadConfigAllowsInsecureHTTPOnlyWhenExplicitlyEnabled(t *testing.T) {
+	setValidConfig(t)
+	for key, value := range map[string]string{
+		"APPROVAL_TOKEN_URL":  "http://identity.local/token",
+		"APPROVAL_START_URL":  "http://approval.local/start",
+		"APPROVAL_ACTION_URL": "http://approval.local/action",
+		"PMS_TOKEN_URL":       "http://identity.local/token",
+		"PMS_WORKLOG_URL":     "http://pms.local/worklogs",
+	} {
+		t.Setenv(key, value)
+	}
+	if _, err := LoadConfig(); err == nil || !strings.Contains(err.Error(), "PRESALE_WORKER_ALLOW_INSECURE_HTTP=true") {
+		t.Fatalf("insecure endpoints were accepted without the explicit dev switch: %v", err)
+	}
+	t.Setenv("PRESALE_WORKER_ALLOW_INSECURE_HTTP", "true")
+	config, err := LoadConfig()
+	if err != nil || !config.AllowInsecureHTTP {
+		t.Fatalf("config=%+v err=%v", config, err)
+	}
+}

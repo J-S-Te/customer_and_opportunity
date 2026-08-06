@@ -3,8 +3,8 @@
 SET NAMES utf8mb4;
 SET @tenant = '01J00000000000000000000000';
 SET @zero_hash = '0000000000000000000000000000000000000000000000000000000000000000';
-SET @actor = 'oidc-sub-demo-seed';
-SET @actor_name = '测试数据导入';
+SET @actor = '01KYDVHC00000000000000000C';
+SET @actor_name = '张伟';
 SET @now = NOW(3);
 
 -- 商机阶段预警规则（5 个非终态阶段）
@@ -31,10 +31,10 @@ INSERT INTO crm_opportunity_stage_alerts
   (id, tenant_id, created_by, updated_by, created_at, updated_at, deleted_at, version,
    opportunity_id, stage, threshold_version, basis_at, due_at, status, recipient_id, sent_at, read_at)
 VALUES
-  (8201, @tenant, @actor, @actor, @now, @now, NULL, 1, 3001, '初步接触', 1, '2026-08-01 10:00:00.000', '2026-08-04 10:00:00.000', 'UNREAD', 'oidc-sub-chen-haoran', '2026-08-04 10:00:00.000', NULL),
-  (8202, @tenant, @actor, @actor, @now, @now, NULL, 1, 3002, '需求沟通', 1, '2026-07-30 15:00:00.000', '2026-08-02 15:00:00.000', 'READ', 'oidc-sub-liu-ming', '2026-08-02 15:00:00.000', '2026-08-02 16:00:00.000'),
-  (8203, @tenant, @actor, @actor, @now, @now, NULL, 1, 3004, '报价', 1, '2026-08-02 16:00:00.000', '2026-08-04 16:00:00.000', 'PENDING', 'oidc-sub-zhao-xiaoyan', NULL, NULL),
-  (8204, @tenant, @actor, @actor, @now, @now, NULL, 1, 3005, '投标', 1, '2026-07-26 11:00:00.000', '2026-07-28 11:00:00.000', 'CANCELLED', 'oidc-sub-li-tingfang', NULL, NULL);
+  (8201, @tenant, @actor, @actor, @now, @now, NULL, 1, 3001, '初步接触', 1, '2026-08-01 10:00:00.000', '2026-08-04 10:00:00.000', 'UNREAD', '01KYDVHC00000000000000000C', '2026-08-04 10:00:00.000', NULL),
+  (8202, @tenant, @actor, @actor, @now, @now, NULL, 1, 3002, '需求沟通', 1, '2026-07-30 15:00:00.000', '2026-08-02 15:00:00.000', 'READ', '01KYDVHC00000000000000000D', '2026-08-02 15:00:00.000', '2026-08-02 16:00:00.000'),
+  (8203, @tenant, @actor, @actor, @now, @now, NULL, 1, 3004, '报价', 1, '2026-08-02 16:00:00.000', '2026-08-04 16:00:00.000', 'PENDING', '01KYDVHC00000000000000000G', NULL, NULL),
+  (8204, @tenant, @actor, @actor, @now, @now, NULL, 1, 3005, '投标', 1, '2026-07-26 11:00:00.000', '2026-07-28 11:00:00.000', 'CANCELLED', '01KYDVHC00000000000000000E', NULL, NULL);
 
 -- 站内通知（负责人变更 + 售前指派/进展，补充更多收件人）
 INSERT INTO crm_notifications
@@ -43,9 +43,9 @@ INSERT INTO crm_notifications
    request_id, request_no, assignment_id, progress_id, recipient_id, recipient_kind, title, body,
    target_path, status, read_at)
 VALUES
-  (8301, @tenant, @actor, @actor, @now, @now, NULL, 1, 'notify-owner-3006', 'OPPORTUNITY_OWNER_CHANGED', 3006, 1, 'SJ20260804TEST006', '华岳生产网等保测评', 0, '', 0, 0, 'oidc-sub-li-tingfang', 'NEW_OWNER', '商机负责人变更', '您已成为商机 3006 的负责人', '/customer-opportunity/opportunities?opportunity_id=3006', 'UNREAD', NULL),
-  (8302, @tenant, @actor, @actor, @now, @now, NULL, 1, 'notify-assign-6002-6304', 'PRESALE_ASSIGNEE_ADDED', 3002, 1, 'SJ20260804TEST002', '医院信息系统等保测评', 6002, 'TS20260804TEST002', 6304, 0, 'oidc-sub-wang-jianguo', 'ASSIGNEE_ADDED', '售前指派通知', '您已被指派到售前申请 6002', '/customer-opportunity/presale?request_id=6002', 'READ', '2026-08-04 11:00:00.000'),
-  (8303, @tenant, @actor, @actor, @now, @now, NULL, 1, 'notify-progress-6004-6503', 'PRESALE_PROGRESS_APPLICANT', 3004, 1, 'SJ20260804TEST004', '数据中台安全咨询', 6004, 'TS20260804TEST004', 0, 6503, 'oidc-sub-zhao-xiaoyan', 'PROGRESS_APPLICANT', '售前进展更新', '售前申请 6004 已完成', '/customer-opportunity/presale?request_id=6004', 'UNREAD', NULL);
+  (8301, @tenant, @actor, @actor, @now, @now, NULL, 1, 'notify-owner-3006', 'OPPORTUNITY_OWNER_CHANGED', 3006, 1, 'SJ20260804TEST006', '华岳生产网等保测评', 0, '', 0, 0, '01KYDVHC00000000000000000E', 'NEW_OWNER', '商机负责人变更', '您已成为商机 3006 的负责人', '/customer-opportunity/opportunities?opportunity_id=3006', 'UNREAD', NULL),
+  (8302, @tenant, @actor, @actor, @now, @now, NULL, 1, 'notify-assign-6002-6304', 'PRESALE_ASSIGNEE_ADDED', 3002, 1, 'SJ20260804TEST002', '医院信息系统等保测评', 6002, 'TS20260804TEST002', 6304, 0, '01KYDVHC00000000000000000F', 'ASSIGNEE_ADDED', '售前指派通知', '您已被指派到售前申请 6002', '/customer-opportunity/presale?request_id=6002', 'READ', '2026-08-04 11:00:00.000'),
+  (8303, @tenant, @actor, @actor, @now, @now, NULL, 1, 'notify-progress-6004-6503', 'PRESALE_PROGRESS_APPLICANT', 3004, 1, 'SJ20260804TEST004', '数据中台安全咨询', 6004, 'TS20260804TEST004', 0, 6503, '01KYDVHC00000000000000000G', 'PROGRESS_APPLICANT', '售前进展更新', '售前申请 6004 已完成', '/customer-opportunity/presale?request_id=6004', 'UNREAD', NULL);
 
 -- Outbox 事件（合同签单、售前审批启动）
 INSERT INTO crm_outbox_events
