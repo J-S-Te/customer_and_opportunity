@@ -21,13 +21,13 @@ type OIDCOptions struct {
 }
 
 type verifiedClaims struct {
-	Subject, TenantID, PersonID, DisplayName, RoleConfigHash string
-	PrimaryOrgID                                             string
-	OrganizationIDs                                          []string
-	Roles, Permissions                                       []string
-	AuthzRevision                                            uint64
-	ExpiresAt                                                time.Time
-	AccessToken                                              string
+	Subject, IdentityID, TenantID, PersonID, DisplayName, RoleConfigHash string
+	PrimaryOrgID                                                         string
+	OrganizationIDs                                                      []string
+	Roles, Permissions                                                   []string
+	AuthzRevision                                                        uint64
+	ExpiresAt                                                            time.Time
+	AccessToken                                                          string
 }
 
 type oidcClient interface {
@@ -38,6 +38,7 @@ type oidcClient interface {
 
 type platformClaims struct {
 	Subject           string   `json:"sub"`
+	IdentityID        string   `json:"identity_id"`
 	Nonce             string   `json:"nonce"`
 	TenantID          string   `json:"tenant_id"`
 	PersonID          string   `json:"person_id"`
@@ -114,6 +115,11 @@ func (c *platformOIDCClient) Exchange(ctx context.Context, code, verifier, nonce
 	if raw.Nonce != nonce || raw.TokenUse != "id_token" || token.AccessToken == "" {
 		return verifiedClaims{}, errors.New("CRM OIDC ID token purpose, nonce or access token is invalid")
 	}
+	// ID token 的 sub 是平台规范中的 canonical identity；若令牌同时返回别名，
+	// 两者必须一致，避免 CRM 在不同令牌载荷间产生两个主体。
+	if raw.IdentityID != "" && raw.IdentityID != raw.Subject {
+		return verifiedClaims{}, errors.New("CRM OIDC identity_id does not match sub")
+	}
 	claims := claimsFromPlatform(raw)
 	claims.AccessToken = token.AccessToken
 	claims.ExpiresAt = earliestExpiry(idToken.Expiry, token.Expiry)
@@ -133,6 +139,9 @@ func (c *platformOIDCClient) UserInfo(ctx context.Context, accessToken string) (
 	if err := info.Claims(&raw); err != nil {
 		return verifiedClaims{}, fmt.Errorf("decode CRM OIDC UserInfo: %w", err)
 	}
+	if raw.IdentityID == "" || raw.IdentityID != raw.Subject {
+		return verifiedClaims{}, errors.New("CRM OIDC UserInfo identity_id does not match sub")
+	}
 	return claimsFromPlatform(raw), nil
 }
 
@@ -141,11 +150,15 @@ func claimsFromPlatform(raw platformClaims) verifiedClaims {
 	if displayName == "" {
 		displayName = raw.PreferredUsername
 	}
-	return verifiedClaims{Subject: raw.Subject, TenantID: raw.TenantID, PersonID: raw.PersonID, DisplayName: displayName, PrimaryOrgID: raw.PrimaryOrgID, OrganizationIDs: raw.OrganizationIDs, Roles: raw.Roles, Permissions: raw.Permissions, RoleConfigHash: raw.RoleConfigHash, AuthzRevision: raw.AuthzRevision}
+	identityID := raw.IdentityID
+	if identityID == "" {
+		identityID = raw.Subject
+	}
+	return verifiedClaims{Subject: raw.Subject, IdentityID: identityID, TenantID: raw.TenantID, PersonID: raw.PersonID, DisplayName: displayName, PrimaryOrgID: raw.PrimaryOrgID, OrganizationIDs: raw.OrganizationIDs, Roles: raw.Roles, Permissions: raw.Permissions, RoleConfigHash: raw.RoleConfigHash, AuthzRevision: raw.AuthzRevision}
 }
 
 func normalizeAuthorization(claims verifiedClaims, expectedTenantID, expectedRoleConfigHash string, maxRoles int) (verifiedClaims, error) {
-	if claims.Subject == "" || claims.Subject != strings.TrimSpace(claims.Subject) || claims.TenantID != expectedTenantID ||
+	if claims.Subject == "" || claims.Subject != strings.TrimSpace(claims.Subject) || claims.IdentityID != claims.Subject || claims.TenantID != expectedTenantID ||
 		claims.RoleConfigHash == "" || claims.RoleConfigHash != expectedRoleConfigHash || claims.AuthzRevision == 0 {
 		return verifiedClaims{}, errors.New("CRM OIDC identity or authorization metadata is invalid")
 	}
@@ -271,7 +284,7 @@ func normalizedSet(values []string, allow map[string]struct{}) ([]string, error)
 }
 
 func sameAuthorization(left, right verifiedClaims) bool {
-	if left.Subject != right.Subject || left.TenantID != right.TenantID || left.PersonID != right.PersonID || left.PrimaryOrgID != right.PrimaryOrgID || left.RoleConfigHash != right.RoleConfigHash || left.AuthzRevision != right.AuthzRevision || len(left.OrganizationIDs) != len(right.OrganizationIDs) || len(left.Roles) != len(right.Roles) || len(left.Permissions) != len(right.Permissions) {
+	if left.Subject != right.Subject || left.IdentityID != right.IdentityID || left.TenantID != right.TenantID || left.PersonID != right.PersonID || left.PrimaryOrgID != right.PrimaryOrgID || left.RoleConfigHash != right.RoleConfigHash || left.AuthzRevision != right.AuthzRevision || len(left.OrganizationIDs) != len(right.OrganizationIDs) || len(left.Roles) != len(right.Roles) || len(left.Permissions) != len(right.Permissions) {
 		return false
 	}
 	for index := range left.OrganizationIDs {

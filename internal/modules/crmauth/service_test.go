@@ -87,7 +87,7 @@ func (f *fakeOIDC) UserInfo(_ context.Context, _ string) (verifiedClaims, error)
 }
 
 func validClaims(now time.Time) verifiedClaims {
-	return verifiedClaims{Subject: "user-1", TenantID: "tenant-1", DisplayName: "User One", PrimaryOrgID: "org-a", OrganizationIDs: []string{"org-a", "org-b"}, Roles: []string{"sales"}, Permissions: catalogRolePermissions("sales"), RoleConfigHash: "hash-1", AuthzRevision: 8, ExpiresAt: now.Add(10 * time.Minute), AccessToken: "access-token"}
+	return verifiedClaims{Subject: "user-1", IdentityID: "user-1", TenantID: "tenant-1", DisplayName: "User One", PrimaryOrgID: "org-a", OrganizationIDs: []string{"org-a", "org-b"}, Roles: []string{"sales"}, Permissions: catalogRolePermissions("sales"), RoleConfigHash: "hash-1", AuthzRevision: 8, ExpiresAt: now.Add(10 * time.Minute), AccessToken: "access-token"}
 }
 
 func catalogRolePermissions(roleCode string) []string {
@@ -202,6 +202,7 @@ func TestNormalizeAuthorizationRequiresExactCatalogMetadata(t *testing.T) {
 		mutate func(*verifiedClaims)
 	}{
 		{"tenant", func(c *verifiedClaims) { c.TenantID = "other" }},
+		{"identity id mismatch", func(c *verifiedClaims) { c.IdentityID = "other-user" }},
 		{"role hash", func(c *verifiedClaims) { c.RoleConfigHash = "old" }},
 		{"revision", func(c *verifiedClaims) { c.AuthzRevision = 0 }},
 		{"subject width", func(c *verifiedClaims) { c.Subject = strings.Repeat("a", 65) }},

@@ -193,7 +193,7 @@ func claimsFromSession(session *Session) (verifiedClaims, error) {
 	if err := json.Unmarshal(session.PermissionsJSON, &permissions); err != nil {
 		return verifiedClaims{}, err
 	}
-	return verifiedClaims{Subject: session.PlatformUserID, TenantID: session.TenantID, PersonID: session.PersonID, DisplayName: session.DisplayName, PrimaryOrgID: session.PrimaryOrgID, OrganizationIDs: organizationIDs, Roles: roles, Permissions: permissions, RoleConfigHash: session.RoleConfigHash, AuthzRevision: session.AuthzRevision}, nil
+	return verifiedClaims{Subject: session.PlatformUserID, IdentityID: session.PlatformUserID, TenantID: session.TenantID, PersonID: session.PersonID, DisplayName: session.DisplayName, PrimaryOrgID: session.PrimaryOrgID, OrganizationIDs: organizationIDs, Roles: roles, Permissions: permissions, RoleConfigHash: session.RoleConfigHash, AuthzRevision: session.AuthzRevision}, nil
 }
 
 func principalFromClaims(claims verifiedClaims) sharedauth.Principal {
