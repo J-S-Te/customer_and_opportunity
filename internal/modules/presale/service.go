@@ -181,12 +181,24 @@ func (s *Service) deliveryWorkerReady(ctx context.Context) bool {
 
 // ReopenRequest reuses the existing request and approval-instance IDs. Only the
 // terminal rejected/cancelled request can be reopened; its history remains intact.
-func (s *Service) ReopenRequest(ctx context.Context, actor Actor, id uint64, version uint64) (*PresaleRequest, error) {
+func (s *Service) ReopenRequest(ctx context.Context, actor Actor, id uint64, version uint64, in ReopenRequestInput) (*PresaleRequest, error) {
 	if !actor.Can("presale.create") {
 		return nil, ErrForbidden
 	}
+	if err := validateCreate(CreateRequestInput{
+		OpportunityID: 1, Venue: in.Venue, ServiceAddress: in.ServiceAddress,
+		ContactName: in.ContactName, ContactPhone: in.ContactPhone,
+		Description: in.Description, ExpectedStart: in.ExpectedStart,
+		ExpectedEnd: in.ExpectedEnd, Urgency: in.Urgency,
+	}); err != nil {
+		return nil, err
+	}
+	cipher, err := s.phones.Encrypt(ctx, strings.TrimSpace(in.ContactPhone))
+	if err != nil {
+		return nil, err
+	}
 	var reopened *PresaleRequest
-	err := s.repo.WithTransaction(ctx, func(tx context.Context) error {
+	err = s.repo.WithTransaction(ctx, func(tx context.Context) error {
 		r, err := s.repo.FindRequestForUpdate(tx, actor.TenantID, id)
 		if err != nil {
 			return err
@@ -197,6 +209,7 @@ func (s *Service) ReopenRequest(ctx context.Context, actor Actor, id uint64, ver
 		if r.ApplicantID != actor.UserID && !actor.HasRole("crm_super_admin") {
 			return ErrForbidden
 		}
+		previousStatus := r.Status
 		inst, err := s.repo.FindApprovalInstanceForUpdate(tx, actor.TenantID, id)
 		if err != nil {
 			return err
@@ -205,16 +218,36 @@ func (s *Service) ReopenRequest(ctx context.Context, actor Actor, id uint64, ver
 		if err = s.repo.UpdateRequestVersioned(tx, r, r.Version, map[string]any{
 			"status": StatusPendingApproval, "current_approval_node": 1,
 			"reject_reason": "", "cancelled_at": nil, "updated_by": actor.UserID,
+			"venue": in.Venue, "service_address": strings.TrimSpace(in.ServiceAddress),
+			"contact_name": strings.TrimSpace(in.ContactName), "contact_phone_cipher": cipher,
+			"contact_phone_masked": s.phones.Mask(strings.TrimSpace(in.ContactPhone)),
+			"description":          strings.TrimSpace(in.Description),
+			"expected_start":       in.ExpectedStart.UTC(), "expected_end": in.ExpectedEnd.UTC(),
+			"urgency": in.Urgency,
 		}); err != nil {
 			return err
 		}
+		r.Status = StatusPendingApproval
+		r.CurrentApprovalNode = 1
+		r.RejectReason = ""
+		r.CancelledAt = nil
+		r.UpdatedBy = actor.UserID
+		r.Venue = in.Venue
+		r.ServiceAddress = strings.TrimSpace(in.ServiceAddress)
+		r.ContactName = strings.TrimSpace(in.ContactName)
+		r.ContactPhoneCipher = cipher
+		r.ContactPhoneMasked = s.phones.Mask(strings.TrimSpace(in.ContactPhone))
+		r.Description = strings.TrimSpace(in.Description)
+		r.ExpectedStart = in.ExpectedStart.UTC()
+		r.ExpectedEnd = in.ExpectedEnd.UTC()
+		r.Urgency = in.Urgency
 		if err = s.repo.UpdateApprovalInstance(tx, inst, map[string]any{
 			"status": "PENDING", "current_node": 1, "pending_task_id": "", "pending_approver": "", "pending_action": "",
 			"finished_at": nil, "started_at": &now, "updated_by": actor.UserID,
 		}); err != nil {
 			return err
 		}
-		if err = s.statusLog(tx, r, r.Status, StatusPendingApproval, "REOPENED", "", actor.UserID, actor.RequestID); err != nil {
+		if err = s.statusLog(tx, r, previousStatus, StatusPendingApproval, "REOPENED", "", actor.UserID, actor.RequestID); err != nil {
 			return err
 		}
 		reopened = r
