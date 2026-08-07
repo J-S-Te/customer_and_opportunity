@@ -496,17 +496,18 @@ func (r *GORMRepository) FindByIDForUpdate(ctx context.Context, principal auth.P
 func (r *GORMRepository) List(ctx context.Context, principal auth.Principal, query ListQuery) (pagination.Page[Response], error) {
 	query.Page, query.PageSize = pagination.Normalize(query.Page, query.PageSize)
 	db := scoped(database.FromContext(ctx, r.db).Model(&Opportunity{}), principal)
+	db = db.Joins("LEFT JOIN crm_customers ON crm_customers.tenant_id = crm_opportunities.tenant_id AND crm_customers.id = crm_opportunities.customer_id AND crm_customers.deleted_at IS NULL")
 	if query.Keyword != "" {
-		db = db.Where("opportunity_no LIKE ? OR name LIKE ?", "%"+query.Keyword+"%", "%"+query.Keyword+"%")
+		db = db.Where("crm_opportunities.opportunity_no LIKE ? OR crm_opportunities.name LIKE ? OR crm_customers.name LIKE ?", "%"+query.Keyword+"%", "%"+query.Keyword+"%", "%"+query.Keyword+"%")
 	}
 	if query.Stage != "" {
-		db = db.Where("current_stage=?", query.Stage)
+		db = db.Where("crm_opportunities.current_stage=?", query.Stage)
 	}
 	if query.Status != "" {
-		db = db.Where("opp_status=?", query.Status)
+		db = db.Where("crm_opportunities.opp_status=?", query.Status)
 	}
 	if query.OwnerID != "" {
-		db = db.Where("owner_user_id=?", query.OwnerID)
+		db = db.Where("crm_opportunities.owner_user_id=?", query.OwnerID)
 	}
 	var total int64
 	if err := db.Count(&total).Error; err != nil {
@@ -521,13 +522,19 @@ func (r *GORMRepository) List(ctx context.Context, principal auth.Principal, que
 	if strings.EqualFold(query.SortOrder, "asc") {
 		direction = "ASC"
 	}
-	var models []Opportunity
-	if err := db.Order(sortField + " " + direction).Order("id DESC").Offset((query.Page - 1) * query.PageSize).Limit(query.PageSize).Find(&models).Error; err != nil {
+	type listRow struct {
+		Opportunity
+		CustomerName string `gorm:"column:customer_name"`
+	}
+	var models []listRow
+	if err := db.Select("crm_opportunities.*, crm_customers.name AS customer_name").Order("crm_opportunities." + sortField + " " + direction).Order("crm_opportunities.id DESC").Offset((query.Page - 1) * query.PageSize).Limit(query.PageSize).Scan(&models).Error; err != nil {
 		return pagination.Page[Response]{}, err
 	}
 	items := make([]Response, 0, len(models))
 	for i := range models {
-		items = append(items, toResponse(&models[i]))
+		item := toResponse(&models[i].Opportunity)
+		item.CustomerName = models[i].CustomerName
+		items = append(items, item)
 	}
 	return pagination.Page[Response]{Items: items, Page: query.Page, PageSize: query.PageSize, Total: total}, nil
 }
