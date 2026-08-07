@@ -474,8 +474,16 @@ func buildCustomerListQuery(db *gorm.DB, principal auth.Principal, query ListQue
 	db = scopedCustomer(db.Model(&Customer{}), principal).
 		Joins(`LEFT JOIN (
 			SELECT tenant_id, customer_id, MAX(followed_at) AS last_followup_at
-			FROM crm_customer_followups WHERE tenant_id = ? AND deleted_at IS NULL GROUP BY tenant_id, customer_id
-		) AS customer_followup_summary ON customer_followup_summary.tenant_id = crm_customers.tenant_id AND customer_followup_summary.customer_id = crm_customers.id`, principal.TenantID).
+			FROM (
+				SELECT tenant_id, customer_id, followed_at FROM crm_customer_followups WHERE tenant_id = ? AND deleted_at IS NULL
+				UNION ALL
+				SELECT o.tenant_id, o.customer_id, f.followed_at
+				FROM crm_opportunity_followups AS f
+				JOIN crm_opportunities AS o ON o.tenant_id = f.tenant_id AND o.id = f.opportunity_id AND o.deleted_at IS NULL
+				WHERE f.tenant_id = ? AND f.deleted_at IS NULL
+			) AS all_followups
+			GROUP BY tenant_id, customer_id
+		) AS customer_followup_summary ON customer_followup_summary.tenant_id = crm_customers.tenant_id AND customer_followup_summary.customer_id = crm_customers.id`, principal.TenantID, principal.TenantID).
 		Joins(`LEFT JOIN (
 			SELECT tenant_id, customer_id, SUM(expected_amount) AS opportunity_amount_sum
 			FROM crm_opportunities WHERE tenant_id = ? AND deleted_at IS NULL AND opp_status <> 'VOID' GROUP BY tenant_id, customer_id

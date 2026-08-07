@@ -99,7 +99,7 @@ func (r *GORMRepository) ReportTrend(ctx context.Context, scope ReportScope, que
 		FROM crm_presale_worklogs w
 		JOIN crm_presale_requests r ON r.tenant_id=w.tenant_id AND r.id=w.request_id
 		JOIN crm_opportunities o ON o.tenant_id=r.tenant_id AND o.id=r.opportunity_id
-		WHERE `+where+` GROUP BY DATE(w.work_start) ORDER BY DATE(w.work_start)`, args...).Scan(&values).Error
+		WHERE `+where+` GROUP BY DATE_FORMAT(w.work_start,'%Y-%m-%d') ORDER BY DATE_FORMAT(w.work_start,'%Y-%m-%d')`, args...).Scan(&values).Error
 	return values, err
 }
 

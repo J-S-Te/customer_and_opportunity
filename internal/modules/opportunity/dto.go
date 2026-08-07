@@ -222,6 +222,7 @@ type Response struct {
 	OpportunityNo       string           `json:"opportunity_no"`
 	Name                string           `json:"name"`
 	CustomerID          uint64           `json:"customer_id"`
+	CustomerName        string           `json:"customer_name,omitempty"`
 	Type                string           `json:"type"`
 	Source              string           `json:"source"`
 	ExpectedAmount      string           `json:"expected_amount"`
