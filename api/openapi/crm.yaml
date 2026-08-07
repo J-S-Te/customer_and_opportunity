@@ -362,6 +362,18 @@ components:
         expected_start: {type: string, format: date-time}
         expected_end: {type: string, format: date-time}
         urgency: {type: string}
+    PresaleReopen:
+      type: object
+      required: [venue, contact_name, contact_phone, description, expected_start, expected_end, urgency]
+      properties:
+        venue: {type: string}
+        service_address: {type: string}
+        contact_name: {type: string}
+        contact_phone: {type: string}
+        description: {type: string}
+        expected_start: {type: string, format: date-time}
+        expected_end: {type: string, format: date-time}
+        urgency: {type: string}
     PresaleAlert:
       type: object
       additionalProperties: false
@@ -549,7 +561,7 @@ components:
     syncPresaleEngineers: {<<: *presaleRead, operationId: syncPresaleEngineers, x-permission: presale.engineer.sync, parameters: [{$ref: '#/components/parameters/IdempotencyKey'}], description: PMS formal environment remains pending.}
     listPresaleRequests: {<<: *presaleRead, operationId: listPresaleRequests}
     createPresaleRequest: {<<: *presaleRead, operationId: createPresaleRequest, x-permission: presale.create, parameters: [{$ref: '#/components/parameters/IdempotencyKey'}], requestBody: {$ref: '#/components/requestBodies/PresaleCreate'}}
-    reopenPresaleRequest: {<<: *presaleRead, operationId: reopenPresaleRequest, x-permission: presale.create, parameters: [{$ref: '#/components/parameters/NumericID'}, {name: version, in: query, required: true, schema: {type: integer, minimum: 1}}, {$ref: '#/components/parameters/IdempotencyKey'}]}
+    reopenPresaleRequest: {<<: *presaleRead, operationId: reopenPresaleRequest, x-permission: presale.create, parameters: [{$ref: '#/components/parameters/NumericID'}, {name: version, in: query, required: true, schema: {type: integer, minimum: 1}}, {$ref: '#/components/parameters/IdempotencyKey'}], requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/PresaleReopen'}}}}}
     presaleBoard: {<<: *presaleRead, operationId: presaleBoard}
     presaleFilterOptions: {<<: *presaleRead, operationId: presaleFilterOptions}
     getPresaleRequest: &presaleIDRead {<<: *presaleRead, operationId: getPresaleRequest, parameters: [{$ref: '#/components/parameters/NumericID'}]}

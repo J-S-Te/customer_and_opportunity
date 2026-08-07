@@ -64,6 +64,21 @@ type CreateRequestInput struct {
 	Urgency        Urgency   `json:"urgency" binding:"required"`
 }
 
+// ReopenRequestInput carries the editable business fields when a rejected or
+// cancelled request is submitted again. The opportunity and request identity
+// remain immutable so the original approval history stays attached to the
+// same request.
+type ReopenRequestInput struct {
+	Venue          Venue     `json:"venue" binding:"required"`
+	ServiceAddress string    `json:"service_address"`
+	ContactName    string    `json:"contact_name" binding:"required"`
+	ContactPhone   string    `json:"contact_phone" binding:"required"`
+	Description    string    `json:"description" binding:"required"`
+	ExpectedStart  time.Time `json:"expected_start" binding:"required"`
+	ExpectedEnd    time.Time `json:"expected_end" binding:"required"`
+	Urgency        Urgency   `json:"urgency" binding:"required"`
+}
+
 type ApprovalStartedInput struct {
 	RequestID        uint64
 	EngineInstanceID string

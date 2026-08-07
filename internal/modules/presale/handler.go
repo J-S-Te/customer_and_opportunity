@@ -430,7 +430,11 @@ func (h *Handler) ReopenRequest(c *gin.Context) {
 		response.Error(c, apiError(ErrInvalidInput))
 		return
 	}
-	value, err := h.service.ReopenRequest(c.Request.Context(), actor, id, version)
+	var in ReopenRequestInput
+	if !bindJSON(c, &in) {
+		return
+	}
+	value, err := h.service.ReopenRequest(c.Request.Context(), actor, id, version, in)
 	if err != nil {
 		response.Error(c, apiError(err))
 		return
