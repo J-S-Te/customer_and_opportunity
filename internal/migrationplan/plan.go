@@ -46,8 +46,8 @@ var baseFiles = map[Schema][]string{
 		"000035_presale_timeline_indexes.up.sql", "000036_presale_progress_idempotency.up.sql", "000037_presale_query_indexes.up.sql",
 		"000040_presale_mutation_idempotency.up.sql", "000042_presale_assignment_notifications.up.sql", "000044_customer_create_idempotency.up.sql",
 		"000045_opportunity_create_idempotency.up.sql", "000047_opportunity_external_edges.up.sql", "000048_contract_transfer_delivery.up.sql",
-			"000049_opportunity_attachments.up.sql", "000051_presale_progress_notifications.up.sql", "000053_opportunity_member_terms.up.sql",
-			"000055_crm_oidc_session_organizations.up.sql", "000058_crm_oidc_session_person_id.up.sql", "000060_presale_approval_pending_task_binding.up.sql", "000064_portal_invite_operation_idempotency.up.sql", "000065_presale_approval_callback_replay_binding.up.sql", "000067_presale_daily_metrics.up.sql", "000069_crm_portal_access_disable.up.sql", "000071_presale_alert_recipient_namespace.up.sql", "000072_presale_worker_heartbeats.up.sql", "000074_portal_invite_login_account.up.sql", "000075_crm_request_audit_outbox.up.sql",
+		"000049_opportunity_attachments.up.sql", "000051_presale_progress_notifications.up.sql", "000053_opportunity_member_terms.up.sql",
+		"000055_crm_oidc_session_organizations.up.sql", "000058_crm_oidc_session_person_id.up.sql", "000060_presale_approval_pending_task_binding.up.sql", "000064_portal_invite_operation_idempotency.up.sql", "000065_presale_approval_callback_replay_binding.up.sql", "000067_presale_daily_metrics.up.sql", "000069_crm_portal_access_disable.up.sql", "000071_presale_alert_recipient_namespace.up.sql", "000072_presale_worker_heartbeats.up.sql", "000074_portal_invite_login_account.up.sql", "000075_crm_request_audit_outbox.up.sql", "000078_presale_approval_rules.up.sql",
 	},
 	Portal: {
 		"000008_create_portal_core.up.sql", "000011_portal_session_claims.up.sql", "000016_portal_project_sync.up.sql",
@@ -59,7 +59,7 @@ var baseFiles = map[Schema][]string{
 		"000056_portal_filing_materials_and_submission_outbox.up.sql", "000057_portal_report_file_security_evidence.up.sql", "000059_portal_report_scan_status_evidence.up.sql", "000061_portal_report_watermark_tracking.up.sql", "000062_portal_filing_waiting_contract_status.up.sql", "000063_portal_report_async_ingest.up.sql", "000066_portal_filing_submission_receipts.up.sql",
 		"000068_portal_report_risk_operations.up.sql",
 		"000070_portal_identity_disable_idempotency.up.sql",
-			"000073_portal_worker_heartbeats.up.sql", "000076_portal_request_audit_outbox.up.sql", "000077_portal_customer_service_options.up.sql",
+		"000073_portal_worker_heartbeats.up.sql", "000076_portal_request_audit_outbox.up.sql", "000077_portal_customer_service_options.up.sql",
 	},
 }
 

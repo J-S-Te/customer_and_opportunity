@@ -65,6 +65,8 @@ type PresaleRequest struct {
 	Urgency               Urgency       `gorm:"size:16;not null"`
 	Status                RequestStatus `gorm:"size:32;not null;index"`
 	CurrentApprovalNode   uint8         `gorm:"not null;default:0"`
+	ExecutionDepartmentID string        `gorm:"size:64;not null"`
+	ExecutionDepartment   string        `gorm:"size:128;not null"`
 	RejectReason          string        `gorm:"size:2000"`
 	CompletedAt           *time.Time    `gorm:"precision:3"`
 	CancelledAt           *time.Time    `gorm:"precision:3"`
@@ -86,6 +88,9 @@ type ApprovalInstance struct {
 	PendingAction    string     `gorm:"size:16;not null"`
 	StartedAt        *time.Time `gorm:"precision:3"`
 	FinishedAt       *time.Time `gorm:"precision:3"`
+	RuleID           string     `gorm:"size:64;not null"`
+	RuleVersion      uint64     `gorm:"not null;default:0"`
+	NodesJSON        []byte     `gorm:"type:json"`
 }
 
 func (ApprovalInstance) TableName() string { return "crm_presale_approval_instances" }

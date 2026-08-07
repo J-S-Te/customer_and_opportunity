@@ -21,7 +21,7 @@ type Person struct {
 func People() map[string]Person {
 	return map[string]Person{
 		"张伟": {Sub: "01KYDVHC00000000000000000C", Name: "张伟", OrgID: "01KYDVHC000000000000000002", OrgName: "平台研发部"},
-		"李娜":  {Sub: "01KYDVHC00000000000000000D", Name: "李娜", OrgID: "01KYDVHC000000000000000002", OrgName: "平台研发部"},
+		"李娜": {Sub: "01KYDVHC00000000000000000D", Name: "李娜", OrgID: "01KYDVHC000000000000000002", OrgName: "平台研发部"},
 		"王强": {Sub: "01KYDVHC00000000000000000E", Name: "王强", OrgID: "01KYDVHC000000000000000003", OrgName: "运维保障部"},
 		"陈晨": {Sub: "01KYDVHC00000000000000000F", Name: "陈晨", OrgID: "01KYDVHC000000000000000005", OrgName: "产品部"},
 		"刘洋": {Sub: "01KYDVHC00000000000000000G", Name: "刘洋", OrgID: "01KYDVHC000000000000000006", OrgName: "客户成功部"},

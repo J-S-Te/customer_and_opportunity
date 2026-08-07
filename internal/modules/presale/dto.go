@@ -90,16 +90,23 @@ type ApprovalActionInput struct {
 }
 
 type AssignmentTarget struct {
-	PersonID   string `json:"person_id" binding:"required"`
-	PersonName string `json:"person_name"`
-	Department string `json:"department"`
-	Role       string `json:"role" binding:"required"`
+	PersonID     string `json:"person_id" binding:"required"`
+	PersonName   string `json:"person_name"`
+	Department   string `json:"department"`
+	DepartmentID string `json:"department_id"`
+	Role         string `json:"role" binding:"required"`
 }
 
 type ReplaceAssignmentsInput struct {
 	Assignees    []AssignmentTarget `json:"assignees" binding:"required,min=1"`
 	ChangeReason string             `json:"change_reason" binding:"required"`
 	Version      uint64             `json:"version" binding:"required"`
+}
+
+type SelectDepartmentInput struct {
+	DepartmentID string `json:"department_id" binding:"required"`
+	Department   string `json:"department"`
+	Version      uint64 `json:"version" binding:"required"`
 }
 
 type AddProgressInput struct {
@@ -134,25 +141,27 @@ type OpportunitySnapshot struct {
 // RequestView 是面向接口的显式投影，避免直接序列化 GORM 模型而泄露联系人密文、
 // 幂等键或请求摘要等内部字段。
 type RequestView struct {
-	ID                  uint64        `json:"id"`
-	RequestNo           string        `json:"request_no"`
-	OpportunityID       uint64        `json:"opportunity_id"`
-	OpportunityNo       string        `json:"opportunity_no"`
-	ApplicantID         string        `json:"applicant_id"`
-	ApplicantName       string        `json:"applicant_name"`
-	Venue               Venue         `json:"venue"`
-	ServiceAddress      string        `json:"service_address,omitempty"`
-	ContactName         string        `json:"contact_name"`
-	ContactPhoneMasked  string        `json:"contact_phone"`
-	Description         string        `json:"description"`
-	ExpectedStart       time.Time     `json:"expected_start"`
-	ExpectedEnd         time.Time     `json:"expected_end"`
-	Urgency             Urgency       `json:"urgency"`
-	Status              RequestStatus `json:"status"`
-	CurrentApprovalNode uint8         `json:"current_approval_node"`
-	Version             uint64        `json:"version"`
-	CreatedAt           time.Time     `json:"created_at"`
-	UpdatedAt           time.Time     `json:"updated_at"`
+	ID                    uint64        `json:"id"`
+	RequestNo             string        `json:"request_no"`
+	OpportunityID         uint64        `json:"opportunity_id"`
+	OpportunityNo         string        `json:"opportunity_no"`
+	ApplicantID           string        `json:"applicant_id"`
+	ApplicantName         string        `json:"applicant_name"`
+	Venue                 Venue         `json:"venue"`
+	ServiceAddress        string        `json:"service_address,omitempty"`
+	ContactName           string        `json:"contact_name"`
+	ContactPhoneMasked    string        `json:"contact_phone"`
+	Description           string        `json:"description"`
+	ExpectedStart         time.Time     `json:"expected_start"`
+	ExpectedEnd           time.Time     `json:"expected_end"`
+	Urgency               Urgency       `json:"urgency"`
+	Status                RequestStatus `json:"status"`
+	CurrentApprovalNode   uint8         `json:"current_approval_node"`
+	ExecutionDepartmentID string        `json:"execution_department_id,omitempty"`
+	ExecutionDepartment   string        `json:"execution_department,omitempty"`
+	Version               uint64        `json:"version"`
+	CreatedAt             time.Time     `json:"created_at"`
+	UpdatedAt             time.Time     `json:"updated_at"`
 }
 
 func requestView(value *PresaleRequest) RequestView {
@@ -165,6 +174,7 @@ func requestView(value *PresaleRequest) RequestView {
 		ExpectedStart: value.ExpectedStart, ExpectedEnd: value.ExpectedEnd,
 		Urgency: value.Urgency, Status: value.Status,
 		CurrentApprovalNode: value.CurrentApprovalNode, Version: value.Version,
+		ExecutionDepartmentID: value.ExecutionDepartmentID, ExecutionDepartment: value.ExecutionDepartment,
 		CreatedAt: value.CreatedAt, UpdatedAt: value.UpdatedAt,
 	}
 }
@@ -181,6 +191,7 @@ type RequestListItem struct {
 	RequestNo           string                `json:"request_no"`
 	OpportunityID       uint64                `json:"opportunity_id"`
 	OpportunityNo       string                `json:"opportunity_no"`
+	OpportunityName     string                `json:"opportunity_name"`
 	ApplicantID         string                `json:"applicant_id"`
 	ApplicantName       string                `json:"applicant_name"`
 	CurrentAssignees    []AssigneeSummaryView `json:"current_assignees"`
@@ -261,6 +272,7 @@ type AlertListPage = pagination.Page[AlertView]
 type OpportunityPresaleItem struct {
 	ID               uint64                `json:"id"`
 	RequestNo        string                `json:"request_no"`
+	OpportunityName  string                `json:"opportunity_name"`
 	CreatedAt        time.Time             `json:"created_at"`
 	Status           RequestStatus         `json:"status"`
 	Urgency          Urgency               `json:"urgency"`

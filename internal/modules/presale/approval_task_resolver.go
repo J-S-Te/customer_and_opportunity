@@ -101,7 +101,7 @@ func NewHTTPApprovalTaskResolver(ctx context.Context, options ApprovalTaskResolv
 // 返回结果必须与请求中的实例、节点和审批人逐项一致且仍为 PENDING。
 // 响应大小、媒体类型和 JSON 字段均严格校验，任何协议漂移都按依赖不可用失败关闭。
 func (r *HTTPApprovalTaskResolver) ResolveCurrentTask(ctx context.Context, query ApprovalTaskQuery) (ApprovalTask, error) {
-	if r == nil || r.client == nil || !validApprovalTaskIdentity(query.TenantID) || !validApprovalTaskIdentity(query.EngineInstanceID) || !validApprovalTaskIdentity(query.ApproverID) || query.Node < 1 || query.Node > 2 {
+	if r == nil || r.client == nil || !validApprovalTaskIdentity(query.TenantID) || !validApprovalTaskIdentity(query.EngineInstanceID) || !validApprovalTaskIdentity(query.ApproverID) || query.Node < 1 || query.Node > 10 {
 		return ApprovalTask{}, ErrDependencyUnavailable
 	}
 	values := url.Values{"approver_id": {query.ApproverID}, "engine_instance_id": {query.EngineInstanceID}, "node": {strconv.Itoa(int(query.Node))}}

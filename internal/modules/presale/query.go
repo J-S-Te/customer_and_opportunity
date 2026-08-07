@@ -25,7 +25,7 @@ var requestStatuses = []RequestStatus{
 func requestScope(actor Actor) RequestQueryScope {
 	scope := RequestQueryScope{TenantID: actor.TenantID}
 	scope.All = actor.HasRole("sales_director") || actor.HasRole("team_lead") ||
-		actor.HasRole("technical_lead") || actor.HasRole("auditor")
+		actor.HasRole("technical_lead") || actor.HasRole("crm_super_admin") || actor.HasRole("auditor")
 	if scope.All {
 		return scope
 	}
@@ -249,13 +249,13 @@ func (s *Service) ListForOpportunity(ctx context.Context, actor Actor, opportuni
 	if err != nil {
 		return OpportunityPresalePage{}, err
 	}
-	manager := actor.HasRole("sales_director") || actor.HasRole("team_lead") || actor.HasRole("technical_lead") || actor.HasRole("auditor")
+	manager := actor.HasRole("sales_director") || actor.HasRole("team_lead") || actor.HasRole("technical_lead") || actor.HasRole("crm_super_admin") || actor.HasRole("auditor")
 	sales := actor.HasRole("sales")
 	items := make([]OpportunityPresaleItem, 0, len(requests.Items))
 	for _, item := range requests.Items {
 		canViewDetail := actor.Can("presale.read") && (manager || sales && item.ApplicantID == actor.UserID || historical[item.ID])
 		items = append(items, OpportunityPresaleItem{
-			ID: item.ID, RequestNo: item.RequestNo, CreatedAt: item.CreatedAt,
+			ID: item.ID, RequestNo: item.RequestNo, OpportunityName: item.OpportunityName, CreatedAt: item.CreatedAt,
 			Status: item.Status, Urgency: item.Urgency, Venue: item.Venue,
 			CurrentAssignees: item.CurrentAssignees, LatestProgress: truncate(strings.TrimSpace(latest[item.ID]), 200),
 			TotalWorkHours: item.TotalWorkHours, ExpectedEnd: item.ExpectedEnd,
@@ -288,7 +288,7 @@ func isOverdue(status RequestStatus, expectedEnd, now time.Time) bool {
 func localAvailableActions(actor Actor, status RequestStatus, applicantID string, current []AssigneeSummaryView) []string {
 	actions := make([]string, 0, 4)
 	if (status == StatusApprovedPendingAssignment || status == StatusExecuting) &&
-		actor.Can("presale.assign") && actor.HasRole("team_lead") {
+		actor.Can("presale.assign") && (actor.HasRole("team_lead") || actor.HasRole("crm_super_admin")) {
 		actions = append(actions, "ASSIGN")
 	}
 	currentAssignee := false
@@ -309,7 +309,7 @@ func localAvailableActions(actor Actor, status RequestStatus, applicantID string
 	if status == StatusPendingApproval && applicantID == actor.UserID {
 		actions = append(actions, "CANCEL")
 	} else if (status == StatusApprovedPendingAssignment || status == StatusExecuting) &&
-		(actor.HasRole("team_lead") || actor.Can("presale.cancel")) {
+		(actor.HasRole("team_lead") || actor.HasRole("crm_super_admin") || actor.Can("presale.cancel")) {
 		actions = append(actions, "CANCEL")
 	}
 	return actions

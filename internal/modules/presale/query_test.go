@@ -125,6 +125,7 @@ func TestListRequestsDerivesRoleScope(t *testing.T) {
 		{name: "missing person identity fails closed", actor: readableActor("other-1", "")},
 		{name: "team lead gets tenant scope", actor: managerActor("team_lead"), all: true},
 		{name: "technical lead gets tenant scope", actor: managerActor("technical_lead"), all: true},
+		{name: "crm super admin gets tenant scope", actor: managerActor("crm_super_admin"), all: true},
 	}
 	for _, test := range tests {
 		test := test
@@ -164,6 +165,37 @@ func TestPrepareRequestListQueryRejectsUnknownEnumsSortAndClosedRanges(t *testin
 		if _, err := prepareRequestListQuery(query); !errors.Is(err, ErrInvalidFilter) {
 			t.Fatalf("query=%+v error=%v, want ErrInvalidFilter", query, err)
 		}
+	}
+}
+
+func TestCRMSuperAdminCanOpenPresaleDetailAndWorklogs(t *testing.T) {
+	t.Parallel()
+	repo := &queryRepository{request: requestFixture(), worklogs: []Worklog{}}
+	service := NewService(repo, nil, nil, fixedClock{at: time.Now().UTC()}, fixedIDs{})
+	actor := managerActor("crm_super_admin")
+	if _, err := service.RequestDetail(context.Background(), actor, repo.request.ID); err != nil {
+		t.Fatalf("RequestDetail() error=%v, want crm super admin to read tenant presale", err)
+	}
+	if _, err := service.Worklogs(context.Background(), actor, repo.request.ID); err != nil {
+		t.Fatalf("Worklogs() error=%v, want crm super admin to read tenant presale worklogs", err)
+	}
+}
+
+func TestCRMSuperAdminCanApproveAnyConfiguredNode(t *testing.T) {
+	actor := managerActor("crm_super_admin")
+	if !approvalNodeRoleAllowed(actor, 1) || !approvalNodeRoleAllowed(actor, 2) {
+		t.Fatal("crm super admin should be allowed to approve and reject every approval node")
+	}
+	nodes, err := json.Marshal([]ApprovalNode{
+		{Type: ApprovalNodeApproval, RoleCode: "sales_director"},
+		{Type: ApprovalNodeApproval, RoleCode: "team_lead"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	instance := &ApprovalInstance{NodesJSON: nodes}
+	if !approvalNodeRoleAllowedForInstance(actor, 1, instance) || !approvalNodeRoleAllowedForInstance(actor, 2, instance) {
+		t.Fatal("crm super admin should be allowed to process every configured approval node")
 	}
 }
 
