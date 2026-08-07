@@ -73,7 +73,9 @@ func (presaleActorResolver) Resolve(ctx context.Context) (presale.Actor, error) 
 	}
 	return presale.Actor{
 		TenantID: principal.TenantID, UserID: principal.UserID, UserName: principal.DisplayName,
-		PersonID: principal.PersonID, ScopeMode: string(principal.ScopeMode), OrganizationIDs: append([]string(nil), principal.OrganizationIDs...),
+		// 售前执行人来自基础平台授权用户目录，与申请人使用同一 user_id 命名空间。
+		// 不再依赖 OIDC 中可选的外部 PMS person_id，避免被指派用户无法读取任务或登记工时。
+		PersonID: principal.UserID, ScopeMode: string(principal.ScopeMode), OrganizationIDs: append([]string(nil), principal.OrganizationIDs...),
 		Roles: roles, Permissions: permissions, RequestID: request.ID(ctx),
 	}, nil
 }

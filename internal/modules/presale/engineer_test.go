@@ -56,36 +56,3 @@ func TestEngineerSyncRequiresPermissionAndIdempotencyKey(t *testing.T) {
 		t.Fatalf("error=%v", err)
 	}
 }
-
-type assignmentEngineerLockRepo struct {
-	Repository
-	engineer Engineer
-	locked   bool
-}
-
-func (r *assignmentEngineerLockRepo) WithTransaction(ctx context.Context, fn func(context.Context) error) error {
-	return fn(ctx)
-}
-func (r *assignmentEngineerLockRepo) FindRequestForUpdate(context.Context, string, uint64) (*PresaleRequest, error) {
-	return &PresaleRequest{BaseModel: BaseModel{ID: 9, TenantID: "tenant-a", Version: 3}, Status: StatusExecuting}, nil
-}
-func (r *assignmentEngineerLockRepo) ListCurrentAssignmentsForUpdate(context.Context, string, uint64) ([]Assignment, error) {
-	return nil, nil
-}
-func (r *assignmentEngineerLockRepo) FindMutationReplay(context.Context, string, uint64, string, string) (*MutationReplay, error) {
-	return nil, ErrNotFound
-}
-func (r *assignmentEngineerLockRepo) FindEngineersForUpdate(context.Context, string, []string) ([]Engineer, error) {
-	r.locked = true
-	return []Engineer{r.engineer}, nil
-}
-
-func TestReplaceAssignmentsRejectsNewEngineerDeactivatedUnderTransactionLock(t *testing.T) {
-	repo := &assignmentEngineerLockRepo{engineer: Engineer{PersonID: "p-1", Role: "implementation_engineer", ValidFlag: false}}
-	service := NewService(repo, nil, nil, fixedClock{at: time.Now().UTC()}, fixedIDs{})
-	actor := Actor{TenantID: "tenant-a", UserID: "lead", Roles: map[string]bool{"team_lead": true}, Permissions: map[string]bool{"presale.assign": true}}
-	_, err := service.ReplaceAssignments(context.Background(), actor, 9, "assignment-key", ReplaceAssignmentsInput{Assignees: []AssignmentTarget{{PersonID: "p-1", Role: "implementation_engineer"}}, ChangeReason: "reassign", Version: 3})
-	if !errors.Is(err, ErrInvalidInput) || !repo.locked {
-		t.Fatalf("error=%v locked=%v", err, repo.locked)
-	}
-}

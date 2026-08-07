@@ -15,6 +15,7 @@ import (
 	"time"
 
 	mysqlDriver "github.com/go-sql-driver/mysql"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/ownerdirectory"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/audit"
 	"gorm.io/gorm"
 )
@@ -35,6 +36,7 @@ type Service struct {
 	auditWriter       audit.Writer
 	workerReadiness   WorkerReadiness
 	workerMaxAge      time.Duration
+	ownerDirectory    ownerdirectory.Catalog
 }
 
 // 审批任务解析器用于把本地审批节点与审批引擎当前待办进行实时绑定；
@@ -55,6 +57,13 @@ func (s *Service) UseWorkerReadiness(readiness WorkerReadiness, maxAge time.Dura
 // 联系电话明文返回前必须先写入隐私审计；审计存储不可用时敏感数据接口失败关闭。
 func (s *Service) UseAuditWriter(writer audit.Writer) *Service {
 	s.auditWriter = writer
+	return s
+}
+
+// UseOwnerDirectory 使执行人指派与基础平台当前有效授权目录保持一致。
+// 服务端会重新解析用户姓名和组织，不信任浏览器提交的快照字段。
+func (s *Service) UseOwnerDirectory(catalog ownerdirectory.Catalog) *Service {
+	s.ownerDirectory = catalog
 	return s
 }
 
@@ -460,8 +469,8 @@ func (s *Service) HandleApprovalCallback(ctx context.Context, tenant string, in 
 	})
 }
 
-// 分派采用“目标集合替换”语义：保留集合不重复写入，移除项结束历史关系，新增项必须来自
-// 当前有效的 PMS 工程师目录且角色一致。首次有效分派会把申请推进到 EXECUTING；执行中
+// 分派采用“目标集合替换”语义：保留集合不重复写入，移除项结束历史关系，执行人来自
+// 基础平台授权人员选择器。首次有效分派会把申请推进到 EXECUTING；执行中
 // 调整人员后还会重新判断所有当前执行人是否已有有效工时，从而可能立即完成任务。
 func (s *Service) ReplaceAssignments(ctx context.Context, actor Actor, id uint64, key string, in ReplaceAssignmentsInput) (*PresaleRequest, error) {
 	if !actor.Can("presale.assign") || !actor.HasRole("team_lead") {
@@ -475,10 +484,12 @@ func (s *Service) ReplaceAssignments(ctx context.Context, actor Actor, id uint64
 	targets := map[string]AssignmentTarget{}
 	allowedRoles := map[string]bool{"technical_director": true, "team_lead": true, "project_manager": true, "implementation_engineer": true}
 	for _, v := range in.Assignees {
-		if strings.TrimSpace(v.PersonID) == "" || !allowedRoles[v.Role] {
+		if strings.TrimSpace(v.PersonID) == "" || !allowedRoles[v.Role] || len([]rune(v.PersonName)) > 128 || len([]rune(v.Department)) > 128 {
 			return nil, ErrInvalidInput
 		}
 		v.PersonID = strings.TrimSpace(v.PersonID)
+		v.PersonName = strings.TrimSpace(v.PersonName)
+		v.Department = strings.TrimSpace(v.Department)
 		v.Role = strings.TrimSpace(v.Role)
 		targets[v.PersonID] = v
 	}
@@ -490,6 +501,35 @@ func (s *Service) ReplaceAssignments(ctx context.Context, actor Actor, id uint64
 		ids = append(ids, id)
 	}
 	sort.Strings(ids)
+	if s.ownerDirectory != nil {
+		resolved, err := s.ownerDirectory.Resolve(ctx, ids)
+		if err != nil {
+			return nil, err
+		}
+		for _, personID := range ids {
+			person, ok := resolved[personID]
+			if !ok {
+				return nil, ownerdirectory.ErrSelectionInvalid
+			}
+			name := strings.TrimSpace(person.DisplayName)
+			if name == "" {
+				name = personID
+			}
+			departments := make([]string, 0, len(person.Organizations))
+			for _, organization := range person.Organizations {
+				if value := strings.TrimSpace(organization.Name); value != "" {
+					departments = append(departments, value)
+				}
+			}
+			target := targets[personID]
+			target.PersonName = name
+			target.Department = strings.Join(departments, "、")
+			if len([]rune(target.PersonName)) > 128 || len([]rune(target.Department)) > 128 {
+				return nil, ownerdirectory.ErrSelectionInvalid
+			}
+			targets[personID] = target
+		}
+	}
 	canonicalTargets := make([]AssignmentTarget, 0, len(ids))
 	for _, personID := range ids {
 		canonicalTargets = append(canonicalTargets, targets[personID])
@@ -535,28 +575,6 @@ func (s *Service) ReplaceAssignments(ctx context.Context, actor Actor, id uint64
 				batch = v.BatchNo + 1
 			}
 		}
-		engineers, e := s.repo.FindEngineersForUpdate(tx, actor.TenantID, ids)
-		if e != nil {
-			return e
-		}
-		byID := map[string]Engineer{}
-		for _, engineer := range engineers {
-			byID[engineer.PersonID] = engineer
-		}
-		if len(byID) != len(ids) {
-			return ErrInvalidInput
-		}
-		// PMS 停用不会隐式抹除现有分派：旧分派可以保留或被显式移除，但新增分派必须指向
-		// 当前有效且 PMS 权威角色与目标角色一致的工程师。
-		for personID, target := range targets {
-			if _, retained := current[personID]; retained {
-				continue
-			}
-			engineer := byID[personID]
-			if !engineer.ValidFlag || engineer.Role != target.Role {
-				return ErrInvalidInput
-			}
-		}
 		now := s.clock.Now()
 		for pid, a := range current {
 			if _, ok := targets[pid]; !ok {
@@ -572,8 +590,11 @@ func (s *Service) ReplaceAssignments(ctx context.Context, actor Actor, id uint64
 			if _, ok := current[pid]; ok {
 				continue
 			}
-			p := byID[pid]
-			a := &Assignment{BaseModel: BaseModel{TenantID: actor.TenantID, CreatedBy: actor.UserID, UpdatedBy: actor.UserID, Version: 1}, RequestID: id, AssigneeID: pid, AssigneeNameSnapshot: p.PersonName, AssigneeDepartmentSnapshot: p.Department, AssigneeRole: t.Role, AssignedBy: actor.UserID, AssignedAt: now, IsCurrent: true, BatchNo: batch, ChangeReason: in.ChangeReason}
+			personName := t.PersonName
+			if personName == "" {
+				personName = pid
+			}
+			a := &Assignment{BaseModel: BaseModel{TenantID: actor.TenantID, CreatedBy: actor.UserID, UpdatedBy: actor.UserID, Version: 1}, RequestID: id, AssigneeID: pid, AssigneeNameSnapshot: personName, AssigneeDepartmentSnapshot: t.Department, AssigneeRole: t.Role, AssignedBy: actor.UserID, AssignedAt: now, IsCurrent: true, BatchNo: batch, ChangeReason: in.ChangeReason}
 			if e = s.repo.CreateAssignment(tx, a); e != nil {
 				return e
 			}
@@ -662,7 +683,7 @@ func AssignmentNotificationEventID(tenantID string, requestID, assignmentID uint
 }
 
 // 进展通知 ID 同时绑定不可变进展记录、分派记录、收件人命名空间和身份，
-// 防止用户 ID 与 PMS 人员 ID 碰撞，也保证同一收件人的重试可去重。
+// 保证同一收件人的重试可去重，同时兼容存量事件的命名空间。
 func ProgressNotificationEventID(tenantID string, requestID, progressID, assignmentID uint64, namespace, recipientID, kind string) string {
 	value := strings.Join([]string{tenantID, fmt.Sprint(requestID), fmt.Sprint(progressID), fmt.Sprint(assignmentID), namespace, recipientID, kind}, "\x00")
 	digest := sha256.Sum256([]byte(value))
@@ -684,7 +705,7 @@ func (s *Service) recordProgressNotifications(ctx context.Context, actor Actor, 
 		recipients = append(recipients, recipient{id: request.ApplicantID, namespace: ProgressRecipientUser, kind: ProgressRecipientApplicant})
 	}
 	for _, assignment := range assignments {
-		// 执行人属于 PMS 人员命名空间，不能拿 person_id 与 CRM user/sub 标识比较或相互替代。
+		// 新执行人使用基础平台 user_id；PersonID 字段名仅为数据库兼容保留。
 		if !assignment.IsCurrent || assignment.ID == 0 || assignment.AssigneeID == "" || assignment.AssigneeID == actor.PersonID {
 			continue
 		}
@@ -889,8 +910,8 @@ func (s *Service) Cancel(ctx context.Context, actor Actor, id uint64, key string
 	}, nil)
 }
 
-// 工时只能由当前执行人写入执行中的申请。创建工时、完成条件判断和 PMS 投递 Outbox
-// 同事务提交；当所有当前执行人至少存在一条未作废工时后，最后一次写入会原子推进为完成态。
+// 工时只能由当前执行人写入执行中的申请，并完全保存在 CRM 内部。创建工时和完成条件
+// 判断同事务提交；当所有当前执行人至少存在一条未作废工时后，最后一次写入会原子推进为完成态。
 func (s *Service) AddWorklog(ctx context.Context, actor Actor, id uint64, key string, in AddWorklogInput) (*Worklog, error) {
 	if !actor.Can("presale.worklog") || actor.PersonID == "" {
 		return nil, ErrForbidden
@@ -957,7 +978,7 @@ func (s *Service) AddWorklog(ctx context.Context, actor Actor, id uint64, key st
 		if e != nil {
 			return e
 		}
-		w := &Worklog{BaseModel: BaseModel{TenantID: actor.TenantID, CreatedBy: actor.UserID, UpdatedBy: actor.UserID, Version: 1}, WorklogNo: no, RequestID: id, PersonID: actor.PersonID, DepartmentSnapshot: mine.AssigneeDepartmentSnapshot, PersonNameSnapshot: mine.AssigneeNameSnapshot, WorkStart: in.WorkStart.UTC(), WorkEnd: in.WorkEnd.UTC(), RawUnit: in.RawUnit, RawValue: normalizeDecimal(in.RawValue), ConversionFactor: factorFor(in.RawUnit, s.dayHours), WorkHours: hours, Unit: "HOUR", WorkSiteAddress: strings.TrimSpace(in.WorkSiteAddress), WorkContent: in.WorkContent, Remark: strings.TrimSpace(in.Remark), PushStatus: PushPending, IdempotencyKey: key, RequestHash: requestHash}
+		w := &Worklog{BaseModel: BaseModel{TenantID: actor.TenantID, CreatedBy: actor.UserID, UpdatedBy: actor.UserID, Version: 1}, WorklogNo: no, RequestID: id, PersonID: actor.PersonID, DepartmentSnapshot: mine.AssigneeDepartmentSnapshot, PersonNameSnapshot: mine.AssigneeNameSnapshot, WorkStart: in.WorkStart.UTC(), WorkEnd: in.WorkEnd.UTC(), RawUnit: in.RawUnit, RawValue: normalizeDecimal(in.RawValue), ConversionFactor: factorFor(in.RawUnit, s.dayHours), WorkHours: hours, Unit: "HOUR", WorkSiteAddress: strings.TrimSpace(in.WorkSiteAddress), WorkContent: in.WorkContent, Remark: strings.TrimSpace(in.Remark), PushStatus: PushSuccess, IdempotencyKey: key, RequestHash: requestHash}
 		if e = s.repo.CreateWorklog(tx, w); e != nil {
 			return e
 		}
@@ -970,14 +991,6 @@ func (s *Service) AddWorklog(ctx context.Context, actor Actor, id uint64, key st
 			if e = s.repo.UpdateWorklogDelivery(tx, actor.TenantID, w.ID, map[string]any{"completed_task": true}); e != nil {
 				return e
 			}
-		}
-		payload := map[string]any{"eventType": "PRESALE_WORKLOG_CREATED", "eventVersion": 1, "worklogId": w.WorklogNo, "taskId": r.RequestNo, "opportunityId": r.OpportunityNoSnapshot, "personId": w.PersonID, "personName": w.PersonNameSnapshot, "workStartTime": w.WorkStart, "workEndTime": w.WorkEnd, "unit": "小时", "workHours": w.WorkHours, "rawUnit": w.RawUnit, "rawValue": w.RawValue, "conversionFactor": w.ConversionFactor, "workSiteAddress": w.WorkSiteAddress, "venue": r.Venue, "workContent": w.WorkContent, "idempotencyKey": w.WorklogNo, "occurredAt": now}
-		event, e := s.event(actor.TenantID, "PRESALE_WORKLOG_CREATED", "presale_worklog", fmt.Sprint(w.ID), payload)
-		if e != nil {
-			return e
-		}
-		if e = s.repo.CreateOutbox(tx, event); e != nil {
-			return e
 		}
 		out = w
 		return nil
@@ -1304,7 +1317,7 @@ func (s *Service) Assignments(ctx context.Context, actor Actor, id uint64) ([]As
 }
 
 // 详情读取与列表使用相同资源范围：管理角色可读租户内任务，销售只读本人申请，
-// 具有可信 PMS 人员 ID 的主体可读其当前或历史分派。分派角色不从 OIDC 角色猜测，
+// 被分派的基础平台用户可读其当前或历史分派。分派角色不从 OIDC 角色猜测，
 // 因而猜中租户内申请 ID 也不能绕过真实业务关系。
 func (s *Service) requireReadable(ctx context.Context, actor Actor, value *PresaleRequest) error {
 	if actor.HasRole("sales_director") || actor.HasRole("team_lead") || actor.HasRole("technical_lead") || actor.HasRole("auditor") {

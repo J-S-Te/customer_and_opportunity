@@ -90,8 +90,10 @@ type ApprovalActionInput struct {
 }
 
 type AssignmentTarget struct {
-	PersonID string `json:"person_id" binding:"required"`
-	Role     string `json:"role" binding:"required"`
+	PersonID   string `json:"person_id" binding:"required"`
+	PersonName string `json:"person_name"`
+	Department string `json:"department"`
+	Role       string `json:"role" binding:"required"`
 }
 
 type ReplaceAssignmentsInput struct {
