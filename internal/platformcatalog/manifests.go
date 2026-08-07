@@ -34,6 +34,7 @@ func CRMManifest() Manifest {
 		permission("presale.contact_phone.read", "查看售前联系电话明文", "presale_contact_phone", "read", "CRITICAL"),
 		permission("presale.create", "发起售前申请", "presale", "create", "MEDIUM"),
 		permission("presale.approve", "审批售前申请", "presale", "approve", "HIGH"),
+		permission("presale.approval_rule.manage", "管理售前审批规则", "presale_approval_rule", "manage", "CRITICAL"),
 		permission("presale.assign", "指派售前人员", "presale", "assign", "HIGH"),
 		permission("presale.progress", "登记售前进度", "presale", "progress", "MEDIUM"),
 		permission("presale.worklog", "登记售前工时", "presale", "worklog", "MEDIUM"),
@@ -61,9 +62,14 @@ func CRMManifest() Manifest {
 		role("customer_admin", "客户管理员", "执行客户主数据高风险维护",
 			"customer.read", "customer.create", "customer.update", "customer.duplicate.override", "customer.import", "customer.merge", "customer.void", "customer.restore", "customer.export", "customer.audit.read",
 			"opportunity.read", "opportunity.attachment.read", "portal_account.provision", "portal_account.revoke", "portal_account.disable"),
+		role("crm_super_admin", "客户与商机超级管理员", "管理客户、商机、售前审批及审计配置",
+			"customer.read", "customer.create", "customer.update", "customer.duplicate.override", "customer.import", "customer.merge", "customer.void", "customer.restore", "customer.export", "customer.audit.read",
+			"opportunity.read", "opportunity.create", "opportunity.update", "opportunity.owner.change", "opportunity.team.manage", "opportunity.stage.change", "opportunity.contract.transfer", "opportunity.attachment.read", "opportunity.attachment.upload", "opportunity.attachment.download", "opportunity.void", "opportunity.restore", "opportunity.alert.config",
+			"portal_account.provision", "portal_account.revoke", "portal_account.disable",
+			"presale.read", "presale.contact_phone.read", "presale.create", "presale.approve", "presale.approval_rule.manage", "presale.assign", "presale.progress", "presale.worklog", "presale.worklog.retry", "presale.cancel", "presale.engineer.sync", "presale.alert.config", "presale.report"),
 		role("auditor", "审计员", "只读查看经营数据和审计记录", "customer.read", "customer.audit.read", "opportunity.read", "opportunity.attachment.read", "presale.read", "presale.report"),
 	}
-	return Manifest{Version: "crm-2026.08.02-v6", Permissions: permissions, Roles: roles, Policy: Policy{MaxEffectiveRoles: 3}}
+	return Manifest{Version: "crm-2026.08.07-v7", Permissions: permissions, Roles: roles, Policy: Policy{MaxEffectiveRoles: 3}}
 }
 
 // Portal 与 CRM 虽由同一仓库交付，授权目录仍相互独立。Portal 会话只接受一个外部客户角色，

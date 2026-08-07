@@ -37,6 +37,12 @@ type Service struct {
 	workerReadiness   WorkerReadiness
 	workerMaxAge      time.Duration
 	ownerDirectory    ownerdirectory.Catalog
+	approvalRules     *ApprovalRuleStore
+}
+
+func (s *Service) UseApprovalRuleStore(store *ApprovalRuleStore) *Service {
+	s.approvalRules = store
+	return s
 }
 
 // 审批任务解析器用于把本地审批节点与审批引擎当前待办进行实时绑定；
@@ -110,6 +116,17 @@ func (s *Service) CreateRequest(ctx context.Context, actor Actor, key string, in
 		return nil, err
 	}
 	now := s.clock.Now()
+	var matchedRule *ApprovalRule
+	if s.approvalRules != nil {
+		rules, listErr := s.approvalRules.List(ctx, actor.TenantID, true)
+		if listErr != nil {
+			return nil, listErr
+		}
+		matchedRule, err = MatchHighestApprovalRule(rules, ApprovalFacts{Urgency: string(in.Urgency), Venue: string(in.Venue), OpportunityID: opp.ID})
+		if err != nil {
+			return nil, err
+		}
+	}
 	var created *PresaleRequest
 	err = s.repo.WithTransaction(ctx, func(tx context.Context) error {
 		if old, e := s.repo.FindRequestByCreateKey(tx, actor.TenantID, key); e == nil {
@@ -131,6 +148,10 @@ func (s *Service) CreateRequest(ctx context.Context, actor Actor, key string, in
 		}
 		instanceID := fmt.Sprintf("crm-presale-%d", r.ID)
 		inst := &ApprovalInstance{BaseModel: BaseModel{TenantID: actor.TenantID, CreatedBy: actor.UserID, UpdatedBy: actor.UserID, Version: 1}, RequestID: r.ID, EngineInstanceID: instanceID, Status: "PENDING", CurrentNode: 1, StartedAt: &now}
+		if matchedRule != nil {
+			inst.RuleID, inst.RuleVersion = matchedRule.ID, matchedRule.Version
+			inst.NodesJSON, _ = json.Marshal(matchedRule.Nodes)
+		}
 		if e = s.repo.CreateApprovalInstance(tx, inst); e != nil {
 			return e
 		}
@@ -156,6 +177,50 @@ func (s *Service) deliveryWorkerReady(ctx context.Context) bool {
 	}
 	ready, err := s.workerReadiness.HasFreshHeartbeat(ctx, PresaleDeliveryWorkerType, s.clock.Now().Add(-s.workerMaxAge))
 	return err == nil && ready
+}
+
+// ReopenRequest reuses the existing request and approval-instance IDs. Only the
+// terminal rejected/cancelled request can be reopened; its history remains intact.
+func (s *Service) ReopenRequest(ctx context.Context, actor Actor, id uint64, version uint64) (*PresaleRequest, error) {
+	if !actor.Can("presale.create") {
+		return nil, ErrForbidden
+	}
+	var reopened *PresaleRequest
+	err := s.repo.WithTransaction(ctx, func(tx context.Context) error {
+		r, err := s.repo.FindRequestForUpdate(tx, actor.TenantID, id)
+		if err != nil {
+			return err
+		}
+		if r.Status != StatusRejected && r.Status != StatusCancelled || r.Version != version {
+			return ErrInvalidTransition
+		}
+		if r.ApplicantID != actor.UserID && !actor.HasRole("crm_super_admin") {
+			return ErrForbidden
+		}
+		inst, err := s.repo.FindApprovalInstanceForUpdate(tx, actor.TenantID, id)
+		if err != nil {
+			return err
+		}
+		now := s.clock.Now()
+		if err = s.repo.UpdateRequestVersioned(tx, r, r.Version, map[string]any{
+			"status": StatusPendingApproval, "current_approval_node": 1,
+			"reject_reason": "", "cancelled_at": nil, "updated_by": actor.UserID,
+		}); err != nil {
+			return err
+		}
+		if err = s.repo.UpdateApprovalInstance(tx, inst, map[string]any{
+			"status": "PENDING", "current_node": 1, "pending_task_id": "", "pending_approver": "", "pending_action": "",
+			"finished_at": nil, "started_at": &now, "updated_by": actor.UserID,
+		}); err != nil {
+			return err
+		}
+		if err = s.statusLog(tx, r, r.Status, StatusPendingApproval, "REOPENED", "", actor.UserID, actor.RequestID); err != nil {
+			return err
+		}
+		reopened = r
+		return nil
+	})
+	return reopened, err
 }
 
 func createRequestHashes(actor Actor, in CreateRequestInput) (string, string, error) {
@@ -262,7 +327,7 @@ func (s *Service) RequestApprovalAction(ctx context.Context, actor Actor, id uin
 	if in.Version == 0 || len([]rune(in.Comment)) > 2000 || (in.Action == "REJECT" && in.Comment == "") {
 		return ErrInvalidInput
 	}
-	if !actor.HasRole("sales_director") && !actor.HasRole("team_lead") {
+	if !actor.HasRole("sales_director") && !actor.HasRole("team_lead") && !actor.HasRole("crm_super_admin") {
 		return ErrForbidden
 	}
 	hash, err := mutationDigest(actor, id, "APPROVAL_ACTION", in.Action, struct {
@@ -278,7 +343,11 @@ func (s *Service) RequestApprovalAction(ctx context.Context, actor Actor, id uin
 		if txErr != nil {
 			return txErr
 		}
-		currentNodeAllowed := approvalNodeRoleAllowed(actor, r.CurrentApprovalNode)
+		instance, instanceErr := s.repo.FindApprovalInstanceForUpdate(tx, actor.TenantID, id)
+		if instanceErr != nil {
+			return instanceErr
+		}
+		currentNodeAllowed := approvalNodeRoleAllowedForInstance(actor, r.CurrentApprovalNode, instance)
 		if old, findErr := s.repo.FindMutationReplay(tx, actor.TenantID, id, actor.UserID, key); findErr == nil {
 			return validateApprovalReplay(old, actor, id, in.Action, hash)
 		} else if !errors.Is(findErr, ErrNotFound) {
@@ -290,8 +359,7 @@ func (s *Service) RequestApprovalAction(ctx context.Context, actor Actor, id uin
 		if !currentNodeAllowed {
 			return ErrForbidden
 		}
-		instance, instanceErr := s.repo.FindApprovalInstanceForUpdate(tx, actor.TenantID, id)
-		if instanceErr != nil || instance.EngineInstanceID == "" || instance.CurrentNode != r.CurrentApprovalNode || instance.Status != "PENDING" {
+		if instance.EngineInstanceID == "" || instance.CurrentNode != r.CurrentApprovalNode || instance.Status != "PENDING" {
 			return ErrDependencyUnavailable
 		}
 		if s.approvalTasks == nil {
@@ -364,7 +432,7 @@ func (s *Service) applyInternalApprovalAction(ctx context.Context, actor Actor, 
 		requestFields["current_approval_node"] = 0
 		instanceFields["status"] = "REJECTED"
 		instanceFields["finished_at"] = now
-	} else if node == 1 {
+	} else if nodeHasNext(instance, node) {
 		requestFields["current_approval_node"] = 2
 		instanceFields["current_node"] = 2
 	} else {
@@ -399,7 +467,7 @@ func (s *Service) HandleApprovalCallback(ctx context.Context, tenant string, in 
 	in.ApproverName = strings.TrimSpace(in.ApproverName)
 	in.Result = strings.ToUpper(strings.TrimSpace(in.Result))
 	in.Comment = strings.TrimSpace(in.Comment)
-	if in.RequestID == 0 || in.EventSequence == 0 || in.OccurredAt.IsZero() || in.Node < 1 || in.Node > 2 ||
+	if in.RequestID == 0 || in.EventSequence == 0 || in.OccurredAt.IsZero() || in.Node < 1 || in.Node > 10 ||
 		!validApprovalTaskIdentity(in.EngineInstanceID) || !validApprovalTaskIdentity(in.EngineTaskID) || !validApprovalTaskIdentity(in.ApproverID) ||
 		in.ApproverName == "" || len([]rune(in.ApproverName)) > 128 || len([]rune(in.Comment)) > 2000 ||
 		(in.Result != "PASS" && in.Result != "REJECT") || (in.Result == "REJECT" && in.Comment == "") {
@@ -441,7 +509,7 @@ func (s *Service) HandleApprovalCallback(ctx context.Context, tenant string, in 
 			fields["current_approval_node"] = 0
 			instFields["status"] = "REJECTED"
 			instFields["finished_at"] = in.OccurredAt.UTC()
-		} else if in.Node == 1 {
+		} else if nodeHasNext(inst, in.Node) {
 			fields["current_approval_node"] = 2
 			instFields["current_node"] = 2
 		} else {
@@ -473,7 +541,7 @@ func (s *Service) HandleApprovalCallback(ctx context.Context, tenant string, in 
 // 基础平台授权人员选择器。首次有效分派会把申请推进到 EXECUTING；执行中
 // 调整人员后还会重新判断所有当前执行人是否已有有效工时，从而可能立即完成任务。
 func (s *Service) ReplaceAssignments(ctx context.Context, actor Actor, id uint64, key string, in ReplaceAssignmentsInput) (*PresaleRequest, error) {
-	if !actor.Can("presale.assign") || !actor.HasRole("team_lead") {
+	if !actor.Can("presale.assign") || (!actor.HasRole("team_lead") && !actor.HasRole("crm_super_admin")) {
 		return nil, ErrForbidden
 	}
 	key = strings.TrimSpace(key)
@@ -484,12 +552,13 @@ func (s *Service) ReplaceAssignments(ctx context.Context, actor Actor, id uint64
 	targets := map[string]AssignmentTarget{}
 	allowedRoles := map[string]bool{"technical_director": true, "team_lead": true, "project_manager": true, "implementation_engineer": true}
 	for _, v := range in.Assignees {
-		if strings.TrimSpace(v.PersonID) == "" || !allowedRoles[v.Role] || len([]rune(v.PersonName)) > 128 || len([]rune(v.Department)) > 128 {
+		if strings.TrimSpace(v.PersonID) == "" || (s.ownerDirectory != nil && strings.TrimSpace(v.DepartmentID) == "") || !allowedRoles[v.Role] || len([]rune(v.PersonName)) > 128 || len([]rune(v.Department)) > 128 || len([]rune(v.DepartmentID)) > 64 {
 			return nil, ErrInvalidInput
 		}
 		v.PersonID = strings.TrimSpace(v.PersonID)
 		v.PersonName = strings.TrimSpace(v.PersonName)
 		v.Department = strings.TrimSpace(v.Department)
+		v.DepartmentID = strings.TrimSpace(v.DepartmentID)
 		v.Role = strings.TrimSpace(v.Role)
 		targets[v.PersonID] = v
 	}
@@ -516,10 +585,17 @@ func (s *Service) ReplaceAssignments(ctx context.Context, actor Actor, id uint64
 				name = personID
 			}
 			departments := make([]string, 0, len(person.Organizations))
+			inDepartment := false
 			for _, organization := range person.Organizations {
+				if organization.ID == targets[personID].DepartmentID {
+					inDepartment = true
+				}
 				if value := strings.TrimSpace(organization.Name); value != "" {
 					departments = append(departments, value)
 				}
+			}
+			if !inDepartment {
+				return nil, ownerdirectory.ErrSelectionInvalid
 			}
 			target := targets[personID]
 			target.PersonName = name
@@ -641,6 +717,55 @@ func (s *Service) ReplaceAssignments(ctx context.Context, actor Actor, id uint64
 		}
 	}
 	return out, e
+}
+
+func (s *Service) SelectExecutionDepartment(ctx context.Context, actor Actor, id uint64, in SelectDepartmentInput) (*PresaleRequest, error) {
+	if !actor.Can("presale.assign") || !actor.HasRole("technical_director") {
+		return nil, ErrForbidden
+	}
+	in.DepartmentID = strings.TrimSpace(in.DepartmentID)
+	if in.DepartmentID == "" || in.Version == 0 {
+		return nil, ErrInvalidInput
+	}
+	if s.ownerDirectory == nil {
+		return nil, ErrDependencyUnavailable
+	}
+	page, err := s.ownerDirectory.List(ctx, ownerdirectory.Query{Page: 1, PageSize: 200})
+	if err != nil {
+		return nil, err
+	}
+	name := strings.TrimSpace(in.Department)
+	found := false
+	for _, person := range page.Items {
+		for _, org := range person.Organizations {
+			if org.ID == in.DepartmentID {
+				if name == "" {
+					name = org.Name
+				}
+				found = true
+			}
+		}
+	}
+	if !found || name == "" {
+		return nil, ownerdirectory.ErrSelectionInvalid
+	}
+	var out *PresaleRequest
+	err = s.repo.WithTransaction(ctx, func(tx context.Context) error {
+		r, e := s.repo.FindRequestForUpdate(tx, actor.TenantID, id)
+		if e != nil {
+			return e
+		}
+		if r.Status != StatusApprovedPendingAssignment || r.Version != in.Version {
+			return ErrInvalidTransition
+		}
+		if e = s.repo.UpdateRequestVersioned(tx, r, r.Version, map[string]any{"execution_department_id": in.DepartmentID, "execution_department": name, "updated_by": actor.UserID}); e != nil {
+			return e
+		}
+		r.ExecutionDepartmentID, r.ExecutionDepartment = in.DepartmentID, name
+		out = r
+		return nil
+	})
+	return out, err
 }
 
 const assignmentNotificationEventType = "PRESALE_ASSIGNMENT_SITE_NOTIFICATION"
@@ -870,7 +995,7 @@ func (s *Service) Cancel(ctx context.Context, actor Actor, id uint64, key string
 		if e != nil {
 			return e
 		}
-		allowedActor := r.ApplicantID == actor.UserID || actor.HasRole("team_lead") || actor.Can("presale.cancel")
+		allowedActor := r.ApplicantID == actor.UserID || actor.HasRole("team_lead") || actor.HasRole("crm_super_admin") || actor.Can("presale.cancel")
 		if !allowedActor {
 			return ErrForbidden
 		}
@@ -882,7 +1007,7 @@ func (s *Service) Cancel(ctx context.Context, actor Actor, id uint64, key string
 		if r.Version != in.Version {
 			return ErrVersionConflict
 		}
-		allowed := (r.Status == StatusPendingApproval && r.ApplicantID == actor.UserID) || ((r.Status == StatusApprovedPendingAssignment || r.Status == StatusExecuting) && (actor.HasRole("team_lead") || actor.Can("presale.cancel")))
+		allowed := (r.Status == StatusPendingApproval && r.ApplicantID == actor.UserID) || ((r.Status == StatusApprovedPendingAssignment || r.Status == StatusExecuting) && (actor.HasRole("team_lead") || actor.HasRole("crm_super_admin") || actor.Can("presale.cancel")))
 		if !allowed {
 			return ErrForbidden
 		}
@@ -903,7 +1028,7 @@ func (s *Service) Cancel(ctx context.Context, actor Actor, id uint64, key string
 		return err
 	}
 	return s.resolveMutationRace(ctx, actor, id, key, "CANCEL", "CANCEL", hash, err, func(value *PresaleRequest) error {
-		if value.ApplicantID == actor.UserID || actor.HasRole("team_lead") || actor.Can("presale.cancel") {
+		if value.ApplicantID == actor.UserID || actor.HasRole("team_lead") || actor.HasRole("crm_super_admin") || actor.Can("presale.cancel") {
 			return nil
 		}
 		return ErrForbidden
@@ -1130,9 +1255,9 @@ func validateApprovalReplay(value *MutationReplay, actor Actor, requestID uint64
 
 func approvalReplayRoleAllowed(actor Actor, replayAction string) error {
 	switch {
-	case strings.HasPrefix(replayAction, "NODE_1_") && actor.HasRole("sales_director"):
+	case strings.HasPrefix(replayAction, "NODE_1_") && (actor.HasRole("sales_director") || actor.HasRole("crm_super_admin")):
 		return nil
-	case strings.HasPrefix(replayAction, "NODE_2_") && actor.HasRole("team_lead"):
+	case strings.HasPrefix(replayAction, "NODE_2_") && (actor.HasRole("team_lead") || actor.HasRole("crm_super_admin")):
 		return nil
 	default:
 		return ErrForbidden
@@ -1140,7 +1265,40 @@ func approvalReplayRoleAllowed(actor Actor, replayAction string) error {
 }
 
 func approvalNodeRoleAllowed(actor Actor, node uint8) bool {
-	return node == 1 && actor.HasRole("sales_director") || node == 2 && actor.HasRole("team_lead")
+	if actor.HasRole("crm_super_admin") {
+		return node == 1 || node == 2
+	}
+	return node == 1 && (actor.HasRole("sales_director") || actor.HasRole("crm_super_admin")) || node == 2 && (actor.HasRole("team_lead") || actor.HasRole("crm_super_admin"))
+}
+
+func nodeHasNext(instance *ApprovalInstance, node uint8) bool {
+	if instance == nil || len(instance.NodesJSON) == 0 {
+		return node == 1
+	}
+	var nodes []ApprovalNode
+	if json.Unmarshal(instance.NodesJSON, &nodes) != nil || len(nodes) == 0 {
+		return node == 1
+	}
+	return int(node) < len(nodes)
+}
+
+func approvalNodeRoleAllowedForInstance(actor Actor, node uint8, instance *ApprovalInstance) bool {
+	// CRM 超级管理员继承所有审批节点的处理权限，不受规则节点 role_code 限制。
+	if actor.HasRole("crm_super_admin") {
+		return true
+	}
+	if instance == nil || len(instance.NodesJSON) == 0 {
+		return approvalNodeRoleAllowed(actor, node)
+	}
+	var nodes []ApprovalNode
+	if json.Unmarshal(instance.NodesJSON, &nodes) != nil || node == 0 || int(node) > len(nodes) {
+		return false
+	}
+	current := nodes[node-1]
+	if current.Type != ApprovalNodeApproval {
+		return false
+	}
+	return actor.HasRole(strings.TrimSpace(current.RoleCode))
 }
 
 func isDuplicateMutationError(err error) bool {
@@ -1320,7 +1478,7 @@ func (s *Service) Assignments(ctx context.Context, actor Actor, id uint64) ([]As
 // 被分派的基础平台用户可读其当前或历史分派。分派角色不从 OIDC 角色猜测，
 // 因而猜中租户内申请 ID 也不能绕过真实业务关系。
 func (s *Service) requireReadable(ctx context.Context, actor Actor, value *PresaleRequest) error {
-	if actor.HasRole("sales_director") || actor.HasRole("team_lead") || actor.HasRole("technical_lead") || actor.HasRole("auditor") {
+	if actor.HasRole("sales_director") || actor.HasRole("team_lead") || actor.HasRole("technical_lead") || actor.HasRole("crm_super_admin") || actor.HasRole("auditor") {
 		return nil
 	}
 	if actor.HasRole("sales") && value.ApplicantID == actor.UserID {

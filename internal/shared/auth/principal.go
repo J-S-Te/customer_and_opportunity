@@ -14,6 +14,7 @@ const (
 // 授权重验后才能写入，业务层不得从客户端字段重建该对象。
 type Principal struct {
 	UserID          string
+	Username        string
 	PersonID        string
 	TenantID        string
 	DisplayName     string

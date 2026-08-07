@@ -3,6 +3,8 @@ package crmauth
 import (
 	"context"
 	"errors"
+	"reflect"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -265,5 +267,25 @@ func TestNormalizeAuthorizationAcceptsImplementationEngineerRole(t *testing.T) {
 	claims.Permissions = catalogRolePermissions("implementation_engineer")
 	if _, err := normalizeAuthorization(claims, "tenant-1", "hash-1", 3); err != nil {
 		t.Fatalf("implementation_engineer should be a recognized CRM role: %v", err)
+	}
+}
+
+func TestNormalizeAuthorizationMapsPlatformSuperAdminToCRMSuperAdmin(t *testing.T) {
+	claims := validClaims(time.Now())
+	claims.Roles = []string{"platform-super-admin"}
+	// 平台超级管理员的上游权限集合可能是 platform:*，CRM 不信任该集合，
+	// 而是按 CRM 超级管理员角色目录重新计算有效权限。
+	claims.Permissions = []string{"platform:iam.admin"}
+	normalized, err := normalizeAuthorization(claims, "tenant-1", "hash-1", 3)
+	if err != nil {
+		t.Fatalf("platform-super-admin should map to crm_super_admin: %v", err)
+	}
+	if len(normalized.Roles) != 1 || normalized.Roles[0] != "crm_super_admin" {
+		t.Fatalf("normalized roles = %#v, want crm_super_admin", normalized.Roles)
+	}
+	want := catalogRolePermissions("crm_super_admin")
+	sort.Strings(want)
+	if !reflect.DeepEqual(normalized.Permissions, want) {
+		t.Fatalf("normalized permissions = %#v, want CRM super-admin catalog", normalized.Permissions)
 	}
 }

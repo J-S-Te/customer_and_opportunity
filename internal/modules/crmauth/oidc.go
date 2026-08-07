@@ -170,8 +170,20 @@ func normalizeAuthorization(claims verifiedClaims, expectedTenantID, expectedRol
 	if claims.PersonID != "" && !validPMSPersonID(claims.PersonID) {
 		return verifiedClaims{}, errors.New("CRM OIDC person_id is invalid")
 	}
-	if len(claims.Roles) == 0 || len(claims.Roles) > maxRoles || len(claims.Permissions) == 0 {
+	if len(claims.Roles) == 0 || len(claims.Roles) > maxRoles {
 		return verifiedClaims{}, errors.New("CRM OIDC role or permission set is invalid")
+	}
+	// 基础平台超级管理员在 CRM 应用中等价于 CRM 超级管理员：应用接入可能只返回
+	// platform-super-admin，而不会额外携带 crm_super_admin 映射角色。这里做受控别名
+	// 映射，后续仍严格按 CRM 目录重新计算权限，避免信任上游任意权限声明。
+	platformSuperAdmin := false
+	roleInputs := make([]string, 0, len(claims.Roles))
+	for _, role := range claims.Roles {
+		if role == "platform-super-admin" {
+			platformSuperAdmin = true
+			role = "crm_super_admin"
+		}
+		roleInputs = append(roleInputs, role)
 	}
 	manifest := platformcatalog.CRMManifest()
 	knownRoles := make(map[string]struct{}, len(manifest.Roles))
@@ -180,17 +192,25 @@ func normalizeAuthorization(claims verifiedClaims, expectedTenantID, expectedRol
 		knownRoles[role.Code] = struct{}{}
 		rolePermissions[role.Code] = role.Permissions
 	}
-	roles, err := normalizedSet(claims.Roles, knownRoles)
+	roles, err := normalizedSet(roleInputs, knownRoles)
 	if err != nil {
 		return verifiedClaims{}, fmt.Errorf("CRM OIDC roles: %w", err)
 	}
-	permissions, err := normalizedSet(claims.Permissions, nil)
-	if err != nil {
-		return verifiedClaims{}, fmt.Errorf("CRM OIDC permissions: %w", err)
-	}
-	for _, permission := range permissions {
-		if permission == "all" || !platformcatalog.HasPermission(manifest, permission) {
-			return verifiedClaims{}, errors.New("CRM OIDC permission is outside the CRM application catalog")
+	var permissions []string
+	if platformSuperAdmin {
+		permissions = nil
+	} else {
+		if len(claims.Permissions) == 0 {
+			return verifiedClaims{}, errors.New("CRM OIDC role or permission set is invalid")
+		}
+		permissions, err = normalizedSet(claims.Permissions, nil)
+		if err != nil {
+			return verifiedClaims{}, fmt.Errorf("CRM OIDC permissions: %w", err)
+		}
+		for _, permission := range permissions {
+			if permission == "all" || !platformcatalog.HasPermission(manifest, permission) {
+				return verifiedClaims{}, errors.New("CRM OIDC permission is outside the CRM application catalog")
+			}
 		}
 	}
 	organizationIDs, err := normalizedBoundedSet(claims.OrganizationIDs, 100, 64)
@@ -211,6 +231,13 @@ func normalizeAuthorization(claims verifiedClaims, expectedTenantID, expectedRol
 		for _, permission := range rolePermissions[role] {
 			expectedPermissions[permission] = struct{}{}
 		}
+	}
+	if platformSuperAdmin {
+		permissions = make([]string, 0, len(expectedPermissions))
+		for permission := range expectedPermissions {
+			permissions = append(permissions, permission)
+		}
+		sort.Strings(permissions)
 	}
 	if len(permissions) != len(expectedPermissions) {
 		return verifiedClaims{}, errors.New("CRM OIDC permission set does not match the effective role mapping")

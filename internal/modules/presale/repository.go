@@ -234,6 +234,7 @@ func (r *GORMRepository) ListRequests(ctx context.Context, scope RequestQuerySco
 		RequestNo           string
 		OpportunityID       uint64
 		OpportunityNo       string
+		OpportunityName     string
 		ApplicantID         string
 		ApplicantName       string
 		Status              RequestStatus
@@ -251,6 +252,8 @@ func (r *GORMRepository) ListRequests(ctx context.Context, scope RequestQuerySco
 	var rows []requestListRow
 	err := db.Select(`crm_presale_requests.id, crm_presale_requests.request_no,
 		crm_presale_requests.opportunity_id, crm_presale_requests.opportunity_no_snapshot AS opportunity_no,
+		COALESCE((SELECT o.name FROM crm_opportunities o WHERE o.tenant_id=crm_presale_requests.tenant_id
+			AND o.id=crm_presale_requests.opportunity_id AND o.deleted_at IS NULL LIMIT 1), '') AS opportunity_name,
 		crm_presale_requests.applicant_id, crm_presale_requests.applicant_name_snapshot AS applicant_name,
 		crm_presale_requests.status, crm_presale_requests.current_approval_node,
 		crm_presale_requests.venue, crm_presale_requests.urgency,
@@ -294,7 +297,7 @@ func (r *GORMRepository) ListRequests(ctx context.Context, scope RequestQuerySco
 	for _, row := range rows {
 		items = append(items, RequestListItem{
 			ID: row.ID, RequestNo: row.RequestNo, OpportunityID: row.OpportunityID,
-			OpportunityNo: row.OpportunityNo, ApplicantID: row.ApplicantID,
+			OpportunityNo: row.OpportunityNo, OpportunityName: row.OpportunityName, ApplicantID: row.ApplicantID,
 			ApplicantName: row.ApplicantName, CurrentAssignees: assigneeSummaries(assignments[row.ID]),
 			Status: row.Status, CurrentApprovalNode: row.CurrentApprovalNode, Venue: row.Venue, Urgency: row.Urgency,
 			ExpectedEnd: row.ExpectedEnd, CreatedAt: row.CreatedAt,

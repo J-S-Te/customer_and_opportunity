@@ -1,6 +1,7 @@
 package presale
 
 import (
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/ownerdirectory"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -19,6 +20,91 @@ type Handler struct {
 	reports   *ReportService
 	engineers *EngineerService
 	actors    ActorResolver
+	rules     *ApprovalRuleStore
+}
+
+// UseApprovalRules 后装配规则中心，保持旧版宿主构造方式兼容。
+func (h *Handler) UseApprovalRules(store *ApprovalRuleStore) *Handler { h.rules = store; return h }
+
+func (h *Handler) ApprovalRules(c *gin.Context) {
+	actor, ok := h.actor(c)
+	if !ok {
+		return
+	}
+	if h.rules == nil {
+		response.Error(c, apiError(ErrDependencyUnavailable))
+		return
+	}
+	values, err := h.rules.List(c.Request.Context(), actor.TenantID, false)
+	if err != nil {
+		response.Error(c, apiError(err))
+		return
+	}
+	response.OK(c, values)
+}
+
+func (h *Handler) CreateApprovalRule(c *gin.Context) {
+	actor, ok := h.actor(c)
+	if !ok {
+		return
+	}
+	if h.rules == nil {
+		response.Error(c, apiError(ErrDependencyUnavailable))
+		return
+	}
+	var input ApprovalRule
+	if !bindJSON(c, &input) {
+		return
+	}
+	value, err := h.rules.Create(c.Request.Context(), actor, input)
+	if err != nil {
+		response.Error(c, apiError(err))
+		return
+	}
+	response.OK(c, value)
+}
+
+func (h *Handler) UpdateApprovalRule(c *gin.Context) {
+	actor, ok := h.actor(c)
+	if !ok {
+		return
+	}
+	if h.rules == nil {
+		response.Error(c, apiError(ErrDependencyUnavailable))
+		return
+	}
+	var input ApprovalRule
+	if !bindJSON(c, &input) {
+		return
+	}
+	input.ID = strings.TrimSpace(c.Param("id"))
+	value, err := h.rules.Update(c.Request.Context(), actor, input)
+	if err != nil {
+		response.Error(c, apiError(err))
+		return
+	}
+	response.OK(c, value)
+}
+
+func (h *Handler) DeleteApprovalRule(c *gin.Context) {
+	actor, ok := h.actor(c)
+	if !ok {
+		return
+	}
+	if h.rules == nil {
+		response.Error(c, apiError(ErrDependencyUnavailable))
+		return
+	}
+	version, err := strconv.ParseUint(c.Query("version"), 10, 64)
+	if err != nil {
+		response.Error(c, apiError(ErrInvalidInput))
+		return
+	}
+	if err = h.rules.Delete(c.Request.Context(), actor, c.Param("id"), version); err != nil {
+		response.Error(c, apiError(err))
+		return
+	}
+	response.OK(c, gin.H{"deleted": true})
 }
 
 func NewHandler(service *Service, alerts *AlertService, actors ActorResolver) *Handler {
@@ -60,6 +146,38 @@ func (h *Handler) Engineers(c *gin.Context) {
 		return
 	}
 	response.OK(c, value)
+}
+
+func (h *Handler) ExecutionDepartments(c *gin.Context) {
+	actor, ok := h.actor(c)
+	if !ok {
+		return
+	}
+	if h.service.ownerDirectory == nil {
+		response.Error(c, apiError(ErrDependencyUnavailable))
+		return
+	}
+	page, err := h.service.ownerDirectory.List(c.Request.Context(), ownerdirectory.Query{Page: 1, PageSize: 200})
+	if err != nil {
+		response.Error(c, apiError(err))
+		return
+	}
+	type department struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+	}
+	seen := map[string]bool{}
+	result := make([]department, 0)
+	for _, person := range page.Items {
+		for _, org := range person.Organizations {
+			if org.ID != "" && !seen[org.ID] {
+				seen[org.ID] = true
+				result = append(result, department{ID: org.ID, Name: org.Name})
+			}
+		}
+	}
+	_ = actor
+	response.OK(c, result)
 }
 
 func (h *Handler) SyncEngineers(c *gin.Context) {
@@ -296,6 +414,28 @@ func (h *Handler) CreateRequest(c *gin.Context) {
 		return
 	}
 	response.Created(c, requestView(value))
+}
+
+func (h *Handler) ReopenRequest(c *gin.Context) {
+	actor, ok := h.actor(c)
+	if !ok {
+		return
+	}
+	id, ok := bindID(c, "id")
+	if !ok {
+		return
+	}
+	version, err := strconv.ParseUint(strings.TrimSpace(c.Query("version")), 10, 64)
+	if err != nil || version == 0 {
+		response.Error(c, apiError(ErrInvalidInput))
+		return
+	}
+	value, err := h.service.ReopenRequest(c.Request.Context(), actor, id, version)
+	if err != nil {
+		response.Error(c, apiError(err))
+		return
+	}
+	response.OK(c, requestView(value))
 }
 
 func (h *Handler) ListRequests(c *gin.Context) {
@@ -627,6 +767,28 @@ func (h *Handler) ReplaceAssignments(c *gin.Context) {
 		return
 	}
 	value, err := h.service.ReplaceAssignments(c.Request.Context(), actor, id, c.GetHeader("Idempotency-Key"), in)
+	if err != nil {
+		response.Error(c, apiError(err))
+		return
+	}
+	response.OK(c, requestView(value))
+}
+
+func (h *Handler) SelectExecutionDepartment(c *gin.Context) {
+	actor, ok := h.actor(c)
+	if !ok {
+		return
+	}
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		response.Error(c, apiError(ErrInvalidInput))
+		return
+	}
+	var input SelectDepartmentInput
+	if !bindJSON(c, &input) {
+		return
+	}
+	value, err := h.service.SelectExecutionDepartment(c.Request.Context(), actor, id, input)
 	if err != nil {
 		response.Error(c, apiError(err))
 		return

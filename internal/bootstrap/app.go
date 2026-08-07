@@ -283,10 +283,11 @@ func New(config Config) (*App, error) {
 		presalePhoneProtector{codec: codec},
 		presale.SystemClock{},
 		requestIDGenerator{},
-	).UseTimelineCursorKey(config.HMACKey).UseAuditWriter(auditWriter).UseOwnerDirectory(ownerCatalog)
+	).UseTimelineCursorKey(config.HMACKey).UseAuditWriter(auditWriter).UseOwnerDirectory(ownerCatalog).UseApprovalRuleStore(presale.NewApprovalRuleStore(db))
 	presaleHandler := presale.NewHandler(presaleService, presale.NewAlertService(db, presale.SystemClock{}), presaleActorResolver{}).
 		UseReports(presale.NewReportService(presaleRepo)).
-		UseEngineers(presale.NewEngineerService(presale.NewGORMEngineerDirectoryRepository(db, requestIDGenerator{}), presale.SystemClock{}, requestIDGenerator{}))
+		UseEngineers(presale.NewEngineerService(presale.NewGORMEngineerDirectoryRepository(db, requestIDGenerator{}), presale.SystemClock{}, requestIDGenerator{})).
+		UseApprovalRules(presale.NewApprovalRuleStore(db))
 	presale.RegisterRoutes(api, presaleHandler)
 	opportunityPresales := opportunityPresaleHandler{opportunities: opportunityService, presales: presaleService}
 	api.GET("/opportunities/:id/presale-requests", middleware.RequirePermission("opportunity.read"), opportunityPresales.List)
