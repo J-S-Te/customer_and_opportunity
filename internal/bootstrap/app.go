@@ -283,19 +283,7 @@ func New(config Config) (*App, error) {
 		presalePhoneProtector{codec: codec},
 		presale.SystemClock{},
 		requestIDGenerator{},
-	).UseTimelineCursorKey(config.HMACKey).UseAuditWriter(auditWriter).
-		UseWorkerReadiness(workerReadiness, config.PresaleWorkerHeartbeatMaxAge)
-	if config.ApprovalTaskResolverEnabled {
-		approvalTaskResolver, resolverErr := presale.NewHTTPApprovalTaskResolver(context.Background(), presale.ApprovalTaskResolverOptions{
-			Endpoint: config.ApprovalTaskURL, TokenURL: config.ApprovalTaskTokenURL,
-			ClientID: config.ApprovalTaskClientID, ClientSecret: config.ApprovalTaskClientSecret,
-			Scope: config.ApprovalTaskScope, TLS: config.ApprovalTaskTLS,
-		})
-		if resolverErr != nil {
-			return nil, resolverErr
-		}
-		presaleService.UseApprovalTaskResolver(approvalTaskResolver)
-	}
+	).UseTimelineCursorKey(config.HMACKey).UseAuditWriter(auditWriter)
 	presaleHandler := presale.NewHandler(presaleService, presale.NewAlertService(db, presale.SystemClock{}), presaleActorResolver{}).
 		UseReports(presale.NewReportService(presaleRepo)).
 		UseEngineers(presale.NewEngineerService(presale.NewGORMEngineerDirectoryRepository(db, requestIDGenerator{}), presale.SystemClock{}, requestIDGenerator{}))

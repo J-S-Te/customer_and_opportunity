@@ -151,10 +151,14 @@ func (s *Service) AvailableActions(ctx context.Context, actor Actor, requestID u
 	}
 	actions := append([]string(nil), detail.AvailableActions...)
 	request := detail.Request
-	if request.Status == StatusPendingApproval && actor.Can("presale.approve") && approvalNodeRoleAllowed(actor, request.CurrentApprovalNode) && s.approvalTasks != nil {
+	if request.Status == StatusPendingApproval && actor.Can("presale.approve") && approvalNodeRoleAllowed(actor, request.CurrentApprovalNode) {
 		instance, instanceErr := s.repo.FindApprovalInstance(ctx, actor.TenantID, requestID)
 		if instanceErr == nil && instance.EngineInstanceID != "" && instance.Status == "PENDING" && instance.CurrentNode == request.CurrentApprovalNode &&
 			instance.PendingTaskID == "" && instance.PendingApprover == "" && instance.PendingAction == "" {
+			if s.approvalTasks == nil {
+				actions = append(actions, "APPROVE", "REJECT")
+				return AvailableActionsView{Status: request.Status, Version: request.Version, Actions: actions}, nil
+			}
 			resolved, resolveErr := s.approvalTasks.ResolveCurrentTask(ctx, ApprovalTaskQuery{
 				TenantID: actor.TenantID, EngineInstanceID: instance.EngineInstanceID,
 				Node: request.CurrentApprovalNode, ApproverID: actor.UserID,
