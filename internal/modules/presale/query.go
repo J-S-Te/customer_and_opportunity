@@ -29,8 +29,8 @@ func requestScope(actor Actor) RequestQueryScope {
 	if scope.All {
 		return scope
 	}
-	// 非管理角色的可见集合是“本人申请”与“可信 PMS 人员分派”的并集。
-	// 分派角色属于 PMS 业务事实，不能从 CRM 的 OIDC 角色名称推断。
+	// 非管理角色的可见集合是“本人申请”与“本人被指派”的并集。
+	// 执行人使用基础平台 user_id，不依赖外部人员系统的身份映射。
 	if actor.HasRole("sales") {
 		scope.ApplicantID = actor.UserID
 	}

@@ -167,7 +167,7 @@ func (s *AlertService) MarkRead(ctx context.Context, actor Actor, id uint64) err
 }
 
 // 个人预警读取使用显式身份命名空间，不沿用报表的 SELF/ORG/ALL 范围。
-// 查询只合并已认证 OIDC 用户与单独签名的 PMS 人员绑定，避免同值 ID 在不同系统间误匹配。
+// 新数据中申请人和执行人均由当前登录用户的基础平台 user_id 匹配。
 func alertRecipientPredicate(actor Actor) string {
 	if strings.TrimSpace(actor.PersonID) == "" {
 		return "(recipient_kind=? AND recipient_id=?)"

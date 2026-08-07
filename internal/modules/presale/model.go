@@ -234,7 +234,7 @@ const (
 )
 
 // ProgressNotificationEvent 固化进展发生时的个人收件人证据。
-// 基础平台用户 ID 与 PMS 人员 ID 分属不同命名空间，不能互相推断或直接比较。
+// 新申请的申请人和执行人都使用基础平台 user_id；命名空间字段保留用于兼容历史事件。
 type ProgressNotificationEvent struct {
 	ID                 uint64    `gorm:"primaryKey;autoIncrement"`
 	EventID            string    `gorm:"size:64;not null;uniqueIndex"`
@@ -291,8 +291,8 @@ func (MutationReplay) TableName() string { return "crm_presale_mutation_replays"
 
 type PushStatus string
 
-// 推送状态反映工时投递到 PMS 的本地投影：worker 领取后进入 SENDING，
-// 失败按退避策略进入 RETRY_WAIT，耗尽重试后进入 DEAD_LETTER 等待人工重放。
+// PushStatus 保留旧字段和枚举以兼容存量数据。
+// 新工时直接保存在 CRM 内并记为 SUCCESS，不再进入外部投递队列。
 const (
 	PushPending    PushStatus = "PENDING"
 	PushSending    PushStatus = "SENDING"
