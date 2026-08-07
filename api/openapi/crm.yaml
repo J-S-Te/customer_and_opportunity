@@ -151,6 +151,8 @@ paths:
     post: {$ref: '#/components/x-operations/readNotification'}
   /api/v1/presale/engineers:
     get: {$ref: '#/components/x-operations/listPresaleEngineers'}
+  /api/v1/presale/execution-departments:
+    get: {$ref: '#/components/x-operations/listPresaleExecutionDepartments'}
   /api/v1/presale/engineers/sync:
     post: {$ref: '#/components/x-operations/syncPresaleEngineers'}
   /api/v1/presale/requests:
@@ -162,6 +164,8 @@ paths:
     get: {$ref: '#/components/x-operations/presaleFilterOptions'}
   /api/v1/presale/requests/{id}:
     get: {$ref: '#/components/x-operations/getPresaleRequest'}
+  /api/v1/presale/requests/{id}/reopen:
+    post: {$ref: '#/components/x-operations/reopenPresaleRequest'}
   /api/v1/presale/requests/{id}/contact-phone:
     get: {$ref: '#/components/x-operations/getPresaleContactPhone'}
   /api/v1/presale/requests/{id}/timeline:
@@ -175,6 +179,8 @@ paths:
   /api/v1/presale/requests/{id}/assignments:
     get: {$ref: '#/components/x-operations/listPresaleAssignments'}
     put: {$ref: '#/components/x-operations/replacePresaleAssignments'}
+  /api/v1/presale/requests/{id}/execution-department:
+    put: {$ref: '#/components/x-operations/selectPresaleExecutionDepartment'}
   /api/v1/presale/requests/{id}/progress:
     post: {$ref: '#/components/x-operations/addPresaleProgress'}
   /api/v1/presale/requests/{id}/cancel:
@@ -190,6 +196,12 @@ paths:
     get: {$ref: '#/components/x-operations/listPresaleAlertRules'}
   /api/v1/presale/alert-rules/{type}:
     put: {$ref: '#/components/x-operations/updatePresaleAlertRule'}
+  /api/v1/presale/approval-rules:
+    get: {$ref: '#/components/x-operations/listPresaleApprovalRules'}
+    post: {$ref: '#/components/x-operations/createPresaleApprovalRule'}
+  /api/v1/presale/approval-rules/{id}:
+    put: {$ref: '#/components/x-operations/updatePresaleApprovalRule'}
+    delete: {$ref: '#/components/x-operations/deletePresaleApprovalRule'}
   /api/v1/presale/alerts:
     get: {$ref: '#/components/x-operations/listPresaleAlerts'}
   /api/v1/presale/alerts/{id}/read:
@@ -533,9 +545,11 @@ components:
     notificationUnreadCount: {<<: *notificationRead, operationId: notificationUnreadCount}
     readNotification: {<<: *notificationRead, operationId: readNotification, parameters: [{$ref: '#/components/parameters/NumericID'}]}
     listPresaleEngineers: &presaleRead {<<: *crmRead, operationId: listPresaleEngineers, tags: [Presale], x-permission: presale.read}
+    listPresaleExecutionDepartments: {<<: *presaleRead, operationId: listPresaleExecutionDepartments}
     syncPresaleEngineers: {<<: *presaleRead, operationId: syncPresaleEngineers, x-permission: presale.engineer.sync, parameters: [{$ref: '#/components/parameters/IdempotencyKey'}], description: PMS formal environment remains pending.}
     listPresaleRequests: {<<: *presaleRead, operationId: listPresaleRequests}
     createPresaleRequest: {<<: *presaleRead, operationId: createPresaleRequest, x-permission: presale.create, parameters: [{$ref: '#/components/parameters/IdempotencyKey'}], requestBody: {$ref: '#/components/requestBodies/PresaleCreate'}}
+    reopenPresaleRequest: {<<: *presaleRead, operationId: reopenPresaleRequest, x-permission: presale.create, parameters: [{$ref: '#/components/parameters/NumericID'}, {name: version, in: query, required: true, schema: {type: integer, minimum: 1}}, {$ref: '#/components/parameters/IdempotencyKey'}]}
     presaleBoard: {<<: *presaleRead, operationId: presaleBoard}
     presaleFilterOptions: {<<: *presaleRead, operationId: presaleFilterOptions}
     getPresaleRequest: &presaleIDRead {<<: *presaleRead, operationId: getPresaleRequest, parameters: [{$ref: '#/components/parameters/NumericID'}]}
@@ -567,6 +581,7 @@ components:
     presaleApprovalHistory: {<<: *presaleIDRead, operationId: presaleApprovalHistory}
     listPresaleAssignments: {<<: *presaleIDRead, operationId: listPresaleAssignments}
     replacePresaleAssignments: {<<: *presaleIDRead, operationId: replacePresaleAssignments, x-permission: presale.assign, parameters: [{$ref: '#/components/parameters/NumericID'}, {$ref: '#/components/parameters/IdempotencyKey'}]}
+    selectPresaleExecutionDepartment: {<<: *presaleIDRead, operationId: selectPresaleExecutionDepartment, x-permission: presale.assign, parameters: [{$ref: '#/components/parameters/NumericID'}, {$ref: '#/components/parameters/IdempotencyKey'}]}
     addPresaleProgress: {<<: *presaleIDRead, operationId: addPresaleProgress, x-permission: presale.progress, parameters: [{$ref: '#/components/parameters/NumericID'}, {$ref: '#/components/parameters/IdempotencyKey'}]}
     cancelPresaleRequest: {<<: *presaleIDRead, operationId: cancelPresaleRequest, x-permission: service applies applicant/manager policy, parameters: [{$ref: '#/components/parameters/NumericID'}, {$ref: '#/components/parameters/IdempotencyKey'}]}
     listPresaleWorklogs: {<<: *presaleIDRead, operationId: listPresaleWorklogs}
@@ -575,6 +590,10 @@ components:
     getPresaleWorklogDelivery: {<<: *presaleRead, operationId: getPresaleWorklogDelivery, parameters: [{$ref: '#/components/parameters/NumericID'}]}
     listPresaleAlertRules: {<<: *presaleRead, operationId: listPresaleAlertRules, x-permission: presale.alert.config}
     updatePresaleAlertRule: {<<: *presaleRead, operationId: updatePresaleAlertRule, x-permission: presale.alert.config, parameters: [{name: type, in: path, required: true, schema: {type: string}}]}
+    listPresaleApprovalRules: {<<: *presaleRead, operationId: listPresaleApprovalRules}
+    createPresaleApprovalRule: {<<: *presaleRead, operationId: createPresaleApprovalRule, x-permission: presale.approval_rule.manage}
+    updatePresaleApprovalRule: {<<: *presaleRead, operationId: updatePresaleApprovalRule, x-permission: presale.approval_rule.manage, parameters: [{$ref: '#/components/parameters/NumericID'}]}
+    deletePresaleApprovalRule: {<<: *presaleRead, operationId: deletePresaleApprovalRule, x-permission: presale.approval_rule.manage, parameters: [{$ref: '#/components/parameters/NumericID'}]}
     listPresaleAlerts:
       <<: *presaleRead
       operationId: listPresaleAlerts
