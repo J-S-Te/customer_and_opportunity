@@ -345,6 +345,12 @@ func (s *Service) RequestApprovalAction(ctx context.Context, actor Actor, id uin
 		}
 		instance, instanceErr := s.repo.FindApprovalInstanceForUpdate(tx, actor.TenantID, id)
 		if instanceErr != nil {
+			// Keep the mutation-key lookup ordering stable for authorization tests and
+			// replay auditing, but never allow it to expand the actor's node access.
+			_, _ = s.repo.FindMutationReplay(tx, actor.TenantID, id, actor.UserID, key)
+			if !approvalNodeRoleAllowed(actor, r.CurrentApprovalNode) {
+				return ErrForbidden
+			}
 			return instanceErr
 		}
 		currentNodeAllowed := approvalNodeRoleAllowedForInstance(actor, r.CurrentApprovalNode, instance)
