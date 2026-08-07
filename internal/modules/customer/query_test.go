@@ -79,8 +79,8 @@ func TestCustomerListSQLContainsQuickFiltersAndWhitelistedStableSort(t *testing.
 				tenantBindings++
 			}
 		}
-		if tenantBindings != 3 {
-			t.Fatalf("outer scope and both aggregate subqueries must be tenant-bound: vars=%#v", statement.Vars)
+		if tenantBindings != 4 {
+			t.Fatalf("outer scope and all aggregate sources must be tenant-bound: vars=%#v", statement.Vars)
 		}
 	}
 }
