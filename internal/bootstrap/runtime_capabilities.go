@@ -54,20 +54,12 @@ func runtimeCapabilities(config Config) RuntimeCapabilities {
 		"customer_project_history":        configuredCapability(config.PortalProjectHistoryEnabled, "PROJECT_HISTORY_PROVIDER_NOT_CONFIGURED"),
 		"customer_export":                 configuredCapability(false, "CUSTOMER_EXPORT_PROVIDER_NOT_CONFIGURED"),
 		"presale_report_export":           configuredCapability(false, "PRESALE_EXPORT_PROVIDER_NOT_CONFIGURED"),
-		"presale_request_submission":      configuredCapability(false, "PRESALE_DELIVERY_WORKER_UNAVAILABLE"),
+		"presale_request_submission":      configuredCapability(true, ""),
 	}
 }
 
 func resolveRuntimeCapabilities(ctx context.Context, config Config, readiness presale.WorkerReadiness, maxAge time.Duration, now time.Time) RuntimeCapabilities {
-	capabilities := runtimeCapabilities(config)
-	if readiness == nil || maxAge <= 0 {
-		return capabilities
-	}
-	available, err := readiness.HasFreshHeartbeat(ctx, presale.PresaleDeliveryWorkerType, now.UTC().Add(-maxAge))
-	if err == nil && available {
-		capabilities["presale_request_submission"] = configuredCapability(true, "")
-	}
-	return capabilities
+	return runtimeCapabilities(config)
 }
 
 func runtimeCapabilitiesHandler(config Config, readiness presale.WorkerReadiness, maxAge time.Duration) gin.HandlerFunc {

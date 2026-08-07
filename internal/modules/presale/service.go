@@ -66,8 +66,7 @@ func NewService(repo Repository, opportunities OpportunityReader, phones PhonePr
 }
 
 // 创建申请先校验商机的数据范围，再检查租户级幂等键，避免猜测幂等键泄露他人申请。
-// 申请、审批实例和“启动审批”Outbox 在同一事务落库；本地状态先保持 APPROVAL_STARTING，
-// 只有审批引擎回执确认实例创建后才进入 PENDING_APPROVAL。
+// 审批属于 CRM 内部能力，申请与本地审批实例在同一事务进入待审批状态。
 func (s *Service) CreateRequest(ctx context.Context, actor Actor, key string, in CreateRequestInput) (*PresaleRequest, error) {
 	if !actor.Can("presale.create") {
 		return nil, ErrForbidden
@@ -97,9 +96,6 @@ func (s *Service) CreateRequest(ctx context.Context, actor Actor, key string, in
 	} else if !errors.Is(findErr, ErrNotFound) {
 		return nil, findErr
 	}
-	if !s.deliveryWorkerReady(ctx) {
-		return nil, ErrDependencyUnavailable
-	}
 	cipher, err := s.phones.Encrypt(ctx, in.ContactPhone)
 	if err != nil {
 		return nil, err
@@ -116,28 +112,17 @@ func (s *Service) CreateRequest(ctx context.Context, actor Actor, key string, in
 		} else if !errors.Is(e, ErrNotFound) {
 			return e
 		}
-		// 写事务内再次检查心跳，避免长请求在事务外检查后等待过久，待全部 worker 心跳过期
-		// 仍写入无人投递的审批事件。
-		if !s.deliveryWorkerReady(tx) {
-			return ErrDependencyUnavailable
-		}
 		no, e := s.repo.NextRequestNo(tx, actor.TenantID, now)
 		if e != nil {
 			return e
 		}
-		r := &PresaleRequest{BaseModel: BaseModel{TenantID: actor.TenantID, CreatedBy: actor.UserID, UpdatedBy: actor.UserID, Version: 1}, RequestNo: no, OpportunityID: opp.ID, OpportunityNoSnapshot: opp.OpportunityNo, ApplicantID: actor.UserID, ApplicantNameSnapshot: actor.UserName, Venue: in.Venue, ServiceAddress: strings.TrimSpace(in.ServiceAddress), ContactName: strings.TrimSpace(in.ContactName), ContactPhoneCipher: cipher, ContactPhoneMasked: s.phones.Mask(in.ContactPhone), Description: strings.TrimSpace(in.Description), ExpectedStart: in.ExpectedStart.UTC(), ExpectedEnd: in.ExpectedEnd.UTC(), Urgency: in.Urgency, Status: StatusApprovalStarting, CreateIdempotencyKey: key, CreateRequestHash: hash}
+		r := &PresaleRequest{BaseModel: BaseModel{TenantID: actor.TenantID, CreatedBy: actor.UserID, UpdatedBy: actor.UserID, Version: 1}, RequestNo: no, OpportunityID: opp.ID, OpportunityNoSnapshot: opp.OpportunityNo, ApplicantID: actor.UserID, ApplicantNameSnapshot: actor.UserName, Venue: in.Venue, ServiceAddress: strings.TrimSpace(in.ServiceAddress), ContactName: strings.TrimSpace(in.ContactName), ContactPhoneCipher: cipher, ContactPhoneMasked: s.phones.Mask(in.ContactPhone), Description: strings.TrimSpace(in.Description), ExpectedStart: in.ExpectedStart.UTC(), ExpectedEnd: in.ExpectedEnd.UTC(), Urgency: in.Urgency, Status: StatusPendingApproval, CurrentApprovalNode: 1, CreateIdempotencyKey: key, CreateRequestHash: hash}
 		if e = s.repo.CreateRequest(tx, r); e != nil {
 			return e
 		}
-		inst := &ApprovalInstance{BaseModel: BaseModel{TenantID: actor.TenantID, CreatedBy: actor.UserID, UpdatedBy: actor.UserID, Version: 1}, RequestID: r.ID, Status: "STARTING"}
+		instanceID := fmt.Sprintf("crm-presale-%d", r.ID)
+		inst := &ApprovalInstance{BaseModel: BaseModel{TenantID: actor.TenantID, CreatedBy: actor.UserID, UpdatedBy: actor.UserID, Version: 1}, RequestID: r.ID, EngineInstanceID: instanceID, Status: "PENDING", CurrentNode: 1, StartedAt: &now}
 		if e = s.repo.CreateApprovalInstance(tx, inst); e != nil {
-			return e
-		}
-		event, e := s.event(actor.TenantID, "PRESALE_APPROVAL_START_REQUESTED", "presale_request", fmt.Sprint(r.ID), map[string]any{"request_id": r.ID, "request_no": r.RequestNo, "applicant_id": r.ApplicantID, "opportunity_id": r.OpportunityID})
-		if e != nil {
-			return e
-		}
-		if e = s.repo.CreateOutbox(tx, event); e != nil {
 			return e
 		}
 		created = r
@@ -296,12 +281,13 @@ func (s *Service) RequestApprovalAction(ctx context.Context, actor Actor, id uin
 		if !currentNodeAllowed {
 			return ErrForbidden
 		}
-		if s.approvalTasks == nil {
-			return ErrDependencyUnavailable
-		}
 		instance, instanceErr := s.repo.FindApprovalInstanceForUpdate(tx, actor.TenantID, id)
 		if instanceErr != nil || instance.EngineInstanceID == "" || instance.CurrentNode != r.CurrentApprovalNode || instance.Status != "PENDING" {
 			return ErrDependencyUnavailable
+		}
+		if s.approvalTasks == nil {
+			replayAction = approvalReplayAction(r.CurrentApprovalNode, in.Action)
+			return s.applyInternalApprovalAction(tx, actor, r, instance, key, replayAction, hash, in)
 		}
 		// 一个权威审批任务同一时刻只允许一个动作在途；第一条 Outbox 尚未投递完成时，新的
 		// 幂等键或相反动作不能覆盖待回调绑定。
@@ -338,6 +324,60 @@ func (s *Service) RequestApprovalAction(ctx context.Context, actor Actor, id uin
 		return err
 	}
 	return s.resolveApprovalMutationRace(ctx, actor, id, key, in.Action, hash)
+}
+
+func (s *Service) applyInternalApprovalAction(ctx context.Context, actor Actor, request *PresaleRequest, instance *ApprovalInstance, key, replayAction, hash string, input ApprovalActionInput) error {
+	now := s.clock.Now().UTC()
+	node := request.CurrentApprovalNode
+	sequence := instance.LastEventSeq + 1
+	taskID := fmt.Sprintf("crm-task-%d-%d-%d", request.ID, node, request.Version)
+	approverName := strings.TrimSpace(actor.UserName)
+	if approverName == "" {
+		approverName = actor.UserID
+	}
+	log := &ApprovalLog{
+		TenantID: actor.TenantID, RequestID: request.ID, Node: node,
+		ApproverID: actor.UserID, ApproverNameSnapshot: approverName,
+		Result: input.Action, Comment: input.Comment, ApprovedAt: now,
+		EngineTaskID: taskID, EngineInstanceID: instance.EngineInstanceID,
+		EventSequence: sequence, RequestIDTrace: actor.RequestID,
+	}
+	if err := s.repo.CreateApprovalLog(ctx, log); err != nil {
+		return err
+	}
+	requestFields := map[string]any{"updated_by": actor.UserID}
+	instanceFields := map[string]any{"last_event_seq": sequence, "updated_by": actor.UserID}
+	to := StatusPendingApproval
+	if input.Action == "REJECT" {
+		to = StatusRejected
+		requestFields["status"] = to
+		requestFields["reject_reason"] = input.Comment
+		requestFields["current_approval_node"] = 0
+		instanceFields["status"] = "REJECTED"
+		instanceFields["finished_at"] = now
+	} else if node == 1 {
+		requestFields["current_approval_node"] = 2
+		instanceFields["current_node"] = 2
+	} else {
+		to = StatusApprovedPendingAssignment
+		requestFields["status"] = to
+		requestFields["current_approval_node"] = 0
+		instanceFields["status"] = "APPROVED"
+		instanceFields["finished_at"] = now
+	}
+	if err := s.repo.UpdateApprovalInstance(ctx, instance, instanceFields); err != nil {
+		return err
+	}
+	if err := s.repo.UpdateRequestVersioned(ctx, request, request.Version, requestFields); err != nil {
+		return err
+	}
+	if err := s.repo.CreateMutationReplay(ctx, newMutationReplay(actor, request.ID, key, "APPROVAL_ACTION", replayAction, hash, input.Version, now)); err != nil {
+		return err
+	}
+	if to != StatusPendingApproval {
+		return s.statusLog(ctx, request, StatusPendingApproval, to, "APPROVAL_INTERNAL", input.Comment, actor.UserID, actor.RequestID)
+	}
+	return nil
 }
 
 // 审批回调以引擎任务 ID 做事实级去重，并同时核验实例、事件序号、当前节点和待处理绑定。

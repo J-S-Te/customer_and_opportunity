@@ -161,28 +161,6 @@ func TestCreateRequestUniqueKeyRaceUsesBoundReplayCheck(t *testing.T) {
 	}
 }
 
-func TestCreateRequestFailsClosedWithoutFreshDeliveryWorker(t *testing.T) {
-	actor := Actor{TenantID: "tenant-1", UserID: "sales-a", Permissions: map[string]bool{"presale.create": true}}
-	opportunities := &accessibleOpportunityReader{values: map[uint64]OpportunitySnapshot{7: {ID: 7, OpportunityNo: "OP7"}}}
-	for _, test := range []struct {
-		name      string
-		readiness *workerReadinessStub
-	}{
-		{name: "no fresh heartbeat", readiness: &workerReadinessStub{}},
-		{name: "readiness query fails", readiness: &workerReadinessStub{err: errors.New("database details")}},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			repo := &createSecurityRepository{}
-			service := NewService(repo, opportunities, testPhoneProtector{}, fixedClock{}, fixedIDs{}).
-				UseWorkerReadiness(test.readiness, 15*time.Second)
-			got, err := service.CreateRequest(context.Background(), actor, "new-key", validCreateSecurityInput(7))
-			if got != nil || !errors.Is(err, ErrDependencyUnavailable) || test.readiness.calls != 1 {
-				t.Fatalf("resource=%+v error=%v readiness_calls=%d", got, err, test.readiness.calls)
-			}
-		})
-	}
-}
-
 type worklogSecurityRepository struct {
 	Repository
 	request          *PresaleRequest

@@ -114,11 +114,12 @@ func TestManualMutationHandlersForwardIdempotencyKey(t *testing.T) {
 	}
 }
 
-func TestApprovalActionHTTPBoundaryFailsClosedWithoutTrustedEngineTask(t *testing.T) {
+func TestApprovalActionHTTPBoundaryUsesInternalApprovalWhenNoExternalResolver(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	repository := &mutationRepository{
-		request: &PresaleRequest{BaseModel: BaseModel{ID: 9, TenantID: "tenant-a", Version: 3}, Status: StatusPendingApproval, CurrentApprovalNode: 1},
-		replays: map[string]*MutationReplay{},
+		request:  &PresaleRequest{BaseModel: BaseModel{ID: 9, TenantID: "tenant-a", Version: 3}, Status: StatusPendingApproval, CurrentApprovalNode: 1},
+		approval: &ApprovalInstance{EngineInstanceID: "crm-presale-9", Status: "PENDING", CurrentNode: 1},
+		replays:  map[string]*MutationReplay{},
 	}
 	handler := NewHandler(NewService(repository, nil, nil, fixedClock{}, fixedIDs{}), nil, fixedHandlerActorResolver{actor: Actor{
 		TenantID: "tenant-a", UserID: "director", Roles: map[string]bool{"sales_director": true}, Permissions: map[string]bool{"presale.approve": true},
@@ -130,7 +131,7 @@ func TestApprovalActionHTTPBoundaryFailsClosedWithoutTrustedEngineTask(t *testin
 	context.Request.Header.Set("Content-Type", "application/json")
 	context.Request.Header.Set("Idempotency-Key", "approval-key")
 	handler.ApprovalAction(context)
-	if recorder.Code != http.StatusServiceUnavailable || !strings.Contains(recorder.Body.String(), "INTEGRATION_DEPENDENCY_UNAVAILABLE") || repository.outboxCount != 0 || len(repository.replays) != 0 {
+	if recorder.Code != http.StatusAccepted || repository.outboxCount != 0 || len(repository.replays) != 1 || len(repository.approvalLogs) != 1 {
 		t.Fatalf("status=%d body=%s outbox=%d replays=%d", recorder.Code, recorder.Body.String(), repository.outboxCount, len(repository.replays))
 	}
 }
