@@ -147,6 +147,11 @@ type AddWorklogInput struct {
 	Version         uint64    `json:"version" binding:"required"`
 }
 
+type CompletePresaleInput struct {
+	Reason  string `json:"reason"`
+	Version uint64 `json:"version" binding:"required"`
+}
+
 type OpportunitySnapshot struct {
 	ID            uint64
 	OpportunityNo string

@@ -90,6 +90,14 @@ func TestLoadConfigProductionOIDC(t *testing.T) {
 	}
 }
 
+func TestLoadConfigAcceptsKeycloakRealmIssuer(t *testing.T) {
+	setBaseConfig(t)
+	t.Setenv("OIDC_ISSUER", "https://sso.example.com/realms/basic-platform")
+	if _, err := LoadConfig(); err != nil {
+		t.Fatalf("LoadConfig() rejected a Keycloak realm issuer: %v", err)
+	}
+}
+
 func TestLoadConfigLoopbackOIDCAllowsInsecureSessionCookieAndDerivedRoleHash(t *testing.T) {
 	setBaseConfig(t)
 	t.Setenv("DEV_AUTH_ENABLED", "false")
