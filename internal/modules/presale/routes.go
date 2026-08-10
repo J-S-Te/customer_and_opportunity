@@ -31,6 +31,7 @@ func RegisterRoutes(api *gin.RouterGroup, handler *Handler) {
 	presale.POST("/requests/:id/progress", middleware.RequirePermission("presale.progress"), handler.AddProgress)
 	presale.POST("/requests/:id/cancel", handler.Cancel)
 	presale.POST("/requests/:id/worklogs", middleware.RequirePermission("presale.worklog"), handler.AddWorklog)
+	presale.POST("/requests/:id/complete", middleware.RequirePermission("presale.complete"), handler.Complete)
 	presale.GET("/requests/:id/worklogs", middleware.RequirePermission("presale.read"), handler.Worklogs)
 	presale.POST("/worklogs/:id/retry", middleware.RequirePermission("presale.worklog.retry"), handler.RetryDelivery)
 	presale.GET("/worklogs/:id/delivery", middleware.RequirePermission("presale.read"), handler.Delivery)

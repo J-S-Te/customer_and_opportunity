@@ -38,10 +38,16 @@ type Service struct {
 	workerMaxAge      time.Duration
 	ownerDirectory    ownerdirectory.Catalog
 	approvalRules     *ApprovalRuleStore
+	notifications     WorkflowNotificationWriter
 }
 
 func (s *Service) UseApprovalRuleStore(store *ApprovalRuleStore) *Service {
 	s.approvalRules = store
+	return s
+}
+
+func (s *Service) UseWorkflowNotifications(writer WorkflowNotificationWriter) *Service {
+	s.notifications = writer
 	return s
 }
 
@@ -607,7 +613,9 @@ func (s *Service) ReplaceAssignments(ctx context.Context, actor Actor, id uint64
 		return nil, ErrInvalidInput
 	}
 	targets := map[string]AssignmentTarget{}
-	allowedRoles := map[string]bool{"technical_director": true, "team_lead": true, "project_manager": true, "implementation_engineer": true}
+	// 执行岗位明确区分项目经理与技术人员。implementation_engineer 仅保留给历史指派记录，
+	// 新指派统一使用 technician，不能再把负责人或总监作为执行人员写入。
+	allowedRoles := map[string]bool{"team_lead": true, "project_manager": true, "technician": true, "implementation_engineer": true}
 	for _, v := range in.Assignees {
 		if strings.TrimSpace(v.PersonID) == "" || !allowedRoles[v.Role] || len([]rune(v.PersonName)) > 128 || len([]rune(v.Department)) > 128 || len([]rune(v.DepartmentID)) > 64 {
 			return nil, ErrInvalidInput
@@ -747,6 +755,11 @@ func (s *Service) ReplaceAssignments(ctx context.Context, actor Actor, id uint64
 			if e = s.recordAssignmentNotification(tx, actor, r, a, AssignmentEventAdded, in.ChangeReason, now); e != nil {
 				return e
 			}
+			if s.notifications != nil {
+				if e = s.notifications.Write(tx, WorkflowNotification{TenantID: actor.TenantID, RecipientID: a.AssigneeID, Type: "PRESALE_ASSIGNEE_ADDED", Title: "你被指派售前支持任务", Body: "你已被加入售前支持执行人员，请进入详情处理", RequestID: r.ID, RequestNo: r.RequestNo}); e != nil {
+					return e
+				}
+			}
 		}
 		from := r.Status
 		if from == StatusApprovedPendingAssignment {
@@ -832,6 +845,11 @@ func (s *Service) SelectExecutionDepartment(ctx context.Context, actor Actor, id
 			return e
 		}
 		r.ExecutionDepartmentID, r.ExecutionDepartment = in.DepartmentID, name
+		if s.notifications != nil {
+			if e = s.notifications.Write(tx, WorkflowNotification{TenantID: actor.TenantID, RecipientID: r.ApplicantID, Type: "PRESALE_DEPARTMENT_SELECTED", Title: "售前执行部门已确定", Body: "技术总监已选择执行部门：" + name, RequestID: r.ID, RequestNo: r.RequestNo}); e != nil {
+				return e
+			}
+		}
 		out = r
 		return nil
 	})
@@ -1177,16 +1195,8 @@ func (s *Service) AddWorklog(ctx context.Context, actor Actor, id uint64, key st
 		if e = s.repo.CreateWorklog(tx, w); e != nil {
 			return e
 		}
-		completed, e := s.completeIfReady(tx, r, assignments, actor.UserID, actor.RequestID)
-		if e != nil {
-			return e
-		}
-		w.CompletedTask = completed
-		if completed {
-			if e = s.repo.UpdateWorklogDelivery(tx, actor.TenantID, w.ID, map[string]any{"completed_task": true}); e != nil {
-				return e
-			}
-		}
+		// 工时只记录投入，不再自动结束申请；结束必须由当前技术人员显式点击“结束”。
+		w.CompletedTask = false
 		out = w
 		return nil
 	})
@@ -1230,6 +1240,56 @@ func (s *Service) AddWorklog(ctx context.Context, actor Actor, id uint64, key st
 		}
 	}
 	return out, e
+}
+
+func (s *Service) Complete(ctx context.Context, actor Actor, id uint64, in CompletePresaleInput) (*PresaleRequest, error) {
+	if !actor.Can("presale.complete") || actor.PersonID == "" || (!actor.HasRole("technician") && !actor.HasRole("implementation_engineer") && !actor.HasRole("project_manager") && !actor.HasRole("team_lead")) {
+		return nil, ErrForbidden
+	}
+	if in.Version == 0 || len([]rune(in.Reason)) > 1000 {
+		return nil, ErrInvalidInput
+	}
+	var out *PresaleRequest
+	err := s.repo.WithTransaction(ctx, func(tx context.Context) error {
+		r, e := s.repo.FindRequestForUpdate(tx, actor.TenantID, id)
+		if e != nil {
+			return e
+		}
+		if r.Status != StatusExecuting || r.Version != in.Version {
+			return ErrInvalidTransition
+		}
+		assignments, e := s.repo.ListCurrentAssignmentsForUpdate(tx, actor.TenantID, id)
+		if e != nil {
+			return e
+		}
+		current, executableAssignment := false, false
+		for _, a := range assignments {
+			if a.AssigneeID == actor.PersonID {
+				current = true
+				executableAssignment = a.AssigneeRole == "team_lead" || a.AssigneeRole == "project_manager" || a.AssigneeRole == "technician" || a.AssigneeRole == "implementation_engineer"
+				break
+			}
+		}
+		if !current || !executableAssignment {
+			return ErrForbidden
+		}
+		now := s.clock.Now()
+		if e = s.repo.UpdateRequestVersioned(tx, r, r.Version, map[string]any{"status": StatusCompleted, "completed_at": now, "updated_by": actor.UserID}); e != nil {
+			return e
+		}
+		if e = s.statusLog(tx, r, StatusExecuting, StatusCompleted, "MANUAL_COMPLETION", strings.TrimSpace(in.Reason), actor.UserID, actor.RequestID); e != nil {
+			return e
+		}
+		if s.notifications != nil {
+			if e = s.notifications.Write(tx, WorkflowNotification{TenantID: actor.TenantID, RecipientID: r.ApplicantID, Type: "PRESALE_COMPLETED", Title: "售前支持已完成", Body: "技术人员已人工结束售前支持流程", RequestID: r.ID, RequestNo: r.RequestNo}); e != nil {
+				return e
+			}
+		}
+		r.Status, r.CompletedAt = StatusCompleted, &now
+		out = r
+		return nil
+	})
+	return out, err
 }
 
 func worklogRequestHashes(actor Actor, requestID uint64, in AddWorklogInput) (string, string, error) {

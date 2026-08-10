@@ -799,6 +799,28 @@ func (h *Handler) SelectExecutionDepartment(c *gin.Context) {
 	response.OK(c, requestView(value))
 }
 
+func (h *Handler) Complete(c *gin.Context) {
+	actor, ok := h.actor(c)
+	if !ok {
+		return
+	}
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		response.Error(c, apiError(ErrInvalidInput))
+		return
+	}
+	var input CompletePresaleInput
+	if !bindJSON(c, &input) {
+		return
+	}
+	value, err := h.service.Complete(c.Request.Context(), actor, id, input)
+	if err != nil {
+		response.Error(c, apiError(err))
+		return
+	}
+	response.OK(c, requestView(value))
+}
+
 func (h *Handler) Assignments(c *gin.Context) {
 	actor, ok := h.actor(c)
 	if !ok {

@@ -121,6 +121,11 @@ func validateApprovalRule(rule ApprovalRule) error {
 	if _, err := rule.Expression.Match(ApprovalFacts{}); err != nil {
 		return ErrInvalidInput
 	}
+	// 售前流程的首审固定为销售总监；驳回后的编辑重提也始终回到该节点。
+	first := rule.Nodes[0]
+	if first.Type != ApprovalNodeApproval || strings.TrimSpace(first.RoleCode) != "sales_director" {
+		return ErrInvalidInput
+	}
 	seen := map[string]bool{}
 	for _, node := range rule.Nodes {
 		if strings.TrimSpace(node.ID) == "" || strings.TrimSpace(node.Name) == "" || seen[node.ID] || (node.Type != ApprovalNodeApproval && node.Type != ApprovalNodeDepartment && node.Type != ApprovalNodePerson) {

@@ -3,6 +3,22 @@
 > 当前阶段：CRM、售前和 Portal 核心生产代码已形成，本地基础平台接入闭环可运行；可选外部业务 Provider 仍需逐项联调
 
 CRM 与 Portal 已按两个独立应用内嵌浏览器授权目录，并可使用各自独立的 `authorization.catalog.sync` 机器 Client 发布至基础平台；生产启动会核验 OIDC `role_config_hash` 与当前二进制目录映射，避免平台授权与本地鉴权漂移。部署配置与 hash 查询命令见 [`DEVELOPMENT.md`](DEVELOPMENT.md)。Portal 邀请生成已在首次远程写前建立加密、可恢复的幂等 saga；平台预置、角色分配与 Portal mapping 使用每步稳定键，响应丢失后续跑同一操作，最终邀请和审计原子提交。基础平台已提供外部客户预置、Portal 角色分配/回收 Provider 和 OpenAPI；预置会创建稳定 OIDC `sub` 及一个没有初始密码的 HUMAN/LOCAL 登录账号。平台管理员通过现有账号生命周期显式初始化一次性临时密码，CRM 仅展示登录账号而不接触密码。本地 `customer_portal/dev` 可由平台部署 Agent 自动创建独立数据库、OIDC Client、角色目录和六组最小权限服务 Client；生产仍必须替换为 HTTPS、Secret 管理、生产数据库和正式网络策略。
+
+### Keycloak 灰度切换与回滚
+
+CRM 与 Portal 均通过各自的 `OIDC_ISSUER` 使用标准 OIDC Code + PKCE。将该变量改为
+Keycloak Realm 地址（例如 `https://sso.example.com/realms/basic-platform`）即可切换认证
+入口；Keycloak Client、回调地址以及 `tenant_id`、`roles`、`permissions`、
+`role_config_hash`、`authz_revision` Claims 必须先完成配置。CRM 和 Portal 的 ID Token 都严格
+要求 `token_use=id_token`；Portal 同样要求非空租户、角色、权限、角色目录哈希和授权版本。
+切换只影响认证配置，不修改 CRM/Portal 业务数据库。请保留旧环境文件，出现问题时恢复原 issuer
+和 Client 配置并重启，随后让用户重新登录完成回滚。
+
+Keycloak Protocol Mapper 必须让 ID Token 和 UserInfo 保留以下平台 Claims：`tenant_id`、`person_id`、
+`primary_org_id`、`organization_ids`、`roles`、`permissions`、`role_config_hash`、
+`authz_revision`。CRM 还严格要求 ID Token 的 `token_use` 为 `id_token`，并要求
+`identity_id` 与 `sub` 相等；`roles` 和 `permissions` 必须是目标 CRM 目录中的完整有效集合，
+不能用 Keycloak 的 `realm_access.roles` 替代平台最终授权结果。
 > 文档基线：CRM PRD V2.1、门户 PRD V1.1、售前技术支持 PRD V1.2
 > 最近整理：2026-08-01
 

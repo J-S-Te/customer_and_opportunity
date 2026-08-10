@@ -34,6 +34,14 @@ func TestPortalProjectHistoryStalenessThresholdIsPositive(t *testing.T) {
 	}
 }
 
+func TestPortalConfigAcceptsKeycloakRealmIssuer(t *testing.T) {
+	config := validPortalConfig()
+	config.OIDCIssuer = "https://sso.example.com/realms/basic-platform"
+	if err := config.validate(); err != nil {
+		t.Fatalf("Keycloak realm issuer rejected: %v", err)
+	}
+}
+
 func TestPortalReportIngestDescriptorKeyIsDedicated(t *testing.T) {
 	config := validPortalConfig()
 	config.ReportIngestDescriptorKey = nil
