@@ -113,6 +113,8 @@ type Config struct {
 	QBBidPublicURL                   string
 	QBLaunchSigningKey               []byte
 	QBLaunchTTL                      time.Duration
+	AttachmentLocalEnabled           bool
+	AttachmentLocalRoot              string
 	PlatformBaseURL                  string
 	PlatformApplicationCode          string
 	PlatformEnvironmentCode          string
@@ -247,6 +249,10 @@ func LoadConfig() (Config, error) {
 	if err != nil {
 		return Config{}, fmt.Errorf("PLATFORM_AUTHORIZATION_CATALOG_SYNC_ENABLED: %w", err)
 	}
+	attachmentLocalEnabled, err := strconv.ParseBool(valueOrDefault("ATTACHMENT_LOCAL_ENABLED", "true"))
+	if err != nil {
+		return Config{}, fmt.Errorf("ATTACHMENT_LOCAL_ENABLED: %w", err)
+	}
 	config := Config{
 		Address: valueOrDefault("HTTP_ADDRESS", ":8090"), MySQLDSN: os.Getenv("MYSQL_DSN"), PathPrefix: valueOrDefault("APP_PATH_PREFIX", "/customer-opportunity"), PublicOrigin: os.Getenv("APP_PUBLIC_ORIGIN"), EncryptionKey: encryptionKey, HMACKey: hmacKey,
 		OIDCIssuer: os.Getenv("OIDC_ISSUER"), OIDCBackchannelBaseURL: os.Getenv("OIDC_BACKCHANNEL_BASE_URL"),
@@ -325,6 +331,8 @@ func LoadConfig() (Config, error) {
 		},
 		QBLaunchEnabled: qbLaunchEnabled, QBQuotationPublicURL: os.Getenv("QB_QUOTATION_PUBLIC_URL"),
 		QBBidPublicURL: os.Getenv("QB_BID_PUBLIC_URL"), QBLaunchSigningKey: qbLaunchSigningKey, QBLaunchTTL: qbLaunchTTL,
+		AttachmentLocalEnabled:    attachmentLocalEnabled,
+		AttachmentLocalRoot:       valueOrDefault("ATTACHMENT_LOCAL_ROOT", "/app/data/attachments"),
 		PlatformBaseURL:           os.Getenv("PLATFORM_BASE_URL"),
 		PlatformApplicationCode:   valueOrDefault("PLATFORM_APPLICATION_CODE", "customer_and_opportunity"),
 		PlatformEnvironmentCode:   valueOrDefault("PLATFORM_ENVIRONMENT_CODE", "dev"),

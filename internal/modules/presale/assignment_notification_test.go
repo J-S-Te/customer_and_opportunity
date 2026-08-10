@@ -68,9 +68,11 @@ func TestReplaceAssignmentsWritesEvidenceAndOutboxForAddedAndRemoved(t *testing.
 	base := &mutationRepository{request: &PresaleRequest{BaseModel: BaseModel{ID: 9, TenantID: actor.TenantID, Version: 3}, RequestNo: "TS9", Status: StatusExecuting}, assignments: []Assignment{{BaseModel: BaseModel{ID: 20, TenantID: actor.TenantID, Version: 1}, RequestID: 9, AssigneeID: "old", AssigneeNameSnapshot: "旧人员", AssigneeRole: "implementation_engineer", AssignedAt: now.Add(-time.Hour), IsCurrent: true}}, engineers: []Engineer{{PersonID: "new", PersonName: "新人员", Role: "project_manager", ValidFlag: true}}, replays: map[string]*MutationReplay{}}
 	repo := &assignmentNotificationRepository{mutationRepository: base}
 	service := NewService(repo, nil, nil, fixedClock{at: now}, fixedIDs{}).UseOwnerDirectory(assignmentOwnerCatalog{users: map[string]ownerdirectory.User{
-		"new": {ID: "new", DisplayName: "权威姓名", Organizations: []ownerdirectory.Organization{{ID: "org-1", Name: "技术中心"}}},
+		"new": {ID: "new", DisplayName: "权威姓名", Organizations: []ownerdirectory.Organization{{ID: "org-1", Name: "技术中心", IsPrimary: true}}},
 	}})
-	_, err := service.ReplaceAssignments(context.Background(), actor, 9, "key", ReplaceAssignmentsInput{Assignees: []AssignmentTarget{{PersonID: "new", PersonName: "伪造姓名", Department: "伪造部门", DepartmentID: "org-1", Role: "project_manager"}}, ChangeReason: "项目阶段变化", Version: 3})
+	// 浏览器只选择人员；组织归属必须由服务端从基础平台权威目录推导，不能要求
+	// 前端携带或手填内部 organization_id。
+	_, err := service.ReplaceAssignments(context.Background(), actor, 9, "key", ReplaceAssignmentsInput{Assignees: []AssignmentTarget{{PersonID: "new", PersonName: "伪造姓名", Department: "伪造部门", Role: "project_manager"}}, ChangeReason: "项目阶段变化", Version: 3})
 	if err != nil {
 		t.Fatal(err)
 	}

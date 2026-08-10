@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/ownerdirectory"
 )
 
 type queryRepository struct {
@@ -245,6 +247,16 @@ func TestFilterOptionsUsesAuthenticatedScopeAndSharedFilters(t *testing.T) {
 	}
 	if len(repo.receivedQueries) != 1 || repo.receivedQueries[0].Venue != VenueRemote || repo.receivedScope.All {
 		t.Fatalf("queries=%+v scope=%+v", repo.receivedQueries, repo.receivedScope)
+	}
+}
+
+func TestListRequestsEnrichesEmptyApplicantSnapshotFromPlatformDirectory(t *testing.T) {
+	repo := &queryRepository{}
+	directory := &pagedOwnerDirectoryStub{users: []ownerdirectory.User{{ID: "sales-1", DisplayName: "测试销售"}}}
+	service := NewService(repo, nil, nil, fixedClock{}, fixedIDs{}).UseOwnerDirectory(directory)
+	page, err := service.ListRequests(context.Background(), actorWithRoles("sales-1", "sales-1", "sales"), RequestListQuery{Page: 1, PageSize: 20})
+	if err != nil || len(page.Items) != 1 || page.Items[0].ApplicantName != "测试销售" {
+		t.Fatalf("page=%+v error=%v", page, err)
 	}
 }
 

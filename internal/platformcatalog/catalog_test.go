@@ -38,9 +38,14 @@ func TestApplicationManifestsAreCompleteAndIndependent(t *testing.T) {
 	if !roleHasPermission(crm, "sales_director", "opportunity.contract.transfer") || roleHasPermission(crm, "sales", "opportunity.contract.transfer") {
 		t.Fatal("high-risk contract transfer permission is not limited to the sales director role")
 	}
-	for _, roleCode := range []string{"sales_director", "team_lead", "technical_lead", "technician", "implementation_engineer"} {
+	for _, roleCode := range []string{"sales_director", "technical_director", "team_lead", "technical_lead", "technician", "implementation_engineer"} {
 		if !roleHasPermission(crm, roleCode, "presale.contact_phone.read") {
 			t.Fatalf("CRM role %s cannot enter the separately authorized contact-phone workflow", roleCode)
+		}
+	}
+	for _, permission := range []string{"presale.approve", "presale.assign"} {
+		if !roleHasPermission(crm, "technical_director", permission) {
+			t.Fatalf("technical director cannot execute configured approval workflow permission %s", permission)
 		}
 	}
 	for _, roleCode := range []string{"sales", "auditor", "customer_admin"} {

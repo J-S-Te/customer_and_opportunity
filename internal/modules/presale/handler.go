@@ -1,7 +1,6 @@
 package presale
 
 import (
-	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/ownerdirectory"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -157,7 +156,7 @@ func (h *Handler) ExecutionDepartments(c *gin.Context) {
 		response.Error(c, apiError(ErrDependencyUnavailable))
 		return
 	}
-	page, err := h.service.ownerDirectory.List(c.Request.Context(), ownerdirectory.Query{Page: 1, PageSize: 200})
+	users, err := listOwnerDirectoryUsers(c.Request.Context(), h.service.ownerDirectory)
 	if err != nil {
 		response.Error(c, apiError(err))
 		return
@@ -168,7 +167,7 @@ func (h *Handler) ExecutionDepartments(c *gin.Context) {
 	}
 	seen := map[string]bool{}
 	result := make([]department, 0)
-	for _, person := range page.Items {
+	for _, person := range users {
 		for _, org := range person.Organizations {
 			if org.ID != "" && !seen[org.ID] {
 				seen[org.ID] = true

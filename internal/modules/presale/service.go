@@ -97,6 +97,17 @@ func (s *Service) CreateRequest(ctx context.Context, actor Actor, key string, in
 	if err != nil {
 		return nil, err
 	}
+	applicantName := strings.TrimSpace(actor.UserName)
+	if applicantName == "" && s.ownerDirectory != nil {
+		names, resolveErr := resolveOwnerDisplayNames(ctx, s.ownerDirectory, []string{actor.UserID})
+		if resolveErr != nil {
+			return nil, resolveErr
+		}
+		applicantName = names[actor.UserID]
+		if applicantName == "" {
+			return nil, ErrDependencyUnavailable
+		}
+	}
 	hash, legacyHash, err := createRequestHashes(actor, in)
 	if err != nil {
 		return nil, err
@@ -142,7 +153,7 @@ func (s *Service) CreateRequest(ctx context.Context, actor Actor, key string, in
 		if e != nil {
 			return e
 		}
-		r := &PresaleRequest{BaseModel: BaseModel{TenantID: actor.TenantID, CreatedBy: actor.UserID, UpdatedBy: actor.UserID, Version: 1}, RequestNo: no, OpportunityID: opp.ID, OpportunityNoSnapshot: opp.OpportunityNo, ApplicantID: actor.UserID, ApplicantNameSnapshot: actor.UserName, Venue: in.Venue, ServiceAddress: strings.TrimSpace(in.ServiceAddress), ContactName: strings.TrimSpace(in.ContactName), ContactPhoneCipher: cipher, ContactPhoneMasked: s.phones.Mask(in.ContactPhone), Description: strings.TrimSpace(in.Description), ExpectedStart: in.ExpectedStart.UTC(), ExpectedEnd: in.ExpectedEnd.UTC(), Urgency: in.Urgency, Status: StatusPendingApproval, CurrentApprovalNode: 1, CreateIdempotencyKey: key, CreateRequestHash: hash}
+		r := &PresaleRequest{BaseModel: BaseModel{TenantID: actor.TenantID, CreatedBy: actor.UserID, UpdatedBy: actor.UserID, Version: 1}, RequestNo: no, OpportunityID: opp.ID, OpportunityNoSnapshot: opp.OpportunityNo, ApplicantID: actor.UserID, ApplicantNameSnapshot: applicantName, Venue: in.Venue, ServiceAddress: strings.TrimSpace(in.ServiceAddress), ContactName: strings.TrimSpace(in.ContactName), ContactPhoneCipher: cipher, ContactPhoneMasked: s.phones.Mask(in.ContactPhone), Description: strings.TrimSpace(in.Description), ExpectedStart: in.ExpectedStart.UTC(), ExpectedEnd: in.ExpectedEnd.UTC(), Urgency: in.Urgency, Status: StatusPendingApproval, CurrentApprovalNode: 1, CreateIdempotencyKey: key, CreateRequestHash: hash}
 		if e = s.repo.CreateRequest(tx, r); e != nil {
 			return e
 		}
@@ -360,7 +371,7 @@ func (s *Service) RequestApprovalAction(ctx context.Context, actor Actor, id uin
 	if in.Version == 0 || len([]rune(in.Comment)) > 2000 || (in.Action == "REJECT" && in.Comment == "") {
 		return ErrInvalidInput
 	}
-	if !actor.HasRole("sales_director") && !actor.HasRole("team_lead") && !actor.HasRole("crm_super_admin") {
+	if !actor.HasRole("sales_director") && !actor.HasRole("technical_director") && !actor.HasRole("team_lead") && !actor.HasRole("crm_super_admin") {
 		return ErrForbidden
 	}
 	hash, err := mutationDigest(actor, id, "APPROVAL_ACTION", in.Action, struct {
@@ -448,8 +459,15 @@ func (s *Service) applyInternalApprovalAction(ctx context.Context, actor Actor, 
 	sequence := instance.LastEventSeq + 1
 	taskID := fmt.Sprintf("crm-task-%d-%d-%d", request.ID, node, request.Version)
 	approverName := strings.TrimSpace(actor.UserName)
-	if approverName == "" {
-		approverName = actor.UserID
+	if approverName == "" && s.ownerDirectory != nil {
+		names, err := resolveOwnerDisplayNames(ctx, s.ownerDirectory, []string{actor.UserID})
+		if err != nil {
+			return err
+		}
+		approverName = names[actor.UserID]
+		if approverName == "" {
+			return ErrDependencyUnavailable
+		}
 	}
 	log := &ApprovalLog{
 		TenantID: actor.TenantID, RequestID: request.ID, Node: node,
@@ -471,9 +489,9 @@ func (s *Service) applyInternalApprovalAction(ctx context.Context, actor Actor, 
 		requestFields["current_approval_node"] = 0
 		instanceFields["status"] = "REJECTED"
 		instanceFields["finished_at"] = now
-	} else if nodeHasNext(instance, node) {
-		requestFields["current_approval_node"] = 2
-		instanceFields["current_node"] = 2
+	} else if nextNode, ok := nextApprovalNode(instance, node); ok {
+		requestFields["current_approval_node"] = nextNode
+		instanceFields["current_node"] = nextNode
 	} else {
 		to = StatusApprovedPendingAssignment
 		requestFields["status"] = to
@@ -548,9 +566,9 @@ func (s *Service) HandleApprovalCallback(ctx context.Context, tenant string, in 
 			fields["current_approval_node"] = 0
 			instFields["status"] = "REJECTED"
 			instFields["finished_at"] = in.OccurredAt.UTC()
-		} else if nodeHasNext(inst, in.Node) {
-			fields["current_approval_node"] = 2
-			instFields["current_node"] = 2
+		} else if nextNode, ok := nextApprovalNode(inst, in.Node); ok {
+			fields["current_approval_node"] = nextNode
+			instFields["current_node"] = nextNode
 		} else {
 			fields["status"] = StatusApprovedPendingAssignment
 			fields["current_approval_node"] = 0
@@ -566,7 +584,7 @@ func (s *Service) HandleApprovalCallback(ctx context.Context, tenant string, in 
 		to := StatusPendingApproval
 		if in.Result == "REJECT" {
 			to = StatusRejected
-		} else if in.Node == 2 {
+		} else if _, hasNext := nextApprovalNode(inst, in.Node); !hasNext {
 			to = StatusApprovedPendingAssignment
 		}
 		if to != from {
@@ -591,7 +609,7 @@ func (s *Service) ReplaceAssignments(ctx context.Context, actor Actor, id uint64
 	targets := map[string]AssignmentTarget{}
 	allowedRoles := map[string]bool{"technical_director": true, "team_lead": true, "project_manager": true, "implementation_engineer": true}
 	for _, v := range in.Assignees {
-		if strings.TrimSpace(v.PersonID) == "" || (s.ownerDirectory != nil && strings.TrimSpace(v.DepartmentID) == "") || !allowedRoles[v.Role] || len([]rune(v.PersonName)) > 128 || len([]rune(v.Department)) > 128 || len([]rune(v.DepartmentID)) > 64 {
+		if strings.TrimSpace(v.PersonID) == "" || !allowedRoles[v.Role] || len([]rune(v.PersonName)) > 128 || len([]rune(v.Department)) > 128 || len([]rune(v.DepartmentID)) > 64 {
 			return nil, ErrInvalidInput
 		}
 		v.PersonID = strings.TrimSpace(v.PersonID)
@@ -624,9 +642,22 @@ func (s *Service) ReplaceAssignments(ctx context.Context, actor Actor, id uint64
 				name = personID
 			}
 			departments := make([]string, 0, len(person.Organizations))
+			target := targets[personID]
+			selectedDepartmentID := strings.TrimSpace(target.DepartmentID)
+			if selectedDepartmentID == "" {
+				for _, organization := range person.Organizations {
+					if organization.IsPrimary {
+						selectedDepartmentID = organization.ID
+						break
+					}
+				}
+				if selectedDepartmentID == "" && len(person.Organizations) > 0 {
+					selectedDepartmentID = person.Organizations[0].ID
+				}
+			}
 			inDepartment := false
 			for _, organization := range person.Organizations {
-				if organization.ID == targets[personID].DepartmentID {
+				if organization.ID == selectedDepartmentID {
 					inDepartment = true
 				}
 				if value := strings.TrimSpace(organization.Name); value != "" {
@@ -636,7 +667,7 @@ func (s *Service) ReplaceAssignments(ctx context.Context, actor Actor, id uint64
 			if !inDepartment {
 				return nil, ownerdirectory.ErrSelectionInvalid
 			}
-			target := targets[personID]
+			target.DepartmentID = selectedDepartmentID
 			target.PersonName = name
 			target.Department = strings.Join(departments, "、")
 			if len([]rune(target.PersonName)) > 128 || len([]rune(target.Department)) > 128 {
@@ -769,13 +800,13 @@ func (s *Service) SelectExecutionDepartment(ctx context.Context, actor Actor, id
 	if s.ownerDirectory == nil {
 		return nil, ErrDependencyUnavailable
 	}
-	page, err := s.ownerDirectory.List(ctx, ownerdirectory.Query{Page: 1, PageSize: 200})
+	users, err := listOwnerDirectoryUsers(ctx, s.ownerDirectory)
 	if err != nil {
 		return nil, err
 	}
 	name := strings.TrimSpace(in.Department)
 	found := false
-	for _, person := range page.Items {
+	for _, person := range users {
 		for _, org := range person.Organizations {
 			if org.ID == in.DepartmentID {
 				if name == "" {
@@ -1298,6 +1329,8 @@ func approvalReplayRoleAllowed(actor Actor, replayAction string) error {
 		return nil
 	case strings.HasPrefix(replayAction, "NODE_2_") && (actor.HasRole("team_lead") || actor.HasRole("crm_super_admin")):
 		return nil
+	case strings.HasPrefix(replayAction, "NODE_2_") && actor.HasRole("technical_director"):
+		return nil
 	default:
 		return ErrForbidden
 	}
@@ -1307,18 +1340,23 @@ func approvalNodeRoleAllowed(actor Actor, node uint8) bool {
 	if actor.HasRole("crm_super_admin") {
 		return node == 1 || node == 2
 	}
-	return node == 1 && (actor.HasRole("sales_director") || actor.HasRole("crm_super_admin")) || node == 2 && (actor.HasRole("team_lead") || actor.HasRole("crm_super_admin"))
+	return node == 1 && (actor.HasRole("sales_director") || actor.HasRole("crm_super_admin")) || node == 2 && (actor.HasRole("technical_director") || actor.HasRole("team_lead") || actor.HasRole("crm_super_admin"))
 }
 
-func nodeHasNext(instance *ApprovalInstance, node uint8) bool {
+func nextApprovalNode(instance *ApprovalInstance, node uint8) (uint8, bool) {
 	if instance == nil || len(instance.NodesJSON) == 0 {
-		return node == 1
+		return 2, node == 1
 	}
 	var nodes []ApprovalNode
 	if json.Unmarshal(instance.NodesJSON, &nodes) != nil || len(nodes) == 0 {
-		return node == 1
+		return 2, node == 1
 	}
-	return int(node) < len(nodes)
+	for index := int(node); index < len(nodes); index++ {
+		if nodes[index].Type == ApprovalNodeApproval {
+			return uint8(index + 1), true
+		}
+	}
+	return 0, false
 }
 
 func approvalNodeRoleAllowedForInstance(actor Actor, node uint8, instance *ApprovalInstance) bool {
@@ -1517,7 +1555,7 @@ func (s *Service) Assignments(ctx context.Context, actor Actor, id uint64) ([]As
 // 被分派的基础平台用户可读其当前或历史分派。分派角色不从 OIDC 角色猜测，
 // 因而猜中租户内申请 ID 也不能绕过真实业务关系。
 func (s *Service) requireReadable(ctx context.Context, actor Actor, value *PresaleRequest) error {
-	if actor.HasRole("sales_director") || actor.HasRole("team_lead") || actor.HasRole("technical_lead") || actor.HasRole("crm_super_admin") || actor.HasRole("auditor") {
+	if actor.HasRole("sales_director") || actor.HasRole("technical_director") || actor.HasRole("team_lead") || actor.HasRole("technical_lead") || actor.HasRole("crm_super_admin") || actor.HasRole("auditor") {
 		return nil
 	}
 	if actor.HasRole("sales") && value.ApplicantID == actor.UserID {
