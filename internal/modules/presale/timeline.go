@@ -121,6 +121,23 @@ func (s *Service) Timeline(ctx context.Context, actor Actor, requestID uint64, c
 	if err != nil {
 		return TimelinePage{}, err
 	}
+	missingActorIDs := make([]string, 0)
+	for _, record := range records {
+		if record.ActorID != "" && (strings.TrimSpace(record.ActorName) == "" || record.ActorName == record.ActorID) {
+			missingActorIDs = append(missingActorIDs, record.ActorID)
+		}
+	}
+	if len(missingActorIDs) > 0 {
+		names, resolveErr := resolveOwnerDisplayNames(ctx, s.ownerDirectory, missingActorIDs)
+		if resolveErr != nil {
+			return TimelinePage{}, resolveErr
+		}
+		for index := range records {
+			if name := names[records[index].ActorID]; name != "" && (strings.TrimSpace(records[index].ActorName) == "" || records[index].ActorName == records[index].ActorID) {
+				records[index].ActorName = name
+			}
+		}
+	}
 	hasMore := len(records) > limit
 	if hasMore {
 		records = records[:limit]
@@ -151,9 +168,10 @@ func (s *Service) AvailableActions(ctx context.Context, actor Actor, requestID u
 	}
 	actions := append([]string(nil), detail.AvailableActions...)
 	request := detail.Request
-	if request.Status == StatusPendingApproval && actor.Can("presale.approve") && approvalNodeRoleAllowed(actor, request.CurrentApprovalNode) {
+	if request.Status == StatusPendingApproval && actor.Can("presale.approve") {
 		instance, instanceErr := s.repo.FindApprovalInstance(ctx, actor.TenantID, requestID)
-		if instanceErr == nil && instance.EngineInstanceID != "" && instance.Status == "PENDING" && instance.CurrentNode == request.CurrentApprovalNode &&
+		if instanceErr == nil && approvalNodeRoleAllowedForInstance(actor, request.CurrentApprovalNode, instance) &&
+			instance.EngineInstanceID != "" && instance.Status == "PENDING" && instance.CurrentNode == request.CurrentApprovalNode &&
 			instance.PendingTaskID == "" && instance.PendingApprover == "" && instance.PendingAction == "" {
 			if s.approvalTasks == nil {
 				actions = append(actions, "APPROVE", "REJECT")

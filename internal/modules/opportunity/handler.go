@@ -83,6 +83,20 @@ func (h *Handler) CompleteAttachmentUpload(c *gin.Context) {
 	response.OK(c, value)
 }
 
+func (h *Handler) UploadAttachmentContent(c *gin.Context) {
+	id, err := attachmentOpportunityID(c)
+	if err != nil {
+		response.Error(c, err)
+		return
+	}
+	value, err := h.attachments.UploadContent(c.Request.Context(), id, c.Param("attachmentID"), c.Request.Body, c.GetHeader("Content-Type"), c.Request.ContentLength)
+	if err != nil {
+		response.Error(c, err)
+		return
+	}
+	response.OK(c, value)
+}
+
 func (h *Handler) ListAttachments(c *gin.Context) {
 	id, err := attachmentOpportunityID(c)
 	if err != nil {

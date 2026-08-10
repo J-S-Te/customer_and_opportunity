@@ -210,7 +210,7 @@ func principalFromClaims(claims verifiedClaims) sharedauth.Principal {
 func scopeForRoles(roles []string) sharedauth.ScopeMode {
 	for _, role := range roles {
 		switch role {
-		case "admin", "platform-super-admin", "platform_security_admin", "sales_director", "team_lead", "technical_lead", "customer_admin", "crm_super_admin", "auditor":
+		case "admin", "platform-super-admin", "platform_security_admin", "sales_director", "technical_director", "team_lead", "technical_lead", "customer_admin", "crm_super_admin", "auditor":
 			return sharedauth.ScopeAll
 		}
 	}

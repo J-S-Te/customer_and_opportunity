@@ -34,6 +34,7 @@ func RegisterRoutes(router *gin.RouterGroup, handler *Handler) {
 	opportunities.GET("/:id/attachment-capabilities", middleware.RequirePermission("opportunity.attachment.read"), handler.AttachmentCapabilities)
 	opportunities.GET("/:id/attachments", middleware.RequirePermission("opportunity.attachment.read"), handler.ListAttachments)
 	opportunities.POST("/:id/attachments", middleware.RequirePermission("opportunity.attachment.upload"), handler.CreateAttachmentUpload)
+	opportunities.PUT("/:id/attachments/:attachmentID/content", middleware.RequirePermission("opportunity.attachment.upload"), handler.UploadAttachmentContent)
 	opportunities.POST("/:id/attachments/:attachmentID/complete", middleware.RequirePermission("opportunity.attachment.upload"), handler.CompleteAttachmentUpload)
 	opportunities.GET("/:id/attachments/:attachmentID/content", middleware.RequirePermission("opportunity.attachment.download"), handler.DownloadAttachment)
 }

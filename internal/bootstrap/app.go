@@ -270,9 +270,17 @@ func New(config Config) (*App, error) {
 		}
 		opportunityService.UseExternalLaunchSigner(signer)
 	}
-	attachmentService := opportunity.NewAttachmentService(opportunity.NewGORMAttachmentRepository(db), opportunityRepo, auditWriter, opportunity.UnavailableAttachmentObjectStore{}, opportunity.UnavailableAttachmentScanner{}, 0)
-	// 对象存储和扫描器尚未接入时保留不可用实现，使上传能力失败关闭；不能仅因元数据表可写
-	// 就向客户端承诺附件已经安全落盘。
+	var attachmentStore opportunity.AttachmentObjectStore = opportunity.UnavailableAttachmentObjectStore{}
+	var attachmentScanner opportunity.AttachmentScanner = opportunity.UnavailableAttachmentScanner{}
+	if config.AttachmentLocalEnabled {
+		localStore, storeErr := opportunity.NewLocalAttachmentObjectStore(config.AttachmentLocalRoot)
+		if storeErr != nil {
+			return nil, storeErr
+		}
+		attachmentStore = localStore
+		attachmentScanner = opportunity.NewCodeAttachmentScanner(localStore)
+	}
+	attachmentService := opportunity.NewAttachmentService(opportunity.NewGORMAttachmentRepository(db), opportunityRepo, auditWriter, attachmentStore, attachmentScanner, 0)
 	opportunityHandler := opportunity.NewHandler(opportunityService).UseStageAlerts(opportunity.NewStageAlertService(db)).UseAttachments(attachmentService)
 	opportunity.RegisterRoutes(api, opportunityHandler)
 	notification.RegisterRoutes(api, notification.NewHandler(notification.NewService(db)))

@@ -141,6 +141,7 @@ paths:
     post: {$ref: '#/components/x-operations/completeOpportunityAttachment'}
   /api/v1/opportunities/{id}/attachments/{attachmentID}/content:
     get: {$ref: '#/components/x-operations/downloadOpportunityAttachment'}
+    put: {$ref: '#/components/x-operations/uploadOpportunityAttachmentContent'}
   /api/v1/opportunities/{id}/presale-requests:
     get: {$ref: '#/components/x-operations/listOpportunityPresaleRequests'}
   /api/v1/notifications:
@@ -549,7 +550,8 @@ components:
     transferOpportunityContract: {<<: *opportunityIDRead, operationId: transferOpportunityContract, x-permission: opportunity.contract.transfer, parameters: [{$ref: '#/components/parameters/OpportunityID'}, {$ref: '#/components/parameters/IdempotencyKey'}]}
     getOpportunityAttachmentCapabilities: {<<: *opportunityIDRead, operationId: getOpportunityAttachmentCapabilities, x-permission: opportunity.attachment.read}
     listOpportunityAttachments: {<<: *opportunityIDRead, operationId: listOpportunityAttachments, x-permission: opportunity.attachment.read}
-    createOpportunityAttachment: {<<: *opportunityIDRead, operationId: createOpportunityAttachment, x-permission: opportunity.attachment.upload, parameters: [{$ref: '#/components/parameters/OpportunityID'}, {$ref: '#/components/parameters/IdempotencyKey'}], description: Object store and scanner Providers are pending; unavailable configuration fails closed.}
+    createOpportunityAttachment: {<<: *opportunityIDRead, operationId: createOpportunityAttachment, x-permission: opportunity.attachment.upload, parameters: [{$ref: '#/components/parameters/OpportunityID'}, {$ref: '#/components/parameters/IdempotencyKey'}], description: Creates a bounded upload session backed by isolated local storage or a configured external object store.}
+    uploadOpportunityAttachmentContent: {<<: *opportunityIDRead, operationId: uploadOpportunityAttachmentContent, x-permission: opportunity.attachment.upload, parameters: [{$ref: '#/components/parameters/OpportunityID'}, {name: attachmentID, in: path, required: true, schema: {type: string}}], description: Streams one attachment into isolated storage; size, MIME and SHA-256 are verified again by the server before code scanning.}
     completeOpportunityAttachment: {<<: *opportunityIDRead, operationId: completeOpportunityAttachment, x-permission: opportunity.attachment.upload, parameters: [{$ref: '#/components/parameters/OpportunityID'}, {name: attachmentID, in: path, required: true, schema: {type: string}}, {$ref: '#/components/parameters/IdempotencyKey'}]}
     downloadOpportunityAttachment: {operationId: downloadOpportunityAttachment, tags: [Opportunity], x-permission: opportunity.attachment.download, security: [{crmSession: []}], parameters: [{$ref: '#/components/parameters/OpportunityID'}, {name: attachmentID, in: path, required: true, schema: {type: string}}], responses: {'200': {$ref: '#/components/responses/Binary'}, '401': {$ref: '#/components/responses/Error'}, '403': {$ref: '#/components/responses/Error'}, '404': {$ref: '#/components/responses/Error'}, '503': {$ref: '#/components/responses/Error'}}}
     listOpportunityPresaleRequests: {<<: *opportunityIDRead, operationId: listOpportunityPresaleRequests}

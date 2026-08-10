@@ -1,6 +1,9 @@
 package presale
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
 
 func TestMatchHighestApprovalRuleUsesPriorityAndCopiesNodes(t *testing.T) {
 	rules := []ApprovalRule{
@@ -22,5 +25,24 @@ func TestApprovalExpressionSupportsVenueAndUrgency(t *testing.T) {
 	matched, err := expression.Match(ApprovalFacts{Urgency: "URGENT", Venue: "ONSITE"})
 	if err != nil || !matched {
 		t.Fatalf("matched=%v err=%v", matched, err)
+	}
+}
+
+func TestNextApprovalNodeSkipsAssignmentNodes(t *testing.T) {
+	nodes, err := json.Marshal([]ApprovalNode{
+		{ID: "sales", Type: ApprovalNodeApproval, RoleCode: "sales_director"},
+		{ID: "technical", Type: ApprovalNodeApproval, RoleCode: "technical_director"},
+		{ID: "department", Type: ApprovalNodeDepartment, RoleCode: "technical_director"},
+		{ID: "person", Type: ApprovalNodePerson, RoleCode: "team_lead"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	instance := &ApprovalInstance{NodesJSON: nodes}
+	if next, ok := nextApprovalNode(instance, 1); !ok || next != 2 {
+		t.Fatalf("next approval after node 1 = %d, %v", next, ok)
+	}
+	if next, ok := nextApprovalNode(instance, 2); ok || next != 0 {
+		t.Fatalf("assignment nodes must not keep approval pending: next=%d ok=%v", next, ok)
 	}
 }

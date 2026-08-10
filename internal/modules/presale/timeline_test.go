@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/ownerdirectory"
 )
 
 type timelineRepository struct {
@@ -17,6 +19,20 @@ type timelineRepository struct {
 	records       []TimelineRecord
 	timelineCalls int
 	received      *TimelineCursor
+}
+
+func TestTimelineEnrichesHistoricalActorNamesFromPlatformDirectory(t *testing.T) {
+	repo := &timelineRepository{request: requestFixture(), records: []TimelineRecord{{
+		SourceID: 1, TypePriority: 10, EventType: "STATUS_CHANGED", OccurredAt: time.Now().UTC(), ActorID: "lead-1",
+	}}}
+	directory := &pagedOwnerDirectoryStub{users: []ownerdirectory.User{{ID: "lead-1", DisplayName: "测试团队负责人"}}}
+	service := NewService(repo, nil, nil, fixedClock{}, fixedIDs{}).
+		UseOwnerDirectory(directory).
+		UseTimelineCursorKey([]byte("01234567890123456789012345678901"))
+	page, err := service.Timeline(context.Background(), managerActor("team_lead"), repo.request.ID, "", 20)
+	if err != nil || len(page.Items) != 1 || page.Items[0].ActorName != "测试团队负责人" {
+		t.Fatalf("page=%+v error=%v", page, err)
+	}
 }
 
 func (r *timelineRepository) FindRequest(_ context.Context, tenant string, id uint64) (*PresaleRequest, error) {
@@ -149,6 +165,39 @@ func TestAvailableActionsPublishesApprovalOnlyAfterAuthoritativeTaskResolution(t
 	value, err = service.AvailableActions(context.Background(), actor, 7)
 	if err != nil || timelineContains(value.Actions, "APPROVE") || timelineContains(value.Actions, "REJECT") {
 		t.Fatalf("mismatched task actions=%+v error=%v", value, err)
+	}
+}
+
+func TestAvailableActionsUsesConfiguredApprovalNodeRole(t *testing.T) {
+	nodes, err := json.Marshal([]ApprovalNode{
+		{ID: "sales", Type: ApprovalNodeApproval, RoleCode: "sales_director"},
+		{ID: "technical", Type: ApprovalNodeApproval, RoleCode: "technical_director"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := &PresaleRequest{BaseModel: BaseModel{ID: 8, TenantID: "tenant-1", Version: 3}, Status: StatusPendingApproval, CurrentApprovalNode: 2}
+	instance := &ApprovalInstance{EngineInstanceID: "instance-8", Status: "PENDING", CurrentNode: 2, NodesJSON: nodes}
+	resolver := &recordingApprovalTaskResolver{}
+	repo := &queryRepository{request: request, approval: instance}
+	service := NewService(repo, nil, nil, fixedClock{}, fixedIDs{}).UseApprovalTaskResolver(resolver)
+
+	teamLead := managerActor("team_lead")
+	teamLead.UserID = "team-lead"
+	teamLead.Permissions["presale.approve"] = true
+	resolver.task = ApprovalTask{EngineTaskID: "wrong-role-task", EngineInstanceID: instance.EngineInstanceID, Node: 2, ApproverID: teamLead.UserID}
+	value, err := service.AvailableActions(context.Background(), teamLead, request.ID)
+	if err != nil || timelineContains(value.Actions, "APPROVE") || timelineContains(value.Actions, "REJECT") {
+		t.Fatalf("team lead received technical-director node actions=%v error=%v", value.Actions, err)
+	}
+
+	technicalDirector := managerActor("technical_director")
+	technicalDirector.UserID = "technical-director"
+	technicalDirector.Permissions["presale.approve"] = true
+	resolver.task = ApprovalTask{EngineTaskID: "technical-task", EngineInstanceID: instance.EngineInstanceID, Node: 2, ApproverID: technicalDirector.UserID}
+	value, err = service.AvailableActions(context.Background(), technicalDirector, request.ID)
+	if err != nil || !timelineContains(value.Actions, "APPROVE") || !timelineContains(value.Actions, "REJECT") {
+		t.Fatalf("technical director actions=%v error=%v", value.Actions, err)
 	}
 }
 

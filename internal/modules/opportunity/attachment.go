@@ -103,6 +103,7 @@ type AttachmentResponse struct {
 type AttachmentUploadSessionResponse struct {
 	Attachment AttachmentResponse `json:"attachment"`
 	UploadURL  string             `json:"upload_url"`
+	UploadMode string             `json:"upload_mode"`
 	ExpiresAt  time.Time          `json:"expires_at"`
 }
 
@@ -140,6 +141,18 @@ type AttachmentScanner interface {
 	// Submit 以 idempotencyKey 作为业务上的唯一执行坐标：同键同对象必须返回原扫描引用，
 	// 同键换对象必须失败。
 	Submit(context.Context, string, string, string, string, uint64, string) (string, error)
+}
+
+// InternalAttachmentContentStore 由 CRM 自身接收文件流。实现必须在写入时重新计算
+// 大小和摘要，且不得信任浏览器声明的 MIME、Content-Length 或文件名。
+type InternalAttachmentContentStore interface {
+	AttachmentObjectStore
+	PutVerified(context.Context, string, io.Reader, uint64, string, string) error
+}
+
+type ImmediateAttachmentScanner interface {
+	AttachmentScanner
+	ImmediateStatus(string) (string, bool)
 }
 
 type UnavailableAttachmentObjectStore struct{}
@@ -357,7 +370,44 @@ func (s *AttachmentService) CreateUpload(ctx context.Context, opportunityID uint
 		return nil, err
 	}
 	value.UploadExpiresAt, value.UploadLeaseUntil = &grant.ExpiresAt, nil
-	return &AttachmentUploadSessionResponse{Attachment: toAttachment(value), UploadURL: grant.URL, ExpiresAt: grant.ExpiresAt}, nil
+	uploadMode := "DIRECT"
+	if _, ok := s.store.(InternalAttachmentContentStore); ok {
+		uploadMode = "INTERNAL"
+		grant.URL = "/opportunities/" + uintString(opportunityID) + "/attachments/" + value.PublicID + "/content"
+	}
+	return &AttachmentUploadSessionResponse{Attachment: toAttachment(value), UploadURL: grant.URL, UploadMode: uploadMode, ExpiresAt: grant.ExpiresAt}, nil
+}
+
+func (s *AttachmentService) UploadContent(ctx context.Context, opportunityID uint64, id string, body io.Reader, contentType string, contentLength int64) (*AttachmentResponse, error) {
+	principal, err := requirePrincipal(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if _, err = s.opportunities.FindByID(ctx, principal, opportunityID); err != nil {
+		return nil, err
+	}
+	store, ok := s.store.(InternalAttachmentContentStore)
+	if !ok || !store.Available() {
+		return nil, ErrAttachmentUnavailable
+	}
+	value, err := s.repo.Find(ctx, principal.TenantID, opportunityID, strings.TrimSpace(id))
+	if err != nil {
+		return nil, err
+	}
+	if value.CreateActorID != principal.UserID || value.ScanStatus != AttachmentPendingUpload || value.UploadExpiresAt == nil || value.UploadExpiresAt.Before(s.now()) {
+		return nil, ErrAttachmentNotReady
+	}
+	if contentLength < 0 || uint64(contentLength) != value.SizeBytes || canonicalMIME(contentType) != value.MIMEType {
+		return nil, ErrAttachmentInvalid
+	}
+	if err = store.PutVerified(ctx, value.ObjectKey, body, value.SizeBytes, value.SHA256, value.MIMEType); err != nil {
+		if errors.Is(err, ErrAttachmentInvalid) || errors.Is(err, ErrAttachmentRejected) {
+			return nil, err
+		}
+		return nil, ErrAttachmentUnavailable
+	}
+	result := toAttachment(value)
+	return &result, nil
 }
 
 func (s *AttachmentService) CompleteUpload(ctx context.Context, opportunityID uint64, id string, input AttachmentCompleteRequest) (*AttachmentResponse, error) {
@@ -419,8 +469,19 @@ func (s *AttachmentService) CompleteUpload(ctx context.Context, opportunityID ui
 		return nil, ErrAttachmentUnavailable
 	}
 	now := s.now()
+	scanStatus := AttachmentScanning
+	var scannedAt *time.Time
+	if immediate, ok := s.scanner.(ImmediateAttachmentScanner); ok {
+		if status, found := immediate.ImmediateStatus(scanRef); found {
+			if status != AttachmentClean && status != AttachmentRejected {
+				s.releaseFinalizeLease(ctx, value, principal.UserID)
+				return nil, ErrAttachmentUnavailable
+			}
+			scanStatus, scannedAt = status, &now
+		}
+	}
 	value.UpdatedBy = principal.UserID
-	value.ObjectVersion, value.ScanReference, value.ScanStatus, value.UploadedAt = metadata.ObjectVersion, scanRef, AttachmentScanning, &now
+	value.ObjectVersion, value.ScanReference, value.ScanStatus, value.UploadedAt, value.ScannedAt = metadata.ObjectVersion, scanRef, scanStatus, &now, scannedAt
 	err = s.repo.WithTransaction(ctx, func(tx context.Context) error {
 		locked, lockErr := s.repo.FindForUpdate(tx, principal.TenantID, value.PublicID)
 		if lockErr != nil {
@@ -429,7 +490,7 @@ func (s *AttachmentService) CompleteUpload(ctx context.Context, opportunityID ui
 		if locked.OpportunityID != opportunityID {
 			return ErrAttachmentNotFound
 		}
-		if locked.ScanStatus == AttachmentScanning || locked.ScanStatus == AttachmentClean {
+		if locked.ScanStatus == AttachmentScanning || locked.ScanStatus == AttachmentClean || locked.ScanStatus == AttachmentRejected {
 			value = locked
 			return nil
 		}
@@ -437,11 +498,21 @@ func (s *AttachmentService) CompleteUpload(ctx context.Context, opportunityID ui
 			return ErrAttachmentNotReady
 		}
 		locked.UpdatedBy = principal.UserID
-		if updateErr := s.repo.Update(tx, locked, locked.Version, map[string]any{"object_version": metadata.ObjectVersion, "scan_reference": scanRef, "scan_status": AttachmentScanning, "uploaded_at": now, "finalize_lease_until": nil}); updateErr != nil {
+		fields := map[string]any{"object_version": metadata.ObjectVersion, "scan_reference": scanRef, "scan_status": scanStatus, "uploaded_at": now, "finalize_lease_until": nil}
+		if scannedAt != nil {
+			fields["scanned_at"] = *scannedAt
+		}
+		if updateErr := s.repo.Update(tx, locked, locked.Version, fields); updateErr != nil {
 			return updateErr
 		}
 		value = locked
-		return s.audit.Write(tx, audit.Event{TenantID: principal.TenantID, Module: "opportunity_attachment", Operation: "SCAN_REQUESTED", ResourceType: "opportunity_attachment", ResourceID: value.PublicID, ActorID: principal.UserID, ActorNameSnapshot: principal.DisplayName, AfterJSON: audit.JSON(toAttachment(value)), Result: "SUCCESS"})
+		operation := "SCAN_REQUESTED"
+		if scanStatus == AttachmentClean {
+			operation = "SCAN_PASSED"
+		} else if scanStatus == AttachmentRejected {
+			operation = "SCAN_REJECTED"
+		}
+		return s.audit.Write(tx, audit.Event{TenantID: principal.TenantID, Module: "opportunity_attachment", Operation: operation, ResourceType: "opportunity_attachment", ResourceID: value.PublicID, ActorID: principal.UserID, ActorNameSnapshot: principal.DisplayName, AfterJSON: audit.JSON(toAttachment(value)), Result: "SUCCESS"})
 	})
 	if err != nil {
 		return nil, err

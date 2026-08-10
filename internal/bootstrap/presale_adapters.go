@@ -28,7 +28,7 @@ func (a presaleOpportunityReader) GetAccessible(ctx context.Context, actor presa
 		DisplayName: actor.UserName, Permissions: permissions,
 	}
 	switch {
-	case actor.Roles["technical_lead"] || actor.Roles["team_lead"] || actor.Roles["sales_director"] || actor.Roles["crm_super_admin"]:
+	case actor.Roles["technical_lead"] || actor.Roles["technical_director"] || actor.Roles["team_lead"] || actor.Roles["sales_director"] || actor.Roles["crm_super_admin"]:
 		principal.ScopeMode = auth.ScopeAll
 	default:
 		principal.ScopeMode = auth.ScopeSelf

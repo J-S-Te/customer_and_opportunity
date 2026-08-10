@@ -24,7 +24,7 @@ var requestStatuses = []RequestStatus{
 
 func requestScope(actor Actor) RequestQueryScope {
 	scope := RequestQueryScope{TenantID: actor.TenantID}
-	scope.All = actor.HasRole("sales_director") || actor.HasRole("team_lead") ||
+	scope.All = actor.HasRole("sales_director") || actor.HasRole("technical_director") || actor.HasRole("team_lead") ||
 		actor.HasRole("technical_lead") || actor.HasRole("crm_super_admin") || actor.HasRole("auditor")
 	if scope.All {
 		return scope
@@ -51,6 +51,9 @@ func (s *Service) ListRequests(ctx context.Context, actor Actor, query RequestLi
 	}
 	page, err := s.repo.ListRequests(ctx, requestScope(actor), query, s.clock.Now())
 	if err != nil {
+		return RequestListPage{}, err
+	}
+	if err = s.enrichApplicantNames(ctx, page.Items); err != nil {
 		return RequestListPage{}, err
 	}
 	for index := range page.Items {
@@ -90,6 +93,9 @@ func (s *Service) Board(ctx context.Context, actor Actor, query RequestListQuery
 		if listErr != nil {
 			return RequestBoardView{}, listErr
 		}
+		if listErr = s.enrichApplicantNames(ctx, page.Items); listErr != nil {
+			return RequestBoardView{}, listErr
+		}
 		for index := range page.Items {
 			page.Items[index].AvailableActions = localAvailableActions(actor, page.Items[index].Status, page.Items[index].ApplicantID, page.Items[index].CurrentAssignees)
 		}
@@ -110,7 +116,50 @@ func (s *Service) FilterOptions(ctx context.Context, actor Actor, query RequestL
 	if err != nil {
 		return RequestFilterOptions{}, err
 	}
-	return s.repo.ListRequestFilterOptions(ctx, requestScope(actor), query, s.clock.Now(), filterOptionLimit)
+	options, err := s.repo.ListRequestFilterOptions(ctx, requestScope(actor), query, s.clock.Now(), filterOptionLimit)
+	if err != nil {
+		return RequestFilterOptions{}, err
+	}
+	missing := make([]string, 0, len(options.Applicants))
+	for _, option := range options.Applicants {
+		if strings.TrimSpace(option.Label) == "" {
+			missing = append(missing, option.Value)
+		}
+	}
+	if len(missing) > 0 {
+		names, resolveErr := resolveOwnerDisplayNames(ctx, s.ownerDirectory, missing)
+		if resolveErr != nil {
+			return RequestFilterOptions{}, resolveErr
+		}
+		for index := range options.Applicants {
+			if strings.TrimSpace(options.Applicants[index].Label) == "" {
+				options.Applicants[index].Label = names[options.Applicants[index].Value]
+			}
+		}
+	}
+	return options, nil
+}
+
+func (s *Service) enrichApplicantNames(ctx context.Context, items []RequestListItem) error {
+	missing := make([]string, 0)
+	for _, item := range items {
+		if strings.TrimSpace(item.ApplicantName) == "" {
+			missing = append(missing, item.ApplicantID)
+		}
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	names, err := resolveOwnerDisplayNames(ctx, s.ownerDirectory, missing)
+	if err != nil {
+		return err
+	}
+	for index := range items {
+		if strings.TrimSpace(items[index].ApplicantName) == "" {
+			items[index].ApplicantName = names[items[index].ApplicantID]
+		}
+	}
+	return nil
 }
 
 func prepareRequestListQuery(query RequestListQuery) (RequestListQuery, error) {
@@ -176,6 +225,13 @@ func (s *Service) RequestDetail(ctx context.Context, actor Actor, id uint64) (Re
 	}
 	if err = s.requireReadable(ctx, actor, requestValue); err != nil {
 		return RequestDetailView{}, err
+	}
+	if strings.TrimSpace(requestValue.ApplicantNameSnapshot) == "" {
+		names, resolveErr := resolveOwnerDisplayNames(ctx, s.ownerDirectory, []string{requestValue.ApplicantID})
+		if resolveErr != nil {
+			return RequestDetailView{}, resolveErr
+		}
+		requestValue.ApplicantNameSnapshot = names[requestValue.ApplicantID]
 	}
 	assignmentMap, err := s.repo.ListCurrentAssignments(ctx, actor.TenantID, []uint64{id})
 	if err != nil {
@@ -249,7 +305,7 @@ func (s *Service) ListForOpportunity(ctx context.Context, actor Actor, opportuni
 	if err != nil {
 		return OpportunityPresalePage{}, err
 	}
-	manager := actor.HasRole("sales_director") || actor.HasRole("team_lead") || actor.HasRole("technical_lead") || actor.HasRole("crm_super_admin") || actor.HasRole("auditor")
+	manager := actor.HasRole("sales_director") || actor.HasRole("technical_director") || actor.HasRole("team_lead") || actor.HasRole("technical_lead") || actor.HasRole("crm_super_admin") || actor.HasRole("auditor")
 	sales := actor.HasRole("sales")
 	items := make([]OpportunityPresaleItem, 0, len(requests.Items))
 	for _, item := range requests.Items {
