@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -27,17 +28,22 @@ type Options struct {
 type Service struct {
 	repo    repository
 	oidc    oidcClient
+	broker  brokerVerifier
 	codec   *secretCodec
 	options Options
 	now     func() time.Time
 }
 
-func NewService(repo repository, oidc oidcClient, encryptionKey []byte, options Options) (*Service, error) {
+func NewService(repo repository, oidc oidcClient, encryptionKey []byte, options Options, brokers ...brokerVerifier) (*Service, error) {
 	codec, err := newSecretCodec(encryptionKey)
 	if err != nil {
 		return nil, err
 	}
-	return &Service{repo: repo, oidc: oidc, codec: codec, options: options, now: time.Now}, nil
+	var broker brokerVerifier
+	if len(brokers) > 0 {
+		broker = brokers[0]
+	}
+	return &Service{repo: repo, oidc: oidc, broker: broker, codec: codec, options: options, now: time.Now}, nil
 }
 
 type LoginStart struct{ AuthorizationURL string }
@@ -103,6 +109,14 @@ func (s *Service) CompleteLogin(ctx context.Context, state, code string) (LoginR
 	claims, err = normalizeAuthorization(claims, s.options.TenantID, s.options.RoleConfigHash, s.options.MaxRoles)
 	if err != nil || !claims.ExpiresAt.After(now) {
 		return LoginResult{}, ErrUnauthenticated
+	}
+	// This is deliberately after all CRM code/token/claims checks.  A failed
+	// platform receipt must remain visible to its deployment gate, but cannot
+	// turn an invalid token into a valid CRM session or bypass the checks above.
+	if s.broker != nil {
+		if err := s.broker.Verify(ctx, claims); err != nil {
+			slog.Default().Warn("CRM Keycloak broker verification callback failed", "identity_id", claims.IdentityID, "application_code", "customer_and_opportunity", "error", err)
+		}
 	}
 	// 本地会话绝不能比上游 ID/Access Token 或本地策略 TTL 活得更久。
 	expiresAt := earliestExpiry(claims.ExpiresAt, now.Add(s.options.SessionTTL))
