@@ -94,10 +94,17 @@ func New(config Config) (*App, error) {
 	if oidcErr != nil {
 		return nil, oidcErr
 	}
+	brokerVerifier, brokerErr := crmauth.NewPlatformBrokerVerifier(crmauth.BrokerVerificationOptions{
+		PlatformBaseURL: config.PlatformBaseURL, ApplicationCode: config.PlatformApplicationCode,
+		EnvironmentCode: config.PlatformEnvironmentCode, Issuer: config.OIDCIssuer, ClientID: config.OIDCClientID,
+	})
+	if brokerErr != nil {
+		return nil, brokerErr
+	}
 	authService, authErr := crmauth.NewService(crmauth.NewGORMRepository(db), oidcClient, config.EncryptionKey, crmauth.Options{
 		TenantID: config.OIDCTenantID, RoleConfigHash: config.OIDCRoleConfigHash,
 		SessionTTL: config.OIDCSessionTTL, MaxRoles: config.OIDCMaxRoles,
-	})
+	}, brokerVerifier)
 	if authErr != nil {
 		return nil, authErr
 	}

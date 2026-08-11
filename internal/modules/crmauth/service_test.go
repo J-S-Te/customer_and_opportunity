@@ -77,6 +77,18 @@ type fakeOIDC struct {
 	lastVerifier, lastNonce  string
 }
 
+type recordingBrokerVerifier struct {
+	called bool
+	claims verifiedClaims
+	err    error
+}
+
+func (v *recordingBrokerVerifier) Verify(_ context.Context, claims verifiedClaims) error {
+	v.called = true
+	v.claims = claims
+	return v.err
+}
+
 func (f *fakeOIDC) AuthorizationURL(state, nonce, verifier string) string {
 	return "https://identity.example/authorize?state=" + state
 }
@@ -101,14 +113,62 @@ func catalogRolePermissions(roleCode string) []string {
 	return nil
 }
 
-func newTestService(t *testing.T, repo repository, oidc oidcClient, now time.Time) *Service {
+func newTestService(t *testing.T, repo repository, oidc oidcClient, now time.Time, brokers ...brokerVerifier) *Service {
 	t.Helper()
-	service, err := NewService(repo, oidc, []byte(strings.Repeat("k", 32)), Options{TenantID: "tenant-1", RoleConfigHash: "hash-1", SessionTTL: 15 * time.Minute, MaxRoles: 3})
+	service, err := NewService(repo, oidc, []byte(strings.Repeat("k", 32)), Options{TenantID: "tenant-1", RoleConfigHash: "hash-1", SessionTTL: 15 * time.Minute, MaxRoles: 3}, brokers...)
 	if err != nil {
 		t.Fatal(err)
 	}
 	service.now = func() time.Time { return now }
 	return service
+}
+
+func TestCompleteLoginReportsOnlyValidatedIdentityToBrokerGate(t *testing.T) {
+	now := time.Date(2026, 8, 11, 1, 2, 3, 0, time.UTC)
+	repo := newMemoryRepo()
+	claims := validClaims(now)
+	broker := &recordingBrokerVerifier{}
+	service := newTestService(t, repo, &fakeOIDC{exchanged: claims}, now, broker)
+	start, err := service.BeginLogin(context.Background(), "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = service.CompleteLogin(context.Background(), strings.Split(start.AuthorizationURL, "state=")[1], "code"); err != nil {
+		t.Fatalf("CompleteLogin() error = %v", err)
+	}
+	if !broker.called || broker.claims.IdentityID != "user-1" || broker.claims.Subject != "user-1" || broker.claims.AccessToken != "access-token" {
+		t.Fatalf("broker received %#v", broker)
+	}
+}
+
+func TestBrokerReceiptFailureDoesNotBypassOrBlockValidatedCRMSession(t *testing.T) {
+	now := time.Date(2026, 8, 11, 1, 2, 3, 0, time.UTC)
+	repo := newMemoryRepo()
+	broker := &recordingBrokerVerifier{err: errors.New("platform unavailable")}
+	service := newTestService(t, repo, &fakeOIDC{exchanged: validClaims(now)}, now, broker)
+	start, _ := service.BeginLogin(context.Background(), "/")
+	result, err := service.CompleteLogin(context.Background(), strings.Split(start.AuthorizationURL, "state=")[1], "code")
+	if err != nil || !broker.called || result.SessionToken == "" {
+		t.Fatalf("CompleteLogin() = %#v, %v; broker=%#v", result, err, broker)
+	}
+	if _, err = service.Authenticate(context.Background(), result.SessionToken); err != nil {
+		t.Fatalf("validated CRM session was not created: %v", err)
+	}
+}
+
+func TestInvalidOIDCClaimsAreNotReportedToBrokerGate(t *testing.T) {
+	now := time.Date(2026, 8, 11, 1, 2, 3, 0, time.UTC)
+	claims := validClaims(now)
+	claims.RoleConfigHash = "stale"
+	broker := &recordingBrokerVerifier{}
+	service := newTestService(t, newMemoryRepo(), &fakeOIDC{exchanged: claims}, now, broker)
+	start, _ := service.BeginLogin(context.Background(), "/")
+	if _, err := service.CompleteLogin(context.Background(), strings.Split(start.AuthorizationURL, "state=")[1], "code"); !errors.Is(err, ErrUnauthenticated) {
+		t.Fatalf("CompleteLogin() error = %v", err)
+	}
+	if broker.called {
+		t.Fatal("broker verification was called before CRM authorization validation")
+	}
 }
 
 func TestLoginStateIsSingleUseAndPKCESecretsAreEncrypted(t *testing.T) {

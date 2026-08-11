@@ -320,7 +320,7 @@ go run ./cmd/seed-demo-data
 go run ./cmd/seed-portal-invite -customer 华兴证券股份有限公司
 ```
 
-命令走生产 CM-004 saga：平台预置无密码外部客户账号 → 分配 `customer_portal/portal_customer` → Portal 建立身份映射 → 返回一次性激活链接和登录账号。之后在基础平台“系统设置 → 登录账号”对该账号执行“初始化密码”，再打开激活链接完成登录。该链路本地已验证通过；平台侧曾因 `iam_external_identity.login_account_id` 非空约束与同值 UPDATE 零行影响两个缺陷返回 500/409，已修复于 `platform/backend/internal/platform/externalidentity/infrastructure/gorm_repository.go`。
+命令走生产 CM-004 saga：平台预置无密码外部客户账号 → 分配 `customer_portal/portal_customer` → Portal 建立身份映射 → 返回一次性激活链接和登录账号。之后在基础平台“系统设置 → 登录账号”对该账号执行“初始化密码”，再打开激活链接完成登录。该链路本地已验证通过；平台侧曾因 `iam_external_identity.login_account_id` 非空约束与同值 UPDATE 零行影响两个缺陷返回 500/409，已修复于 `platform/internal/platform/externalidentity/infrastructure/gorm_repository.go`。
 
 ## 验证命令
 
