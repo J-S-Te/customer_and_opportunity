@@ -27,6 +27,7 @@ type Config struct {
 
 type TemporalConfig struct {
 	Enabled   bool
+	Internal  bool
 	Address   string
 	Namespace string
 	TaskQueue string
@@ -65,6 +66,10 @@ func LoadConfig() (Config, error) {
 	if err != nil {
 		return Config{}, fmt.Errorf("TEMPORAL_TLS: %w", err)
 	}
+	temporalInternal, err := boolEnv("PRESALE_TEMPORAL_INTERNAL_MODE", false)
+	if err != nil {
+		return Config{}, fmt.Errorf("PRESALE_TEMPORAL_INTERNAL_MODE: %w", err)
+	}
 	cfg := Config{
 		MySQLDSN:          os.Getenv("MYSQL_DSN"),
 		WorkerID:          env("PRESALE_WORKER_ID", hostname()),
@@ -79,7 +84,7 @@ func LoadConfig() (Config, error) {
 		PMS: HTTPPortConfig{TokenURL: os.Getenv("PMS_TOKEN_URL"), ClientID: os.Getenv("PMS_CLIENT_ID"), ClientSecret: os.Getenv("PMS_CLIENT_SECRET"), Scope: env("PMS_SCOPE", "presale.worklog.write"), PublishURL: os.Getenv("PMS_WORKLOG_URL"), TLS: integrationhttp.TLSOptions{
 			RootCAFile: os.Getenv("PMS_TLS_ROOT_CA_FILE"), ClientCertFile: os.Getenv("PMS_TLS_CLIENT_CERT_FILE"), ClientKeyFile: os.Getenv("PMS_TLS_CLIENT_KEY_FILE"), ServerName: os.Getenv("PMS_TLS_SERVER_NAME"), RequireMTLS: pmsRequireMTLS,
 		}},
-		Temporal: TemporalConfig{Enabled: temporalEnabled, Address: env("TEMPORAL_ADDRESS", "temporal:7233"), Namespace: env("TEMPORAL_NAMESPACE", "default"), TaskQueue: env("TEMPORAL_TASK_QUEUE", "customer-opportunity-presale"), TLS: temporalTLS},
+		Temporal: TemporalConfig{Enabled: temporalEnabled, Internal: temporalInternal, Address: env("TEMPORAL_ADDRESS", "temporal:7233"), Namespace: env("TEMPORAL_NAMESPACE", "default"), TaskQueue: env("TEMPORAL_TASK_QUEUE", "customer-opportunity-presale"), TLS: temporalTLS},
 	}
 	if cfg.MySQLDSN == "" {
 		return Config{}, fmt.Errorf("MYSQL_DSN is required")
@@ -91,11 +96,15 @@ func LoadConfig() (Config, error) {
 	if cfg.HeartbeatMaxAge < cfg.PollInterval+10*time.Second || cfg.HeartbeatMaxAge > 5*time.Minute {
 		return Config{}, fmt.Errorf("PRESALE_WORKER_HEARTBEAT_MAX_AGE must cover poll interval, integration timeout and jitter")
 	}
-	if err := validatePort("approval", cfg.Approval, true, allowInsecureHTTP); err != nil {
-		return Config{}, err
-	}
-	if err := validatePort("PMS", cfg.PMS, false, allowInsecureHTTP); err != nil {
-		return Config{}, err
+	if !cfg.Temporal.Internal {
+		if err := validatePort("approval", cfg.Approval, true, allowInsecureHTTP); err != nil {
+			return Config{}, err
+		}
+		if err := validatePort("PMS", cfg.PMS, false, allowInsecureHTTP); err != nil {
+			return Config{}, err
+		}
+	} else if !cfg.Temporal.Enabled {
+		return Config{}, fmt.Errorf("PRESALE_TEMPORAL_INTERNAL_MODE requires PRESALE_TEMPORAL_ENABLED=true")
 	}
 	if cfg.Temporal.Enabled && (strings.TrimSpace(cfg.Temporal.Address) == "" || strings.TrimSpace(cfg.Temporal.Namespace) == "" || strings.TrimSpace(cfg.Temporal.TaskQueue) == "") {
 		return Config{}, fmt.Errorf("Temporal address, namespace and task queue are required when PRESALE_TEMPORAL_ENABLED=true")

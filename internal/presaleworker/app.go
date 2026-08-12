@@ -20,9 +20,17 @@ type App struct {
 }
 
 func New(cfg Config) (*App, error) {
-	approval, pms, err := NewHTTPPorts(cfg.Approval, cfg.PMS, cfg.AllowInsecureHTTP)
-	if err != nil {
-		return nil, err
+	var approval presale.ApprovalCommandPort
+	var pms presale.PMSPublisher
+	var err error
+	if cfg.Temporal.Internal {
+		ports := internalPorts{}
+		approval, pms = ports, ports
+	} else {
+		approval, pms, err = NewHTTPPorts(cfg.Approval, cfg.PMS, cfg.AllowInsecureHTTP)
+		if err != nil {
+			return nil, err
+		}
 	}
 	db, err := gorm.Open(mysql.Open(cfg.MySQLDSN), &gorm.Config{})
 	if err != nil {
