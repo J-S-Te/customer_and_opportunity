@@ -1,6 +1,7 @@
 package crmauth
 
 import (
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -36,12 +37,27 @@ func (h *Handler) Login(c *gin.Context) {
 }
 
 func (h *Handler) Callback(c *gin.Context) {
-	if strings.TrimSpace(c.Query("error")) != "" {
+	if providerError := strings.TrimSpace(c.Query("error")); providerError != "" {
+		slog.Default().Warn("CRM OIDC provider callback rejected",
+			"provider_error", providerError,
+			"has_error_description", strings.TrimSpace(c.Query("error_description")) != "",
+			"has_state", strings.TrimSpace(c.Query("state")) != "",
+		)
 		response.Error(c, apperror.ErrUnauthenticated)
 		return
 	}
 	result, err := h.service.CompleteLogin(c.Request.Context(), c.Query("state"), c.Query("code"))
 	if err != nil {
+		// Keep the browser response deliberately generic, but retain the typed
+		// server-side cause. Without this distinction every discovery, code
+		// exchange, nonce, issuer, and authorization-claim failure looked like
+		// the same unauthenticated response and blocked Broker evidence without
+		// an actionable diagnostic.
+		slog.Default().Warn("CRM OIDC callback failed",
+			"has_state", strings.TrimSpace(c.Query("state")) != "",
+			"has_code", strings.TrimSpace(c.Query("code")) != "",
+			"error", err,
+		)
 		response.Error(c, apperror.ErrUnauthenticated)
 		return
 	}

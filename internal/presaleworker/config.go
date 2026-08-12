@@ -22,6 +22,15 @@ type Config struct {
 	AllowInsecureHTTP bool
 	Approval          HTTPPortConfig
 	PMS               HTTPPortConfig
+	Temporal          TemporalConfig
+}
+
+type TemporalConfig struct {
+	Enabled   bool
+	Address   string
+	Namespace string
+	TaskQueue string
+	TLS       bool
 }
 
 type HTTPPortConfig struct {
@@ -48,6 +57,14 @@ func LoadConfig() (Config, error) {
 	if err != nil {
 		return Config{}, fmt.Errorf("PRESALE_WORKER_ALLOW_INSECURE_HTTP: %w", err)
 	}
+	temporalEnabled, err := boolEnv("PRESALE_TEMPORAL_ENABLED", false)
+	if err != nil {
+		return Config{}, fmt.Errorf("PRESALE_TEMPORAL_ENABLED: %w", err)
+	}
+	temporalTLS, err := boolEnv("TEMPORAL_TLS", false)
+	if err != nil {
+		return Config{}, fmt.Errorf("TEMPORAL_TLS: %w", err)
+	}
 	cfg := Config{
 		MySQLDSN:          os.Getenv("MYSQL_DSN"),
 		WorkerID:          env("PRESALE_WORKER_ID", hostname()),
@@ -62,6 +79,7 @@ func LoadConfig() (Config, error) {
 		PMS: HTTPPortConfig{TokenURL: os.Getenv("PMS_TOKEN_URL"), ClientID: os.Getenv("PMS_CLIENT_ID"), ClientSecret: os.Getenv("PMS_CLIENT_SECRET"), Scope: env("PMS_SCOPE", "presale.worklog.write"), PublishURL: os.Getenv("PMS_WORKLOG_URL"), TLS: integrationhttp.TLSOptions{
 			RootCAFile: os.Getenv("PMS_TLS_ROOT_CA_FILE"), ClientCertFile: os.Getenv("PMS_TLS_CLIENT_CERT_FILE"), ClientKeyFile: os.Getenv("PMS_TLS_CLIENT_KEY_FILE"), ServerName: os.Getenv("PMS_TLS_SERVER_NAME"), RequireMTLS: pmsRequireMTLS,
 		}},
+		Temporal: TemporalConfig{Enabled: temporalEnabled, Address: env("TEMPORAL_ADDRESS", "temporal:7233"), Namespace: env("TEMPORAL_NAMESPACE", "default"), TaskQueue: env("TEMPORAL_TASK_QUEUE", "customer-opportunity-presale"), TLS: temporalTLS},
 	}
 	if cfg.MySQLDSN == "" {
 		return Config{}, fmt.Errorf("MYSQL_DSN is required")
@@ -78,6 +96,9 @@ func LoadConfig() (Config, error) {
 	}
 	if err := validatePort("PMS", cfg.PMS, false, allowInsecureHTTP); err != nil {
 		return Config{}, err
+	}
+	if cfg.Temporal.Enabled && (strings.TrimSpace(cfg.Temporal.Address) == "" || strings.TrimSpace(cfg.Temporal.Namespace) == "" || strings.TrimSpace(cfg.Temporal.TaskQueue) == "") {
+		return Config{}, fmt.Errorf("Temporal address, namespace and task queue are required when PRESALE_TEMPORAL_ENABLED=true")
 	}
 	return cfg, nil
 }

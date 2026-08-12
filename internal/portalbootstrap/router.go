@@ -450,7 +450,8 @@ func authenticate(deps RouterDependencies) gin.HandlerFunc {
 		principal := sharedauth.Principal{
 			UserID: session.PlatformUserID, TenantID: session.TenantID,
 			Roles: append([]string(nil), session.Roles...), Permissions: permissions,
-			ScopeMode: sharedauth.ScopeSelf, RoleConfigHash: session.RoleConfigHash, AuthzRevision: session.AuthzRevision,
+			DataScopes: portalDataScopes(session.DataScopes),
+			ScopeMode:  sharedauth.ScopeSelf, RoleConfigHash: session.RoleConfigHash, AuthzRevision: session.AuthzRevision,
 		}
 		c.Request = c.Request.WithContext(sharedauth.WithPrincipal(c.Request.Context(), principal))
 		c.Next()
@@ -462,8 +463,16 @@ func me(c *gin.Context) {
 	response.OK(c, gin.H{
 		"platform_user_id": session.PlatformUserID, "customer_id": session.CustomerID, "tenant_id": session.TenantID,
 		"role_config_hash": session.RoleConfigHash, "authz_revision": session.AuthzRevision, "expires_at": session.ExpiresAt,
-		"roles": session.Roles, "permissions": session.Permissions,
+		"roles": session.Roles, "permissions": session.Permissions, "data_scopes": session.DataScopes,
 	})
+}
+
+func portalDataScopes(scopes []account.DataScope) []sharedauth.DataScope {
+	result := make([]sharedauth.DataScope, 0, len(scopes))
+	for _, scope := range scopes {
+		result = append(result, sharedauth.DataScope{RoleCode: scope.RoleCode, ScopeType: scope.ScopeType, ScopeID: scope.ScopeID, EnvironmentCode: scope.EnvironmentCode})
+	}
+	return result
 }
 
 func accountSecurity(deps RouterDependencies) gin.HandlerFunc {

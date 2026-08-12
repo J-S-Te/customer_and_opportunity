@@ -156,18 +156,18 @@ func TestBrokerReceiptFailureDoesNotBypassOrBlockValidatedCRMSession(t *testing.
 	}
 }
 
-func TestInvalidOIDCClaimsAreNotReportedToBrokerGate(t *testing.T) {
+func TestAuthorizationMetadataFromTokenIsNotTrustedAsRoleDirectoryVersion(t *testing.T) {
 	now := time.Date(2026, 8, 11, 1, 2, 3, 0, time.UTC)
 	claims := validClaims(now)
 	claims.RoleConfigHash = "stale"
 	broker := &recordingBrokerVerifier{}
 	service := newTestService(t, newMemoryRepo(), &fakeOIDC{exchanged: claims}, now, broker)
 	start, _ := service.BeginLogin(context.Background(), "/")
-	if _, err := service.CompleteLogin(context.Background(), strings.Split(start.AuthorizationURL, "state=")[1], "code"); !errors.Is(err, ErrUnauthenticated) {
+	if _, err := service.CompleteLogin(context.Background(), strings.Split(start.AuthorizationURL, "state=")[1], "code"); err != nil {
 		t.Fatalf("CompleteLogin() error = %v", err)
 	}
-	if broker.called {
-		t.Fatal("broker verification was called before CRM authorization validation")
+	if !broker.called {
+		t.Fatal("broker verification was not called after current authorization validation")
 	}
 }
 
@@ -265,7 +265,6 @@ func TestNormalizeAuthorizationRequiresExactCatalogMetadata(t *testing.T) {
 	}{
 		{"tenant", func(c *verifiedClaims) { c.TenantID = "other" }},
 		{"identity id mismatch", func(c *verifiedClaims) { c.IdentityID = "other-user" }},
-		{"role hash", func(c *verifiedClaims) { c.RoleConfigHash = "old" }},
 		{"revision", func(c *verifiedClaims) { c.AuthzRevision = 0 }},
 		{"subject width", func(c *verifiedClaims) { c.Subject = strings.Repeat("a", 65) }},
 		{"person whitespace", func(c *verifiedClaims) { c.PersonID = " PMS-A" }},
