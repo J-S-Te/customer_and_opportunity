@@ -61,3 +61,24 @@ func TestLoadConfigAllowsInsecureHTTPOnlyWhenExplicitlyEnabled(t *testing.T) {
 		t.Fatalf("config=%+v err=%v", config, err)
 	}
 }
+
+func TestLoadConfigAllowsInternalTemporalModeWithoutExternalEndpoints(t *testing.T) {
+	t.Setenv("MYSQL_DSN", "crm:test@tcp(localhost:3306)/crm")
+	t.Setenv("PRESALE_TEMPORAL_ENABLED", "true")
+	t.Setenv("PRESALE_TEMPORAL_INTERNAL_MODE", "true")
+	config, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("internal Temporal mode rejected missing external endpoints: %v", err)
+	}
+	if !config.Temporal.Enabled || !config.Temporal.Internal {
+		t.Fatalf("unexpected Temporal config: %+v", config.Temporal)
+	}
+}
+
+func TestLoadConfigRejectsInternalModeWithoutTemporal(t *testing.T) {
+	t.Setenv("MYSQL_DSN", "crm:test@tcp(localhost:3306)/crm")
+	t.Setenv("PRESALE_TEMPORAL_INTERNAL_MODE", "true")
+	if _, err := LoadConfig(); err == nil || !strings.Contains(err.Error(), "requires PRESALE_TEMPORAL_ENABLED") {
+		t.Fatalf("internal mode without Temporal was accepted: %v", err)
+	}
+}
