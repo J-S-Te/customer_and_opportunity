@@ -202,8 +202,20 @@ func (s *Service) CompleteLogin(ctx context.Context, state, code string, metadat
 		s.writeLoginSecurityEvent(ctx, activation, "SUBJECT_MISMATCH", "HIGH", "OIDC_SUBJECT_MISMATCH", metadata, now)
 		return LoginResult{}, ErrSubjectMismatch
 	}
-	if claims.TenantID != activation.TenantID || claims.RoleConfigHash != s.roleConfigHash || !validPortalAuthorization(claims.Roles, claims.Permissions) || !claims.ExpiresAt.After(now) || strings.TrimSpace(claims.AccessToken) == "" {
-		s.writeLoginSecurityEvent(ctx, activation, "LOGIN_FAILED", "HIGH", "OIDC_CLAIMS_REJECTED", metadata, now)
+	if claims.TenantID != activation.TenantID {
+		s.writeLoginSecurityEvent(ctx, activation, "LOGIN_FAILED", "HIGH", "OIDC_TENANT_MISMATCH", metadata, now)
+		return LoginResult{}, ErrInvalidClaims
+	}
+	if claims.RoleConfigHash != s.roleConfigHash {
+		s.writeLoginSecurityEvent(ctx, activation, "LOGIN_FAILED", "HIGH", "OIDC_ROLE_CONFIG_MISMATCH", metadata, now)
+		return LoginResult{}, ErrInvalidClaims
+	}
+	if !validPortalAuthorization(claims.Roles, claims.Permissions) {
+		s.writeLoginSecurityEvent(ctx, activation, "LOGIN_FAILED", "HIGH", "OIDC_PORTAL_AUTHORIZATION_REJECTED", metadata, now)
+		return LoginResult{}, ErrPortalAuthorization
+	}
+	if !claims.ExpiresAt.After(now) || strings.TrimSpace(claims.AccessToken) == "" {
+		s.writeLoginSecurityEvent(ctx, activation, "LOGIN_FAILED", "HIGH", "OIDC_TOKEN_INVALID", metadata, now)
 		return LoginResult{}, ErrInvalidClaims
 	}
 	link, err := s.repo.FindLink(ctx, claims.TenantID, claims.Subject)
@@ -237,7 +249,7 @@ func (s *Service) CompleteLogin(ctx context.Context, state, code string, metadat
 	if err != nil {
 		return LoginResult{}, err
 	}
-	session := &Session{Model: newModel(claims.TenantID, claims.Subject, now), PublicID: publicSessionID, SessionIDHash: hash(rawSession), PlatformUserID: claims.Subject, CustomerID: link.CustomerID, AuthzRevision: claims.AuthzRevision, RoleConfigHash: claims.RoleConfigHash, Roles: append([]string(nil), claims.Roles...), Permissions: append([]string(nil), claims.Permissions...), AccessTokenCipher: accessTokenCipher, AuthorizationCheckedAt: now, ExpiresAt: expires, AbsoluteExpiry: expires, LastSeenAt: now, IPHash: metadata.IPHash, UserAgentHash: metadata.UserAgentHash, IPMasked: metadata.IPMasked, LocationSnapshot: metadata.Location, DeviceSnapshot: metadata.Device}
+	session := &Session{Model: newModel(claims.TenantID, claims.Subject, now), PublicID: publicSessionID, SessionIDHash: hash(rawSession), PlatformUserID: claims.Subject, CustomerID: link.CustomerID, AuthzRevision: claims.AuthzRevision, RoleConfigHash: claims.RoleConfigHash, Roles: append([]string(nil), claims.Roles...), Permissions: append([]string(nil), claims.Permissions...), DataScopes: cloneDataScopes(claims.DataScopes), AccessTokenCipher: accessTokenCipher, AuthorizationCheckedAt: now, ExpiresAt: expires, AbsoluteExpiry: expires, LastSeenAt: now, IPHash: metadata.IPHash, UserAgentHash: metadata.UserAgentHash, IPMasked: metadata.IPMasked, LocationSnapshot: metadata.Location, DeviceSnapshot: metadata.Device}
 	successEvent, err := s.newSecurityEvent(claims.TenantID, claims.Subject, link.CustomerID, "LOGIN_SUCCEEDED", "LOW", "", metadata, now)
 	if err != nil {
 		return LoginResult{}, err
@@ -341,7 +353,29 @@ func (s *Service) revokeAuthorization(ctx context.Context, tenantID, subject str
 func samePortalAuthorization(session *Session, current Claims, tenantID, roleConfigHash string) bool {
 	return current.Subject == session.PlatformUserID && current.TenantID == tenantID && current.RoleConfigHash == roleConfigHash &&
 		current.AuthzRevision == session.AuthzRevision && validPortalAuthorization(current.Roles, current.Permissions) &&
-		sameStringSet(session.Roles, current.Roles) && sameStringSet(session.Permissions, current.Permissions)
+		sameStringSet(session.Roles, current.Roles) && sameStringSet(session.Permissions, current.Permissions) &&
+		sameDataScopeSet(session.DataScopes, current.DataScopes)
+}
+
+func cloneDataScopes(scopes []DataScope) []DataScope {
+	return append([]DataScope(nil), scopes...)
+}
+
+func sameDataScopeSet(left, right []DataScope) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	seen := make(map[DataScope]int, len(left))
+	for _, scope := range left {
+		seen[scope]++
+	}
+	for _, scope := range right {
+		if seen[scope] == 0 {
+			return false
+		}
+		seen[scope]--
+	}
+	return true
 }
 
 func sameStringSet(left, right []string) bool {

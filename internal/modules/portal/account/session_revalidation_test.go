@@ -147,6 +147,29 @@ func TestAuthenticateSessionRevokesAllSubjectSessionsWhenAuthorizationChanges(t 
 	}
 }
 
+func TestAuthenticateSessionRevokesAllSubjectSessionsWhenDataScopesChange(t *testing.T) {
+	now := time.Date(2026, 8, 1, 1, 2, 3, 0, time.UTC)
+	service, repo, oidc := revalidationFixture(now)
+	scopes := []DataScope{{RoleCode: "portal_customer", ScopeType: "CUSTOMER", ScopeID: "customer-7", EnvironmentCode: "prod"}}
+	repo.session.DataScopes = append([]DataScope(nil), scopes...)
+	oidc.claims.DataScopes = append([]DataScope(nil), scopes...)
+	if _, err := service.AuthenticateSession(context.Background(), "tenant-a", "session-token"); err != nil {
+		t.Fatalf("unchanged data scopes error=%v", err)
+	}
+
+	// Data ranges are part of the authorization snapshot, even when the Portal
+	// currently remains customer-bound through its identity link. A changed
+	// scope must not be silently retained by an already-issued local session.
+	oidc.claims.DataScopes[0].ScopeID = "customer-8"
+	repo.session.AuthorizationCheckedAt = now.Add(-authorizationCheckInterval - time.Second)
+	if _, err := service.AuthenticateSession(context.Background(), "tenant-a", "session-token"); !errors.Is(err, ErrInvalidLoginState) {
+		t.Fatalf("changed data scope error=%v", err)
+	}
+	if !repo.revoked {
+		t.Fatal("changed data scope did not revoke sessions")
+	}
+}
+
 func TestAuthenticateSessionSkipsUserInfoInsideCheckWindow(t *testing.T) {
 	now := time.Date(2026, 8, 1, 1, 2, 3, 0, time.UTC)
 	service, repo, oidc := revalidationFixture(now)

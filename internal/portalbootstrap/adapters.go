@@ -29,10 +29,12 @@ const maxAdapterResponseBytes = 64 << 10
 // OIDC 适配器遵循平台发布的 Discovery/JWKS 契约；只有签名、issuer、audience、过期时间、
 // nonce 以及平台扩展声明全部通过后，才向账号服务返回 Claims。
 type OIDCAdapter struct {
-	config     oauth2.Config
-	verifier   *oidc.IDTokenVerifier
-	provider   *oidc.Provider
-	httpClient *http.Client
+	config          oauth2.Config
+	verifier        *oidc.IDTokenVerifier
+	provider        *oidc.Provider
+	httpClient      *http.Client
+	platformBaseURL string
+	roleConfigHash  string
 }
 
 func NewOIDCAdapter(ctx context.Context, config Config) (*OIDCAdapter, error) {
@@ -58,6 +60,7 @@ func NewOIDCAdapter(ctx context.Context, config Config) (*OIDCAdapter, error) {
 	return &OIDCAdapter{
 		config:   oauth2.Config{ClientID: config.OIDCClientID, ClientSecret: config.OIDCClientSecret, Endpoint: provider.Endpoint(), RedirectURL: config.OIDCRedirectURI, Scopes: config.OIDCScopes},
 		verifier: provider.Verifier(&oidc.Config{ClientID: config.OIDCClientID}), provider: provider, httpClient: httpClient,
+		platformBaseURL: strings.TrimRight(config.PlatformBaseURL, "/"), roleConfigHash: config.RoleConfigHash,
 	}, nil
 }
 
@@ -86,54 +89,106 @@ func (a *OIDCAdapter) ExchangeAndValidate(ctx context.Context, code, verifier, n
 	if err != nil {
 		return account.Claims{}, fmt.Errorf("verify ID token: %w", err)
 	}
-	var claims struct {
-		Subject, Nonce, TenantID, RoleConfigHash, TokenUse string
-		Roles, Permissions                                 []string
-		AuthzRevision                                      uint64
-	}
-	var raw struct {
-		Subject        string   `json:"sub"`
-		Nonce          string   `json:"nonce"`
-		TenantID       string   `json:"tenant_id"`
-		Roles          []string `json:"roles"`
-		Permissions    []string `json:"permissions"`
-		RoleConfigHash string   `json:"role_config_hash"`
-		AuthzRevision  uint64   `json:"authz_revision"`
-		TokenUse       string   `json:"token_use"`
-	}
+	var raw compactOIDCClaims
 	if err := idToken.Claims(&raw); err != nil {
 		return account.Claims{}, fmt.Errorf("decode ID token claims: %w", err)
 	}
-	claims.Subject, claims.Nonce, claims.TenantID, claims.Roles, claims.Permissions = raw.Subject, raw.Nonce, raw.TenantID, raw.Roles, raw.Permissions
-	claims.RoleConfigHash, claims.AuthzRevision, claims.TokenUse = raw.RoleConfigHash, raw.AuthzRevision, raw.TokenUse
-	if claims.Nonce != nonce || claims.TokenUse != "id_token" || strings.TrimSpace(claims.Subject) == "" || claims.Subject != strings.TrimSpace(claims.Subject) || claims.TenantID == "" || claims.RoleConfigHash == "" || claims.AuthzRevision == 0 || len(claims.Roles) == 0 || len(claims.Permissions) == 0 {
-		return account.Claims{}, errors.New("OIDC authorization claims are invalid")
+	// 紧凑 Keycloak ID Token 只保证稳定身份；tenant_id、角色和权限由基础平台
+	// authorization-context 按当前 access token 返回。
+	if raw.Nonce != nonce || strings.TrimSpace(raw.Subject) == "" || raw.Subject != strings.TrimSpace(raw.Subject) || (raw.IdentityID != "" && raw.IdentityID != raw.Subject) || token.AccessToken == "" {
+		return account.Claims{}, errors.New("OIDC identity claims are invalid")
 	}
-	// 本地会话上限取 ID Token 与 Access Token 的最早过期时间，避免访问令牌失效后仍保留权限快照。
-	return account.Claims{Subject: claims.Subject, TenantID: claims.TenantID, Roles: claims.Roles, Permissions: claims.Permissions, RoleConfigHash: claims.RoleConfigHash, AuthzRevision: claims.AuthzRevision, ExpiresAt: earliestExpiry(idToken.Expiry, token.Expiry), AccessToken: token.AccessToken}, nil
+	claims := account.Claims{Subject: raw.Subject, TenantID: raw.TenantID, RoleConfigHash: a.roleConfigHash, ExpiresAt: earliestExpiry(idToken.Expiry, token.Expiry), AccessToken: token.AccessToken}
+	// 详细角色、权限和授权版本由基础平台按当前访问令牌计算，不能依赖 Keycloak
+	// Token 中可能过期的业务权限快照。
+	contextClaims, contextErr := a.authorizationContext(ctx, token.AccessToken)
+	if contextErr == nil {
+		if contextClaims.Subject != claims.Subject || (claims.TenantID != "" && contextClaims.TenantID != claims.TenantID) {
+			return account.Claims{}, errors.New("OIDC authorization context identity does not match token")
+		}
+		contextClaims.RoleConfigHash = a.roleConfigHash
+		contextClaims.ExpiresAt, contextClaims.AccessToken = claims.ExpiresAt, token.AccessToken
+		return contextClaims, nil
+	}
+	return account.Claims{}, fmt.Errorf("load portal authorization context: %w", contextErr)
 }
 
 func (a *OIDCAdapter) UserInfo(ctx context.Context, accessToken string) (account.Claims, error) {
 	if strings.TrimSpace(accessToken) == "" {
 		return account.Claims{}, errors.New("OIDC access token is missing")
 	}
-	oidcContext := oidc.ClientContext(ctx, a.httpClient)
-	info, err := a.provider.UserInfo(oidcContext, oauth2.StaticTokenSource(&oauth2.Token{AccessToken: accessToken, TokenType: "Bearer"}))
+	contextClaims, err := a.authorizationContext(ctx, accessToken)
 	if err != nil {
-		return account.Claims{}, errors.New("OIDC UserInfo verification failed")
+		return account.Claims{}, fmt.Errorf("load portal authorization context: %w", err)
 	}
-	var claims struct {
-		Subject        string   `json:"sub"`
-		TenantID       string   `json:"tenant_id"`
-		Roles          []string `json:"roles"`
-		Permissions    []string `json:"permissions"`
-		RoleConfigHash string   `json:"role_config_hash"`
-		AuthzRevision  uint64   `json:"authz_revision"`
+	contextClaims.RoleConfigHash = a.roleConfigHash
+	return contextClaims, nil
+}
+
+type compactOIDCClaims struct {
+	Subject    string `json:"sub"`
+	IdentityID string `json:"identity_id"`
+	Nonce      string `json:"nonce"`
+	TenantID   string `json:"tenant_id"`
+	TokenUse   string `json:"token_use"`
+}
+
+type portalAuthorizationContext struct {
+	Subject               string              `json:"sub"`
+	IdentityID            string              `json:"identity_id"`
+	TenantID              string              `json:"tenant_id"`
+	Roles                 []string            `json:"roles"`
+	Permissions           []string            `json:"permissions"`
+	DataScopes            []account.DataScope `json:"data_scopes"`
+	AuthorizationRevision uint64              `json:"authorization_revision"`
+}
+
+func (a *OIDCAdapter) authorizationContext(ctx context.Context, accessToken string) (account.Claims, error) {
+	if a.platformBaseURL == "" {
+		return account.Claims{}, errors.New("portal platform authorization context endpoint is not configured")
 	}
-	if err = info.Claims(&claims); err != nil {
-		return account.Claims{}, errors.New("OIDC UserInfo response is invalid")
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, a.platformBaseURL+"/oauth2/authorization-context", nil)
+	if err != nil {
+		return account.Claims{}, fmt.Errorf("create portal authorization context request: %w", err)
 	}
-	return account.Claims{Subject: claims.Subject, TenantID: claims.TenantID, Roles: claims.Roles, Permissions: claims.Permissions, RoleConfigHash: claims.RoleConfigHash, AuthzRevision: claims.AuthzRevision}, nil
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	resp, err := a.httpClient.Do(req)
+	if err != nil {
+		return account.Claims{}, fmt.Errorf("request portal authorization context: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+		return account.Claims{}, fmt.Errorf("portal authorization context returned HTTP %d", resp.StatusCode)
+	}
+	var raw portalAuthorizationContext
+	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+		return account.Claims{}, fmt.Errorf("decode portal authorization context: %w", err)
+	}
+	if raw.Subject == "" || raw.IdentityID != raw.Subject || raw.TenantID == "" || raw.AuthorizationRevision == 0 {
+		return account.Claims{}, errors.New("portal authorization context identity or revision is invalid")
+	}
+	return account.Claims{Subject: raw.Subject, TenantID: raw.TenantID, Roles: raw.Roles, Permissions: raw.Permissions, DataScopes: cloneDataScopes(raw.DataScopes), AuthzRevision: raw.AuthorizationRevision}, nil
+}
+
+func cloneDataScopes(scopes []account.DataScope) []account.DataScope {
+	if len(scopes) == 0 {
+		return []account.DataScope{}
+	}
+	result := make([]account.DataScope, 0, len(scopes))
+	for _, scope := range scopes {
+		// The authorization-context endpoint is the trusted source, but retain a
+		// small structural boundary here so malformed remote responses never end
+		// up as an unbounded local-session payload.
+		if strings.TrimSpace(scope.RoleCode) == "" || strings.TrimSpace(scope.ScopeType) == "" ||
+			strings.TrimSpace(scope.RoleCode) != scope.RoleCode || strings.TrimSpace(scope.ScopeType) != scope.ScopeType ||
+			strings.TrimSpace(scope.ScopeID) != scope.ScopeID || strings.TrimSpace(scope.EnvironmentCode) != scope.EnvironmentCode ||
+			len(scope.RoleCode) > 128 || len(scope.ScopeType) > 32 || len(scope.ScopeID) > 128 || len(scope.EnvironmentCode) > 64 {
+			continue
+		}
+		result = append(result, scope)
+	}
+	return result
 }
 
 type issuerTransport struct {

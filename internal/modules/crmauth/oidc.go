@@ -2,8 +2,10 @@ package crmauth
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"sort"
@@ -16,8 +18,8 @@ import (
 )
 
 type OIDCOptions struct {
-	Issuer, BackchannelBaseURL, ClientID, ClientSecret, RedirectURI string
-	Scopes                                                          []string
+	Issuer, BackchannelBaseURL, PlatformBaseURL, ClientID, ClientSecret, RedirectURI string
+	Scopes                                                                           []string
 }
 
 type verifiedClaims struct {
@@ -37,27 +39,22 @@ type oidcClient interface {
 }
 
 type platformClaims struct {
-	Subject           string   `json:"sub"`
-	IdentityID        string   `json:"identity_id"`
-	Nonce             string   `json:"nonce"`
-	TenantID          string   `json:"tenant_id"`
-	PersonID          string   `json:"person_id"`
-	Name              string   `json:"name"`
-	PreferredUsername string   `json:"preferred_username"`
-	PrimaryOrgID      string   `json:"primary_org_id"`
-	OrganizationIDs   []string `json:"organization_ids"`
-	Roles             []string `json:"roles"`
-	Permissions       []string `json:"permissions"`
-	RoleConfigHash    string   `json:"role_config_hash"`
-	AuthzRevision     uint64   `json:"authz_revision"`
-	TokenUse          string   `json:"token_use"`
+	Subject           string `json:"sub"`
+	IdentityID        string `json:"identity_id"`
+	Nonce             string `json:"nonce"`
+	TenantID          string `json:"tenant_id"`
+	PersonID          string `json:"person_id"`
+	Name              string `json:"name"`
+	PreferredUsername string `json:"preferred_username"`
+	TokenUse          string `json:"token_use"`
 }
 
 type platformOIDCClient struct {
-	config     oauth2.Config
-	verifier   *oidc.IDTokenVerifier
-	provider   *oidc.Provider
-	httpClient *http.Client
+	config          oauth2.Config
+	verifier        *oidc.IDTokenVerifier
+	provider        *oidc.Provider
+	httpClient      *http.Client
+	platformBaseURL string
 }
 
 func NewPlatformOIDCClient(ctx context.Context, options OIDCOptions) (*platformOIDCClient, error) {
@@ -82,8 +79,9 @@ func NewPlatformOIDCClient(ctx context.Context, options OIDCOptions) (*platformO
 	}
 	return &platformOIDCClient{
 		httpClient: httpClient, provider: provider,
-		verifier: provider.Verifier(&oidc.Config{ClientID: options.ClientID}),
-		config:   oauth2.Config{ClientID: options.ClientID, ClientSecret: options.ClientSecret, Endpoint: provider.Endpoint(), RedirectURL: options.RedirectURI, Scopes: options.Scopes},
+		platformBaseURL: strings.TrimRight(options.PlatformBaseURL, "/"),
+		verifier:        provider.Verifier(&oidc.Config{ClientID: options.ClientID}),
+		config:          oauth2.Config{ClientID: options.ClientID, ClientSecret: options.ClientSecret, Endpoint: provider.Endpoint(), RedirectURL: options.RedirectURI, Scopes: options.Scopes},
 	}, nil
 }
 
@@ -123,26 +121,106 @@ func (c *platformOIDCClient) Exchange(ctx context.Context, code, verifier, nonce
 	claims := claimsFromPlatform(raw)
 	claims.AccessToken = token.AccessToken
 	claims.ExpiresAt = earliestExpiry(idToken.Expiry, token.Expiry)
-	return claims, nil
+	// Keycloak Token 只承载稳定身份和少量 OIDC 元数据。详细角色、权限和组织范围
+	// 由基础平台授权上下文接口按当前快照返回，避免权限变更等待 Token 过期。
+	contextClaims, err := c.AuthorizationContext(ctx, token.AccessToken)
+	if err != nil {
+		return verifiedClaims{}, fmt.Errorf("load CRM authorization context: %w", err)
+	}
+	if contextClaims.Subject != claims.Subject || contextClaims.IdentityID != claims.Subject || (claims.TenantID != "" && contextClaims.TenantID != claims.TenantID) {
+		return verifiedClaims{}, errors.New("CRM authorization context identity does not match OIDC identity")
+	}
+	contextClaims.DisplayName = claims.DisplayName
+	contextClaims.PersonID = firstNonEmpty(contextClaims.PersonID, claims.PersonID)
+	contextClaims.ExpiresAt = claims.ExpiresAt
+	contextClaims.AccessToken = token.AccessToken
+	return contextClaims, nil
 }
 
 func (c *platformOIDCClient) UserInfo(ctx context.Context, accessToken string) (verifiedClaims, error) {
 	if strings.TrimSpace(accessToken) == "" {
 		return verifiedClaims{}, errors.New("CRM OIDC access token is missing")
 	}
-	oidcContext := oidc.ClientContext(ctx, c.httpClient)
-	info, err := c.provider.UserInfo(oidcContext, oauth2.StaticTokenSource(&oauth2.Token{AccessToken: accessToken, TokenType: "Bearer"}))
+	claims, err := c.AuthorizationContext(ctx, accessToken)
 	if err != nil {
-		return verifiedClaims{}, fmt.Errorf("load CRM OIDC UserInfo: %w", err)
+		return verifiedClaims{}, fmt.Errorf("load CRM authorization context: %w", err)
 	}
-	var raw platformClaims
-	if err := info.Claims(&raw); err != nil {
-		return verifiedClaims{}, fmt.Errorf("decode CRM OIDC UserInfo: %w", err)
+	oidcContext := oidc.ClientContext(ctx, c.httpClient)
+	info, userInfoErr := c.provider.UserInfo(oidcContext, oauth2.StaticTokenSource(&oauth2.Token{AccessToken: accessToken, TokenType: "Bearer"}))
+	if userInfoErr != nil {
+		return verifiedClaims{}, fmt.Errorf("load CRM OIDC UserInfo: %w", userInfoErr)
 	}
-	if raw.IdentityID == "" || raw.IdentityID != raw.Subject {
-		return verifiedClaims{}, errors.New("CRM OIDC UserInfo identity_id does not match sub")
+	var raw struct {
+		Subject           string `json:"sub"`
+		Name              string `json:"name"`
+		PreferredUsername string `json:"preferred_username"`
+		Email             string `json:"email"`
 	}
-	return claimsFromPlatform(raw), nil
+	if userInfoErr = info.Claims(&raw); userInfoErr != nil || raw.Subject == "" {
+		return verifiedClaims{}, fmt.Errorf("decode CRM OIDC UserInfo: %w", userInfoErr)
+	}
+	if claims.Subject != "" && raw.Subject != claims.Subject {
+		return verifiedClaims{}, errors.New("CRM UserInfo subject changed")
+	}
+	claims.DisplayName = firstNonEmpty(raw.Name, raw.PreferredUsername, raw.Email)
+	return claims, nil
+}
+
+type authorizationContextResponse struct {
+	Subject     string   `json:"sub"`
+	IdentityID  string   `json:"identity_id"`
+	TenantID    string   `json:"tenant_id"`
+	PersonID    string   `json:"person_id"`
+	Roles       []string `json:"roles"`
+	Permissions []string `json:"permissions"`
+	DataScopes  []struct {
+		ScopeType string `json:"scope_type"`
+		ScopeID   string `json:"scope_id"`
+	} `json:"data_scopes"`
+	AuthorizationRevision uint64 `json:"authorization_revision"`
+}
+
+func (c *platformOIDCClient) AuthorizationContext(ctx context.Context, accessToken string) (verifiedClaims, error) {
+	if c.platformBaseURL == "" {
+		return verifiedClaims{}, errors.New("CRM platform authorization context endpoint is not configured")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.platformBaseURL+"/oauth2/authorization-context", nil)
+	if err != nil {
+		return verifiedClaims{}, fmt.Errorf("create CRM authorization context request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return verifiedClaims{}, fmt.Errorf("request CRM authorization context: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+		return verifiedClaims{}, fmt.Errorf("authorization context returned HTTP %d", resp.StatusCode)
+	}
+	var raw authorizationContextResponse
+	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+		return verifiedClaims{}, fmt.Errorf("decode CRM authorization context: %w", err)
+	}
+	if raw.Subject == "" || raw.IdentityID == "" || raw.IdentityID != raw.Subject || raw.TenantID == "" || raw.AuthorizationRevision == 0 {
+		return verifiedClaims{}, errors.New("CRM authorization context identity or revision is invalid")
+	}
+	organizationIDs := make([]string, 0, len(raw.DataScopes))
+	for _, scope := range raw.DataScopes {
+		if scope.ScopeType == "ORG" && scope.ScopeID != "" {
+			organizationIDs = append(organizationIDs, scope.ScopeID)
+		}
+	}
+	return verifiedClaims{Subject: raw.Subject, IdentityID: raw.IdentityID, TenantID: raw.TenantID, PersonID: raw.PersonID, Roles: raw.Roles, Permissions: raw.Permissions, OrganizationIDs: organizationIDs, AuthzRevision: raw.AuthorizationRevision}, nil
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func claimsFromPlatform(raw platformClaims) verifiedClaims {
@@ -154,14 +232,16 @@ func claimsFromPlatform(raw platformClaims) verifiedClaims {
 	if identityID == "" {
 		identityID = raw.Subject
 	}
-	return verifiedClaims{Subject: raw.Subject, IdentityID: identityID, TenantID: raw.TenantID, PersonID: raw.PersonID, DisplayName: displayName, PrimaryOrgID: raw.PrimaryOrgID, OrganizationIDs: raw.OrganizationIDs, Roles: raw.Roles, Permissions: raw.Permissions, RoleConfigHash: raw.RoleConfigHash, AuthzRevision: raw.AuthzRevision}
+	return verifiedClaims{Subject: raw.Subject, IdentityID: identityID, TenantID: raw.TenantID, PersonID: raw.PersonID, DisplayName: displayName}
 }
 
 func normalizeAuthorization(claims verifiedClaims, expectedTenantID, expectedRoleConfigHash string, maxRoles int) (verifiedClaims, error) {
-	if claims.Subject == "" || claims.Subject != strings.TrimSpace(claims.Subject) || claims.IdentityID != claims.Subject || claims.TenantID != expectedTenantID ||
-		claims.RoleConfigHash == "" || claims.RoleConfigHash != expectedRoleConfigHash || claims.AuthzRevision == 0 {
+	if claims.Subject == "" || claims.Subject != strings.TrimSpace(claims.Subject) || claims.IdentityID != claims.Subject || claims.TenantID != expectedTenantID || claims.AuthzRevision == 0 {
 		return verifiedClaims{}, errors.New("CRM OIDC identity or authorization metadata is invalid")
 	}
+	// role_config_hash 不再从 Keycloak Token 读取；它绑定 CRM 内置目录版本，
+	// 由本地配置写入会话，详细授权则来自上面的在线授权上下文。
+	claims.RoleConfigHash = expectedRoleConfigHash
 	// CRM 业务表和追加式审计表的操作者标识上限为 64 字节。应在认证阶段拒绝过长 subject，
 	// 避免生成“能登录但首次写入才失败或被截断”的不完整会话。
 	if len([]byte(claims.Subject)) > 64 {

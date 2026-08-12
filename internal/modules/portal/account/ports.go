@@ -10,10 +10,26 @@ type Claims struct {
 	TenantID       string
 	Roles          []string
 	Permissions    []string
+	DataScopes     []DataScope
 	RoleConfigHash string
 	AuthzRevision  uint64
 	ExpiresAt      time.Time
 	AccessToken    string
+}
+
+// DataScope is the application-scoped data boundary resolved online by the
+// basic platform. It is intentionally kept outside the OIDC token and is
+// persisted only with the Portal's server-side session snapshot.
+//
+// The Portal remains customer-bound through IdentityLink.CustomerID; these
+// scopes are forwarded to the request principal so future Portal capabilities
+// can make explicit, role-aware data decisions without minting a second
+// authorization source.
+type DataScope struct {
+	RoleCode        string `json:"role_code"`
+	ScopeType       string `json:"scope_type"`
+	ScopeID         string `json:"scope_id"`
+	EnvironmentCode string `json:"environment_code"`
 }
 
 // OIDCClient 负责授权地址、授权码兑换，以及发行方、受众、签名、nonce 与 token_use 的密码学校验。

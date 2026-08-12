@@ -60,6 +60,7 @@ var baseFiles = map[Schema][]string{
 		"000068_portal_report_risk_operations.up.sql",
 		"000070_portal_identity_disable_idempotency.up.sql",
 		"000073_portal_worker_heartbeats.up.sql", "000076_portal_request_audit_outbox.up.sql", "000077_portal_customer_service_options.up.sql",
+		"000079_portal_session_data_scopes.up.sql",
 	},
 }
 

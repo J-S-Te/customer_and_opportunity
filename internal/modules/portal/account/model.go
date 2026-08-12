@@ -36,25 +36,26 @@ func (IdentityLink) TableName() string { return "portal_identity_links" }
 
 type Session struct {
 	database.Model
-	PublicID               string     `gorm:"size:64;not null;uniqueIndex"`
-	SessionIDHash          string     `gorm:"size:64;not null;uniqueIndex"`
-	PlatformUserID         string     `gorm:"size:128;not null;index"`
-	CustomerID             uint64     `gorm:"not null;index"`
-	AuthzRevision          uint64     `gorm:"not null"`
-	RoleConfigHash         string     `gorm:"size:128;not null"`
-	Roles                  []string   `gorm:"column:roles_json;serializer:json;type:json;not null"`
-	Permissions            []string   `gorm:"column:permissions_json;serializer:json;type:json;not null"`
-	AccessTokenCipher      []byte     `gorm:"type:blob;not null"`
-	AuthorizationCheckedAt time.Time  `gorm:"precision:3;not null"`
-	ExpiresAt              time.Time  `gorm:"precision:3;not null;index"`
-	AbsoluteExpiry         time.Time  `gorm:"precision:3;not null"`
-	LastSeenAt             time.Time  `gorm:"precision:3;not null"`
-	RevokedAt              *time.Time `gorm:"precision:3;index"`
-	IPHash                 string     `gorm:"size:64"`
-	UserAgentHash          string     `gorm:"size:64"`
-	IPMasked               string     `gorm:"size:64"`
-	LocationSnapshot       string     `gorm:"size:128"`
-	DeviceSnapshot         string     `gorm:"size:200"`
+	PublicID               string      `gorm:"size:64;not null;uniqueIndex"`
+	SessionIDHash          string      `gorm:"size:64;not null;uniqueIndex"`
+	PlatformUserID         string      `gorm:"size:128;not null;index"`
+	CustomerID             uint64      `gorm:"not null;index"`
+	AuthzRevision          uint64      `gorm:"not null"`
+	RoleConfigHash         string      `gorm:"size:128;not null"`
+	Roles                  []string    `gorm:"column:roles_json;serializer:json;type:json;not null"`
+	Permissions            []string    `gorm:"column:permissions_json;serializer:json;type:json;not null"`
+	DataScopes             []DataScope `gorm:"column:data_scopes_json;serializer:json;type:json;not null"`
+	AccessTokenCipher      []byte      `gorm:"type:blob;not null"`
+	AuthorizationCheckedAt time.Time   `gorm:"precision:3;not null"`
+	ExpiresAt              time.Time   `gorm:"precision:3;not null;index"`
+	AbsoluteExpiry         time.Time   `gorm:"precision:3;not null"`
+	LastSeenAt             time.Time   `gorm:"precision:3;not null"`
+	RevokedAt              *time.Time  `gorm:"precision:3;index"`
+	IPHash                 string      `gorm:"size:64"`
+	UserAgentHash          string      `gorm:"size:64"`
+	IPMasked               string      `gorm:"size:64"`
+	LocationSnapshot       string      `gorm:"size:128"`
+	DeviceSnapshot         string      `gorm:"size:200"`
 }
 
 func (Session) TableName() string { return "portal_sessions" }

@@ -88,7 +88,8 @@ func New(config Config) (*App, error) {
 	// 后者只认平台应用令牌。不存在请求头身份或本地权限降级路径。
 	oidcClient, oidcErr := crmauth.NewPlatformOIDCClient(context.Background(), crmauth.OIDCOptions{
 		Issuer: config.OIDCIssuer, BackchannelBaseURL: config.OIDCBackchannelBaseURL,
-		ClientID: config.OIDCClientID, ClientSecret: config.OIDCClientSecret,
+		PlatformBaseURL: config.PlatformBaseURL,
+		ClientID:        config.OIDCClientID, ClientSecret: config.OIDCClientSecret,
 		RedirectURI: config.OIDCRedirectURI, Scopes: config.OIDCScopes,
 	})
 	if oidcErr != nil {

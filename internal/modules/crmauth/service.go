@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"time"
@@ -18,6 +19,14 @@ const (
 )
 
 var ErrUnauthenticated = errors.New("CRM session is not authenticated")
+
+// loginFailure keeps the browser-facing error generic while preserving the
+// failed stage and the underlying cause for structured server diagnostics.
+// The joined errors also keep errors.Is(err, ErrUnauthenticated) compatible
+// with callers that only need the authentication classification.
+func loginFailure(stage string, cause error) error {
+	return fmt.Errorf("CRM OIDC login failed at %s: %w", stage, errors.Join(ErrUnauthenticated, cause))
+}
 
 type Options struct {
 	TenantID, RoleConfigHash string
@@ -85,30 +94,33 @@ type LoginResult struct {
 
 func (s *Service) CompleteLogin(ctx context.Context, state, code string) (LoginResult, error) {
 	if strings.TrimSpace(state) == "" || strings.TrimSpace(code) == "" {
-		return LoginResult{}, ErrUnauthenticated
+		return LoginResult{}, loginFailure("callback_parameters", errors.New("state or code is missing"))
 	}
 	now := s.now().UTC()
 	// 先原子消费 state，再兑换授权码；即使后续校验失败，同一回调也不能重放。
 	transaction, err := s.repo.ConsumeLogin(ctx, tokenHash(state), now)
 	if err != nil {
-		return LoginResult{}, ErrUnauthenticated
+		return LoginResult{}, loginFailure("login_state", err)
 	}
 	nonce, err := s.codec.decrypt(transaction.NonceCipher)
 	if err != nil {
-		return LoginResult{}, ErrUnauthenticated
+		return LoginResult{}, loginFailure("nonce_unwrap", err)
 	}
 	verifier, err := s.codec.decrypt(transaction.CodeVerifierCipher)
 	if err != nil {
-		return LoginResult{}, ErrUnauthenticated
+		return LoginResult{}, loginFailure("pkce_verifier_unwrap", err)
 	}
 	claims, err := s.oidc.Exchange(ctx, code, verifier, nonce)
 	if err != nil {
-		return LoginResult{}, ErrUnauthenticated
+		return LoginResult{}, loginFailure("authorization_code_exchange", err)
 	}
 	// 不直接信任平台返回的扁平权限：必须与本地发布的角色目录精确一致，防止目录漂移或越权声明。
 	claims, err = normalizeAuthorization(claims, s.options.TenantID, s.options.RoleConfigHash, s.options.MaxRoles)
 	if err != nil || !claims.ExpiresAt.After(now) {
-		return LoginResult{}, ErrUnauthenticated
+		if err == nil {
+			err = errors.New("authorization claims are expired")
+		}
+		return LoginResult{}, loginFailure("authorization_claims", err)
 	}
 	// This is deliberately after all CRM code/token/claims checks.  A failed
 	// platform receipt must remain visible to its deployment gate, but cannot
@@ -121,7 +133,7 @@ func (s *Service) CompleteLogin(ctx context.Context, state, code string) (LoginR
 	// 本地会话绝不能比上游 ID/Access Token 或本地策略 TTL 活得更久。
 	expiresAt := earliestExpiry(claims.ExpiresAt, now.Add(s.options.SessionTTL))
 	if !expiresAt.After(now) {
-		return LoginResult{}, ErrUnauthenticated
+		return LoginResult{}, loginFailure("session_expiry", errors.New("session expiry is not in the future"))
 	}
 	rawSession, err := randomToken(48)
 	if err != nil {
