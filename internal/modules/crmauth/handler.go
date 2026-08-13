@@ -15,9 +15,9 @@ import (
 )
 
 type HTTPOptions struct {
-	PathPrefix, PublicOrigin, CookieName, Issuer, ClientID string
-	CookieSecure                                           bool
-	PostLogoutRedirectURI                                  string
+	PathPrefix, PublicOrigin, CookieName, EndSessionEndpoint, ClientID string
+	CookieSecure                                                       bool
+	PostLogoutRedirectURI                                              string
 }
 
 type Handler struct {
@@ -84,13 +84,15 @@ func (h *Handler) Logout(c *gin.Context) {
 		h.service.Logout(c.Request.Context(), cookie.Value)
 	}
 	http.SetCookie(c.Writer, &http.Cookie{Name: h.options.CookieName, Value: "", Path: h.cookiePath(), Expires: timeUnixOne, MaxAge: -1, HttpOnly: true, Secure: h.options.CookieSecure, SameSite: http.SameSiteLaxMode})
-	if h.options.Issuer != "" {
-		endpoint, err := url.Parse(strings.TrimRight(h.options.Issuer, "/") + "/oauth2/logout")
-		if err == nil {
+	if h.options.EndSessionEndpoint != "" {
+		endpoint, err := url.ParseRequestURI(h.options.EndSessionEndpoint)
+		if err == nil && (endpoint.Scheme == "http" || endpoint.Scheme == "https") && endpoint.Host != "" && endpoint.User == nil && endpoint.Fragment == "" {
 			query := endpoint.Query()
-			query.Set("client_id", h.options.ClientID)
-			if h.options.PostLogoutRedirectURI != "" {
-				query.Set("post_logout_redirect_uri", h.options.PostLogoutRedirectURI)
+			if strings.TrimSpace(h.options.ClientID) != "" {
+				query.Set("client_id", strings.TrimSpace(h.options.ClientID))
+			}
+			if validSameOriginRedirect(h.options.PostLogoutRedirectURI, h.options.PublicOrigin) {
+				query.Set("post_logout_redirect_uri", strings.TrimSpace(h.options.PostLogoutRedirectURI))
 			}
 			endpoint.RawQuery = query.Encode()
 			c.Redirect(http.StatusFound, endpoint.String())
@@ -98,6 +100,16 @@ func (h *Handler) Logout(c *gin.Context) {
 		}
 	}
 	c.Redirect(http.StatusFound, strings.TrimRight(h.options.PathPrefix, "/")+"/")
+}
+
+func validSameOriginRedirect(candidate, publicOrigin string) bool {
+	redirect, err := url.ParseRequestURI(strings.TrimSpace(candidate))
+	origin, originErr := url.ParseRequestURI(strings.TrimSpace(publicOrigin))
+	if err != nil || originErr != nil || redirect.Scheme == "" || redirect.Host == "" || redirect.User != nil || redirect.Fragment != "" {
+		return false
+	}
+	return (redirect.Scheme == "http" || redirect.Scheme == "https") &&
+		redirect.Scheme == origin.Scheme && strings.EqualFold(redirect.Host, origin.Host)
 }
 
 // RequireSameOrigin 保护基于 Cookie 的写请求。除 Origin 必须与公开入口同源外，还要求自定义头，
