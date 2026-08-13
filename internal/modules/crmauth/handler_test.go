@@ -3,6 +3,7 @@ package crmauth
 import (
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -22,6 +23,75 @@ func TestSessionCookieIsIndependentHttpOnlySecureLaxAndPathScoped(t *testing.T) 
 			t.Fatalf("Set-Cookie %q missing %q", value, expected)
 		}
 	}
+}
+
+func TestLogoutUsesDiscoveredEndSessionEndpoint(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	handler := &Handler{options: HTTPOptions{
+		PathPrefix:            "/customer-opportunity",
+		PublicOrigin:          "https://crm.example.com",
+		CookieName:            "customer_opportunity_session",
+		EndSessionEndpoint:    "https://identity.example.com/realms/crm/protocol/openid-connect/logout?provider=keycloak",
+		ClientID:              "crm-web",
+		PostLogoutRedirectURI: "https://crm.example.com/customer-opportunity/",
+	}}
+	recorder := performLogout(handler)
+
+	if recorder.Code != http.StatusFound {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusFound)
+	}
+	location, err := url.Parse(recorder.Header().Get("Location"))
+	if err != nil {
+		t.Fatalf("parse Location: %v", err)
+	}
+	if location.Scheme != "https" || location.Host != "identity.example.com" || location.Path != "/realms/crm/protocol/openid-connect/logout" {
+		t.Fatalf("unexpected logout endpoint %q", location.String())
+	}
+	query := location.Query()
+	if query.Get("provider") != "keycloak" || query.Get("client_id") != "crm-web" || query.Get("post_logout_redirect_uri") != "https://crm.example.com/customer-opportunity/" {
+		t.Fatalf("unexpected logout query %v", query)
+	}
+}
+
+func TestLogoutOmitsCrossOriginPostLogoutRedirect(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	handler := &Handler{options: HTTPOptions{
+		PathPrefix:            "/customer-opportunity",
+		PublicOrigin:          "https://crm.example.com",
+		EndSessionEndpoint:    "https://identity.example.com/logout",
+		ClientID:              "crm-web",
+		PostLogoutRedirectURI: "https://evil.example/collect",
+	}}
+	recorder := performLogout(handler)
+
+	location, err := url.Parse(recorder.Header().Get("Location"))
+	if err != nil {
+		t.Fatalf("parse Location: %v", err)
+	}
+	if got := location.Query().Get("post_logout_redirect_uri"); got != "" {
+		t.Fatalf("cross-origin post_logout_redirect_uri = %q, want empty", got)
+	}
+}
+
+func TestLogoutFallsBackToLocalApplicationWhenEndpointIsInvalid(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	handler := &Handler{options: HTTPOptions{
+		PathPrefix:         "/customer-opportunity",
+		EndSessionEndpoint: "javascript:alert(1)",
+	}}
+	recorder := performLogout(handler)
+
+	if location := recorder.Header().Get("Location"); location != "/customer-opportunity/" {
+		t.Fatalf("Location = %q, want local application", location)
+	}
+}
+
+func performLogout(handler *Handler) *httptest.ResponseRecorder {
+	router := gin.New()
+	router.POST("/customer-opportunity/auth/logout", handler.Logout)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/customer-opportunity/auth/logout", nil))
+	return recorder
 }
 
 func TestRequireSameOriginRejectsCrossOriginAndMissingCSRFHeader(t *testing.T) {

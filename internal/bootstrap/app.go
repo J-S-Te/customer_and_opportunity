@@ -113,7 +113,7 @@ func New(config Config) (*App, error) {
 	}
 	authHandler := crmauth.NewHandler(authService, crmauth.HTTPOptions{
 		PathPrefix: config.PathPrefix, PublicOrigin: config.PublicOrigin, CookieName: config.OIDCSessionCookieName,
-		Issuer: config.OIDCIssuer, ClientID: config.OIDCClientID, CookieSecure: config.OIDCSessionSecure, PostLogoutRedirectURI: config.OIDCPostLogoutRedirectURI,
+		EndSessionEndpoint: oidcClient.EndSessionEndpoint(), ClientID: config.OIDCClientID, CookieSecure: config.OIDCSessionSecure, PostLogoutRedirectURI: config.OIDCPostLogoutRedirectURI,
 	})
 	authMiddleware := middleware.SessionAuth(authService, config.OIDCSessionCookieName)
 	base.GET("/auth/login", authHandler.Login)

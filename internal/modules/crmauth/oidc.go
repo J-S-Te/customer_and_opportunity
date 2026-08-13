@@ -61,6 +61,7 @@ type platformOIDCClient struct {
 	httpClient           *http.Client
 	platformBaseURL      string
 	identityProviderHint string
+	endSessionEndpoint   string
 	expectedContext      sharedauthorization.Expectation
 }
 
@@ -84,14 +85,49 @@ func NewPlatformOIDCClient(ctx context.Context, options OIDCOptions) (*platformO
 	if err != nil {
 		return nil, fmt.Errorf("load CRM OIDC discovery: %w", err)
 	}
+	endSessionEndpoint, err := discoverEndSessionEndpoint(provider, options.Issuer)
+	if err != nil {
+		return nil, err
+	}
 	return &platformOIDCClient{
 		httpClient: httpClient, provider: provider,
 		platformBaseURL:      strings.TrimRight(options.PlatformBaseURL, "/"),
 		identityProviderHint: strings.TrimSpace(options.IdentityProviderHint),
+		endSessionEndpoint:   endSessionEndpoint,
 		expectedContext:      sharedauthorization.Expectation{ClientID: options.ClientID, ApplicationCode: options.ApplicationCode, EnvironmentCode: options.EnvironmentCode},
 		verifier:             provider.Verifier(&oidc.Config{ClientID: options.ClientID}),
 		config:               oauth2.Config{ClientID: options.ClientID, ClientSecret: options.ClientSecret, Endpoint: provider.Endpoint(), RedirectURL: options.RedirectURI, Scopes: options.Scopes},
 	}, nil
+}
+
+// EndSessionEndpoint returns the provider-owned RP-initiated logout endpoint.
+// The value comes from OIDC Discovery; the legacy fallback is resolved once at
+// startup so request handlers never infer provider-specific paths themselves.
+func (c *platformOIDCClient) EndSessionEndpoint() string {
+	if c == nil {
+		return ""
+	}
+	return c.endSessionEndpoint
+}
+
+func discoverEndSessionEndpoint(provider *oidc.Provider, issuer string) (string, error) {
+	var metadata struct {
+		EndSessionEndpoint string `json:"end_session_endpoint"`
+	}
+	if err := provider.Claims(&metadata); err != nil {
+		return "", fmt.Errorf("decode CRM OIDC discovery metadata: %w", err)
+	}
+	endpoint := strings.TrimSpace(metadata.EndSessionEndpoint)
+	if endpoint == "" {
+		// Compatibility for the original base-platform issuer, whose historical
+		// discovery documents did not always publish end_session_endpoint.
+		endpoint = strings.TrimRight(strings.TrimSpace(issuer), "/") + "/oauth2/logout"
+	}
+	parsed, err := url.ParseRequestURI(endpoint)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || parsed.User != nil || parsed.Fragment != "" {
+		return "", errors.New("CRM OIDC end_session_endpoint must be a valid HTTP(S) URL")
+	}
+	return parsed.String(), nil
 }
 
 func (c *platformOIDCClient) AuthorizationURL(state, nonce, verifier string) string {
