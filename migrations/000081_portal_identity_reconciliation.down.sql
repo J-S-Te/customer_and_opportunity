@@ -1,0 +1,2 @@
+DROP TABLE IF EXISTS crm_portal_identity_reconciliation_findings;
+DROP TABLE IF EXISTS crm_portal_identity_reconciliation_runs;
