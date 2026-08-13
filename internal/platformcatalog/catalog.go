@@ -123,7 +123,7 @@ func Publish(ctx context.Context, manifest Manifest, options Options) error {
 	request.Header.Set("Accept", "application/json")
 	response, err := client.Do(request)
 	if err != nil {
-		return errors.New("publish authorization catalog: platform transport failed")
+		return fmt.Errorf("publish authorization catalog: platform transport failed: %w", err)
 	}
 	defer response.Body.Close()
 	_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 1<<20))
@@ -289,7 +289,7 @@ func requestAccessToken(ctx context.Context, client *http.Client, baseURL *url.U
 	request.Header.Set("Accept", "application/json")
 	response, err := client.Do(request)
 	if err != nil {
-		return "", errors.New("request authorization catalog token: platform transport failed")
+		return "", fmt.Errorf("request authorization catalog token: platform transport failed: %w", err)
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
