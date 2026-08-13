@@ -91,7 +91,8 @@ func New(config Config) (*App, error) {
 		PlatformBaseURL: config.PlatformBaseURL,
 		ClientID:        config.OIDCClientID, ClientSecret: config.OIDCClientSecret,
 		ApplicationCode: config.PlatformApplicationCode, EnvironmentCode: config.PlatformEnvironmentCode,
-		RedirectURI: config.OIDCRedirectURI, Scopes: config.OIDCScopes,
+		IdentityProviderHint: "basic-platform",
+		RedirectURI:          config.OIDCRedirectURI, Scopes: config.OIDCScopes,
 	})
 	if oidcErr != nil {
 		return nil, oidcErr

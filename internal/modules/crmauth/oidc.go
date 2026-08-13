@@ -22,6 +22,7 @@ import (
 type OIDCOptions struct {
 	Issuer, BackchannelBaseURL, PlatformBaseURL, ClientID, ClientSecret, RedirectURI string
 	ApplicationCode, EnvironmentCode                                                 string
+	IdentityProviderHint                                                             string
 	Scopes                                                                           []string
 }
 
@@ -54,12 +55,13 @@ type platformClaims struct {
 }
 
 type platformOIDCClient struct {
-	config          oauth2.Config
-	verifier        *oidc.IDTokenVerifier
-	provider        *oidc.Provider
-	httpClient      *http.Client
-	platformBaseURL string
-	expectedContext sharedauthorization.Expectation
+	config               oauth2.Config
+	verifier             *oidc.IDTokenVerifier
+	provider             *oidc.Provider
+	httpClient           *http.Client
+	platformBaseURL      string
+	identityProviderHint string
+	expectedContext      sharedauthorization.Expectation
 }
 
 func NewPlatformOIDCClient(ctx context.Context, options OIDCOptions) (*platformOIDCClient, error) {
@@ -84,15 +86,22 @@ func NewPlatformOIDCClient(ctx context.Context, options OIDCOptions) (*platformO
 	}
 	return &platformOIDCClient{
 		httpClient: httpClient, provider: provider,
-		platformBaseURL: strings.TrimRight(options.PlatformBaseURL, "/"),
-		expectedContext: sharedauthorization.Expectation{ClientID: options.ClientID, ApplicationCode: options.ApplicationCode, EnvironmentCode: options.EnvironmentCode},
-		verifier:        provider.Verifier(&oidc.Config{ClientID: options.ClientID}),
-		config:          oauth2.Config{ClientID: options.ClientID, ClientSecret: options.ClientSecret, Endpoint: provider.Endpoint(), RedirectURL: options.RedirectURI, Scopes: options.Scopes},
+		platformBaseURL:      strings.TrimRight(options.PlatformBaseURL, "/"),
+		identityProviderHint: strings.TrimSpace(options.IdentityProviderHint),
+		expectedContext:      sharedauthorization.Expectation{ClientID: options.ClientID, ApplicationCode: options.ApplicationCode, EnvironmentCode: options.EnvironmentCode},
+		verifier:             provider.Verifier(&oidc.Config{ClientID: options.ClientID}),
+		config:               oauth2.Config{ClientID: options.ClientID, ClientSecret: options.ClientSecret, Endpoint: provider.Endpoint(), RedirectURL: options.RedirectURI, Scopes: options.Scopes},
 	}, nil
 }
 
 func (c *platformOIDCClient) AuthorizationURL(state, nonce, verifier string) string {
-	return c.config.AuthCodeURL(state, oidc.Nonce(nonce), oauth2.S256ChallengeOption(verifier))
+	options := []oauth2.AuthCodeOption{oidc.Nonce(nonce), oauth2.S256ChallengeOption(verifier)}
+	if c.identityProviderHint != "" {
+		// Keycloak 的 kc_idp_hint 会直接把认证请求交给基础平台 Broker。
+		// 门户已有基础平台会话时，整个往返无需展示 Keycloak 登录或账号补充页面。
+		options = append(options, oauth2.SetAuthURLParam("kc_idp_hint", c.identityProviderHint))
+	}
+	return c.config.AuthCodeURL(state, options...)
 }
 
 func (c *platformOIDCClient) Exchange(ctx context.Context, code, verifier, nonce string) (verifiedClaims, error) {
