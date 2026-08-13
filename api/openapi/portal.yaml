@@ -130,6 +130,8 @@ paths:
     post: {$ref: '#/components/x-operations/requestFilingExport'}
   /internal/accounts/provision:
     post: {$ref: '#/components/x-operations/provisionPortalAccount'}
+  /internal/accounts/reconciliation-snapshot:
+    post: {$ref: '#/components/x-operations/reconcilePortalAccounts'}
   /internal/accounts/disable:
     post: {$ref: '#/components/x-operations/disablePortalAccount'}
   /internal/report-callbacks:
@@ -345,6 +347,7 @@ components:
     completeFilingMaterialUpload: {<<: *filingRead, operationId: completeFilingMaterialUpload, x-permission: filing.update, parameters: [{$ref: '#/components/parameters/ID'}, {name: materialID, in: path, required: true, schema: {type: string}}], requestBody: {$ref: '#/components/requestBodies/Version'}}
     requestFilingExport: {<<: *filingRead, operationId: requestFilingExport, parameters: [{$ref: '#/components/parameters/ID'}], description: Current handler intentionally returns PORTAL_FILING_EXPORT_NOT_CONFIGURED.}
     provisionPortalAccount: &machineProvision {operationId: provisionPortalAccount, tags: [Machine integration], security: [{machineJWT: [portal.identity_mapping.provision]}], x-scope: portal.identity_mapping.provision, x-oauth-client-subject-config: PORTAL_CRM_PROVISION_CLIENT_SUBJECT, responses: {'200': {$ref: '#/components/responses/OK'}, '201': {$ref: '#/components/responses/Created'}, '400': {$ref: '#/components/responses/Error'}, '401': {$ref: '#/components/responses/Error'}, '403': {$ref: '#/components/responses/Error'}, '409': {$ref: '#/components/responses/Error'}}}
+    reconcilePortalAccounts: {<<: *machineProvision, operationId: reconcilePortalAccounts, description: Bounded read-only identity-link snapshot for the exact configured CRM machine client. Missing identities are explicit; contact data and tokens are never returned.}
     disablePortalAccount: {<<: *machineProvision, operationId: disablePortalAccount, security: [{machineJWT: [portal.identity_mapping.disable]}], x-scope: portal.identity_mapping.disable, x-oauth-client-subject-config: PORTAL_CRM_DISABLE_CLIENT_SUBJECT, parameters: [{$ref: '#/components/parameters/IdempotencyKey'}], description: Atomically disables the exact tenant/customer/subject mapping, revokes all local sessions, and commits a minimized auth audit event. Exact business-idempotency replays return the original result; conflicting payloads fail with 409.}
     reportCallback: {<<: *machineProvision, operationId: reportCallback, x-scope: report.callback.write, security: [{machineJWT: [report.callback.write]}], parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]}
     listReportRiskAlertsForReview: {<<: *machineProvision, operationId: listReportRiskAlertsForReview, x-scope: portal.report.risk.manage, security: [{machineJWT: [portal.report.risk.manage]}]}

@@ -83,5 +83,13 @@ type AccessDisableRepository interface {
 	DisableLink(context.Context, DisableCommand, time.Time) (DisableResult, error)
 }
 
+// IdentityReconciliationRepository exposes only the minimum read model needed
+// by the CRM reconciliation worker. It is deliberately separate from the
+// login Repository so test doubles and authentication paths cannot gain a
+// cross-customer listing capability by accident.
+type IdentityReconciliationRepository interface {
+	FindLinksBySubjects(context.Context, string, []string) ([]IdentityLink, error)
+}
+
 type Clock interface{ Now() time.Time }
 type RandomSource interface{ Bytes(int) ([]byte, error) }

@@ -53,6 +53,9 @@
 45. `000072_presale_worker_heartbeats.up.sql`
 46. `000074_portal_invite_login_account.up.sql`
 47. `000075_crm_request_audit_outbox.up.sql`
+48. `000078_presale_approval_rules.up.sql`
+49. `000080_crm_session_data_scopes.up.sql`
+50. `000081_portal_identity_reconciliation.up.sql`
 
 ## customer_portal schema
 
@@ -87,6 +90,8 @@
 27. `000070_portal_identity_disable_idempotency.up.sql`
 28. `000073_portal_worker_heartbeats.up.sql`
 29. `000076_portal_request_audit_outbox.up.sql`
+30. `000077_portal_customer_service_options.up.sql`
+31. `000079_portal_session_data_scopes.up.sql`
 
 ## 规则
 
@@ -110,6 +115,8 @@
 `000068` 新建报告风险冻结站内告警和人工复核事件，冻结与告警同事务；人工解冻仅允许恢复尚未过期且不存在其他活动授权的原 grant，撤销重发只撤销旧 grant 并要求客户再次显式生成一次性授权，后台不生成或返回可回放的明文 token。旧 FROZEN grant 缺少可信规则和检测时点，不补造历史告警。
 `000069` 新建独立 Portal 访问禁用 Saga。操作绑定身份链接 ID/版本快照，先让 Portal 映射进入 `DISABLED` 并撤销该 subject 的全部本地会话，再回收基础平台 `portal_customer` 角色；两个远端步骤使用稳定业务幂等键。请求与独立恢复 Worker 共享有限租约，到期 `RETRY_WAIT` 由 `FOR UPDATE SKIP LOCKED` 领取，第 8 次失败保留 `DEAD_LETTER` 证据。既有身份链接不自动禁用，邀请 revoke 也不会触发该流程。
 `000070` 为 Portal 本地映射禁用增加机器主体+业务幂等键+规范载荷摘要账本；随机 integration nonce 只防单次请求重放，不能替代跨网络重试的业务幂等。映射、会话撤销、最小化 auth event 与账本在同一事务提交，审计失败整体回滚。
+
+`000081` 新建 CRM↔Portal 身份周期对账运行记录与稳定差异记录。对账只读取 CRM identity link、客户、联系人、邀请账号、既有补偿状态以及 Portal 最小身份快照；不会创建第二条补偿任务，也不会自动推断禁用或恢复方向。只有已经处于 `PENDING/PROCESSING/RETRY_WAIT` 的幂等补偿被标记为 `AUTO_COMPENSATION`，其余映射、状态、客户或联系人差异均持久化为 `NEEDS_REVIEW`。生产回退会删除运维证据，存在对账记录时应优先前向修复。
 
 `000073` 为 Portal 报告投递 Worker 与项目 PDF Worker保存多实例运行心跳。Portal 仅在任一对应实例心跳新鲜时受理首次异步工作；已有幂等请求重放不依赖当前心跳。配置存在不等于 Worker 存活，查询错误、心跳过期或无实例均失败关闭。
 `000071` 为 TS-008 售前预警增加显式 `USER`/`PERSON` 收件人命名空间，并把命名空间纳入唯一键和个人收件箱索引；`recipient_id` 及该表操作人审计列扩为大小写敏感的 128 字符，以完整承载既有 CRM OIDC `platform_user_id` 契约，PMS `person_id` 仍遵守 64 字符上限。存量 `recipient_id` 缺少可证明来源，统一保留为不可查询的 `LEGACY_UNKNOWN`；只取消尚未投影的旧 PENDING 预警及其 outbox，不把 OIDC `sub` 猜成 PMS `person_id`，也不改写已经投影的历史证据。新增写入必须显式给出命名空间；该迁移仍需上一版本存量数据、在线 DDL 和 metadata lock 演练。

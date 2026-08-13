@@ -532,6 +532,14 @@ Portal 采用“CRM 预置基础平台外部用户 + 注册链接绑定 + 基础
 
 ## 14. 文档索引
 
+### CRM ↔ Portal 身份周期对账
+
+`portal-invite-compensation-worker` 同时执行只读身份对账：按批核对 CRM identity link、客户、联系人、邀请账号和 Portal account 快照，并把每次运行及差异写入 `crm_portal_identity_reconciliation_runs` 与 `crm_portal_identity_reconciliation_findings`。运行指标包含扫描、完全一致、已有幂等补偿处理中及需人工复核数量。
+
+对账不会创建第二条补偿任务。只有已有 `PENDING`、`PROCESSING` 或 `RETRY_WAIT` 补偿的 Portal 缺失映射会标记为 `AUTO_COMPENSATION`，继续由原有租约、退避和死信链路执行。客户/联系人异常、映射或状态不一致、补偿死信均标记 `NEEDS_REVIEW`；系统不会推断禁用或恢复方向。Portal 快照接口仅允许配置的 CRM 机器客户端以 `portal.identity_mapping.provision` scope 调用，且只返回身份映射状态，不返回联系人资料和令牌。
+
+可通过 `PORTAL_IDENTITY_RECONCILIATION_INTERVAL` 和 `PORTAL_IDENTITY_RECONCILIATION_BATCH_SIZE` 调整周期与批量。进程启动会立即运行一次，重启后依靠持久化运行记录和稳定 finding key 安全续查。
+
 ### 开发规格
 
 - [逐需求开发文档总索引](开发需求文档/README.md)

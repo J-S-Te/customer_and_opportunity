@@ -44,6 +44,7 @@ type RouterDependencies struct {
 	Account               *account.Service
 	ProvisionAccount      func(context.Context, account.ProvisionCommand) (account.ProvisionResult, error)
 	DisableAccount        func(context.Context, account.DisableCommand) (account.DisableResult, error)
+	ReconcileAccounts     func(context.Context, string, []string) ([]account.ReconciliationSnapshot, error)
 	Projects              *project.Service
 	ProjectExports        *projectexport.Service
 	ProjectMessages       *projectmessage.Service
@@ -152,6 +153,7 @@ func NewRouter(deps RouterDependencies) *gin.Engine {
 	base.POST("/auth/logout", authenticate(deps), originAndCSRF(deps.Config), logout(deps))
 	internal := base.Group("/internal", machineAuth(deps.MachineAuthenticator))
 	internal.POST("/accounts/provision", requireMachineScope("portal.identity_mapping.provision"), requireMachineClientSubject(deps.Config.CRMProvisionClientSubject), provision(deps))
+	internal.POST("/accounts/reconciliation-snapshot", requireMachineScope("portal.identity_mapping.provision"), requireMachineClientSubject(deps.Config.CRMProvisionClientSubject), reconciliationSnapshot(deps))
 	internal.POST("/accounts/disable", requireMachineScope("portal.identity_mapping.disable"), requireMachineClientSubject(deps.Config.CRMDisableClientSubject), disableAccount(deps))
 	internal.GET("/customers/:customerID/capabilities", requireMachineScope("portal.customer_capabilities.read"), getCustomerCapabilities(deps))
 	internal.PUT("/customers/:customerID/capabilities", requireMachineScope("portal.customer_capabilities.manage"), updateCustomerCapabilities(deps))
@@ -612,6 +614,46 @@ func provision(deps RouterDependencies) gin.HandlerFunc {
 			return
 		}
 		response.Created(c, result)
+	}
+}
+
+func reconciliationSnapshot(deps RouterDependencies) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var body struct {
+			Items []struct {
+				PlatformUserID string `json:"platform_user_id"`
+			} `json:"items"`
+		}
+		if !decode(c, &body) {
+			return
+		}
+		if len(body.Items) == 0 || len(body.Items) > 100 {
+			response.Error(c, apperror.New(http.StatusUnprocessableEntity, "COMMON_VALIDATION_ERROR", "items must contain between 1 and 100 identities"))
+			return
+		}
+		principal, ok := sharedauth.FromContext(c.Request.Context())
+		if !ok || strings.TrimSpace(principal.TenantID) == "" {
+			response.Error(c, apperror.ErrForbidden)
+			return
+		}
+		subjects := make([]string, 0, len(body.Items))
+		for _, item := range body.Items {
+			subjects = append(subjects, item.PlatformUserID)
+		}
+		read := deps.ReconcileAccounts
+		if read == nil {
+			if deps.Account == nil {
+				response.Error(c, apperror.New(http.StatusServiceUnavailable, "PORTAL_IDENTITY_RECONCILIATION_UNAVAILABLE", "identity reconciliation is unavailable"))
+				return
+			}
+			read = deps.Account.ReconciliationSnapshots
+		}
+		items, err := read(c.Request.Context(), principal.TenantID, subjects)
+		if err != nil {
+			response.Error(c, err)
+			return
+		}
+		response.OK(c, gin.H{"items": items})
 	}
 }
 
