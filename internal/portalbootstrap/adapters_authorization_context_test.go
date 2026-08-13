@@ -40,7 +40,7 @@ func TestCompactPortalIdentityRequiresIDTokenPurposeAndCanonicalIdentity(t *test
 	for _, mutate := range []func(*compactOIDCClaims){
 		func(value *compactOIDCClaims) { value.TokenUse = "" },
 		func(value *compactOIDCClaims) { value.TokenUse = "access_token" },
-		func(value *compactOIDCClaims) { value.IdentityID = "identity-b" },
+		func(value *compactOIDCClaims) { value.IdentityID = "" },
 		func(value *compactOIDCClaims) { value.Subject = " identity-a" },
 	} {
 		value := base

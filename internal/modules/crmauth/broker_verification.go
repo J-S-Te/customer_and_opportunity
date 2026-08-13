@@ -60,7 +60,7 @@ func NewPlatformBrokerVerifier(options BrokerVerificationOptions) (*platformBrok
 }
 
 func (v *platformBrokerVerifier) Verify(ctx context.Context, claims verifiedClaims) error {
-	if v == nil || strings.TrimSpace(claims.IdentityID) == "" || claims.IdentityID != claims.Subject || strings.TrimSpace(claims.AccessToken) == "" {
+	if v == nil || strings.TrimSpace(claims.IdentityID) == "" || strings.TrimSpace(claims.Subject) == "" || strings.TrimSpace(claims.AccessToken) == "" {
 		return errors.New("broker verification requires a verified identity and platform access token")
 	}
 	body, err := json.Marshal(struct {

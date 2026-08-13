@@ -164,7 +164,7 @@ func (s *Service) CompleteLogin(ctx context.Context, state, code string) (LoginR
 	if err != nil {
 		return LoginResult{}, err
 	}
-	session := &Session{SessionIDHash: tokenHash(rawSession), TenantID: claims.TenantID, PlatformUserID: claims.Subject, PersonID: claims.PersonID, DisplayName: claims.DisplayName, PrimaryOrgID: claims.PrimaryOrgID, OrganizationIDsJSON: organizationIDsJSON, RolesJSON: rolesJSON, PermissionsJSON: permissionsJSON, DataScopesJSON: dataScopesJSON, RoleConfigHash: claims.RoleConfigHash, AuthzRevision: claims.AuthzRevision, AccessTokenCipher: accessTokenCipher, ExpiresAt: expiresAt, AuthorizationCheckedAt: now, CreatedAt: now, LastSeenAt: now}
+	session := &Session{SessionIDHash: tokenHash(rawSession), TenantID: claims.TenantID, PlatformUserID: claims.IdentityID, PersonID: claims.PersonID, DisplayName: claims.DisplayName, PrimaryOrgID: claims.PrimaryOrgID, OrganizationIDsJSON: organizationIDsJSON, RolesJSON: rolesJSON, PermissionsJSON: permissionsJSON, DataScopesJSON: dataScopesJSON, RoleConfigHash: claims.RoleConfigHash, AuthzRevision: claims.AuthzRevision, AccessTokenCipher: accessTokenCipher, ExpiresAt: expiresAt, AuthorizationCheckedAt: now, CreatedAt: now, LastSeenAt: now}
 	if err := s.repo.CreateSession(ctx, session); err != nil {
 		return LoginResult{}, err
 	}
