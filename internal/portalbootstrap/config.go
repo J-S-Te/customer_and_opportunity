@@ -27,6 +27,7 @@ type Config struct {
 	OIDCClientSecret         string
 	OIDCRedirectURI          string
 	OIDCScopes               []string
+	OIDCIdentityProviderHint string
 	SessionCookieName        string
 	SessionCookieSecure      bool
 	SessionTTL               time.Duration
@@ -111,7 +112,8 @@ func LoadConfig() (Config, error) {
 		OIDCIssuer: os.Getenv("PORTAL_OIDC_ISSUER"), OIDCBackchannelURL: os.Getenv("PORTAL_OIDC_BACKCHANNEL_BASE_URL"),
 		OIDCClientID: os.Getenv("PORTAL_OIDC_CLIENT_ID"), OIDCClientSecret: os.Getenv("PORTAL_OIDC_CLIENT_SECRET"),
 		OIDCRedirectURI: os.Getenv("PORTAL_OIDC_REDIRECT_URI"), OIDCScopes: fields(valueOrDefault("PORTAL_OIDC_SCOPES", "openid profile")),
-		SessionCookieName: valueOrDefault("PORTAL_SESSION_COOKIE_NAME", "customer_portal_session"), SessionCookieSecure: secure, SessionTTL: ttl,
+		OIDCIdentityProviderHint: portalOIDCIdentityProviderHint(),
+		SessionCookieName:        valueOrDefault("PORTAL_SESSION_COOKIE_NAME", "customer_portal_session"), SessionCookieSecure: secure, SessionTTL: ttl,
 		AllowInsecureHTTPSession: allowInsecureHTTPSession,
 		AccountSecurityCenterURL: os.Getenv("PORTAL_ACCOUNT_SECURITY_CENTER_URL"),
 		MachineTokenIssuer:       os.Getenv("PORTAL_MACHINE_TOKEN_ISSUER"), MachineTokenAudience: os.Getenv("PORTAL_MACHINE_TOKEN_AUDIENCE"),
@@ -137,6 +139,10 @@ func LoadConfig() (Config, error) {
 		return Config{}, err
 	}
 	return config, nil
+}
+
+func portalOIDCIdentityProviderHint() string {
+	return valueOrDefault("PORTAL_OIDC_IDP_HINT", "basic-platform")
 }
 
 func (c Config) validate() error {
@@ -220,6 +226,9 @@ func (c Config) validate() error {
 	}
 	if !contains(c.OIDCScopes, "openid") {
 		return fmt.Errorf("PORTAL_OIDC_SCOPES must include openid")
+	}
+	if c.OIDCIdentityProviderHint != strings.TrimSpace(c.OIDCIdentityProviderHint) {
+		return fmt.Errorf("PORTAL_OIDC_IDP_HINT must be trimmed")
 	}
 	for key, value := range map[string]string{"PORTAL_PUBLIC_ORIGIN": c.PublicOrigin, "PORTAL_OIDC_ISSUER": c.OIDCIssuer, "PORTAL_OIDC_REDIRECT_URI": c.OIDCRedirectURI} {
 		parsed, err := url.ParseRequestURI(value)

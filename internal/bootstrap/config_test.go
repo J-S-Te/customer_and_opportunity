@@ -85,7 +85,7 @@ func TestLoadConfigProductionOIDC(t *testing.T) {
 	t.Setenv("MACHINE_TOKEN_PUBLIC_KEY_PATH", "/run/secrets/basic-platform-application-jwt-public.pem")
 	t.Setenv("APP_PUBLIC_ORIGIN", "https://crm.example.com")
 	config, err := LoadConfig()
-	if err != nil || config.OIDCSessionCookieName != "customer_opportunity_session" {
+	if err != nil || config.OIDCSessionCookieName != "customer_opportunity_session" || config.OIDCIDPHint != "basic-platform" {
 		t.Fatalf("LoadConfig() = %+v, %v", config, err)
 	}
 }

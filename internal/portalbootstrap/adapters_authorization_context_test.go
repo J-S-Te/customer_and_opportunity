@@ -5,9 +5,12 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
+	"time"
 
 	sharedauthorization "github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/authorizationcontext"
+	"golang.org/x/oauth2"
 )
 
 func TestPortalAuthorizationContextCarriesDataScopes(t *testing.T) {
@@ -33,7 +36,7 @@ func TestPortalAuthorizationContextCarriesDataScopes(t *testing.T) {
 }
 
 func TestCompactPortalIdentityRequiresIDTokenPurposeAndCanonicalIdentity(t *testing.T) {
-	base := compactOIDCClaims{Subject: "identity-a", IdentityID: "identity-a", Nonce: "nonce", TokenUse: "id_token"}
+	base := compactOIDCClaims{Subject: "keycloak-subject-a", IdentityID: "platform-identity-a", Nonce: "nonce", TokenUse: "id_token"}
 	if !validCompactPortalIdentity(base, "nonce", "access-token") {
 		t.Fatal("valid compact identity was rejected")
 	}
@@ -47,6 +50,52 @@ func TestCompactPortalIdentityRequiresIDTokenPurposeAndCanonicalIdentity(t *test
 		mutate(&value)
 		if validCompactPortalIdentity(value, "nonce", "access-token") {
 			t.Fatalf("invalid identity accepted: %#v", value)
+		}
+	}
+}
+
+func TestCompactPortalClaimsPreservesStableIdentityWhenSubjectDiffers(t *testing.T) {
+	expiresAt := time.Now().Add(time.Minute).UTC()
+	claims := compactPortalClaims(compactOIDCClaims{
+		Subject:    "keycloak-subject-a",
+		IdentityID: "platform-identity-a",
+		TenantID:   "tenant-a",
+	}, "sha256:catalog", expiresAt, "access-token")
+
+	if claims.Subject != "keycloak-subject-a" || claims.IdentityID != "platform-identity-a" {
+		t.Fatalf("identity mapping = subject %q, identity_id %q", claims.Subject, claims.IdentityID)
+	}
+	if claims.TenantID != "tenant-a" || claims.RoleConfigHash != "sha256:catalog" || !claims.ExpiresAt.Equal(expiresAt) || claims.AccessToken != "access-token" {
+		t.Fatalf("claims = %#v", claims)
+	}
+}
+
+func TestPortalAuthorizationURLCarriesBrokerHintAndPKCE(t *testing.T) {
+	adapter := &OIDCAdapter{
+		config: oauth2.Config{
+			ClientID: "customer_portal-prod-web",
+			Endpoint: oauth2.Endpoint{AuthURL: "https://sso.example/realms/basic-platform/protocol/openid-connect/auth"},
+		},
+		idpHint: "basic-platform",
+	}
+	target, err := adapter.AuthorizationURL("state-a", "nonce-a", "challenge-a", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := url.Parse(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	query := parsed.Query()
+	for key, want := range map[string]string{
+		"state":                 "state-a",
+		"nonce":                 "nonce-a",
+		"code_challenge":        "challenge-a",
+		"code_challenge_method": "S256",
+		"kc_idp_hint":           "basic-platform",
+	} {
+		if got := query.Get(key); got != want {
+			t.Fatalf("%s = %q, want %q; URL=%s", key, got, want, target)
 		}
 	}
 }
