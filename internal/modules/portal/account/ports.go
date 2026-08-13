@@ -9,6 +9,7 @@ import (
 
 type Claims struct {
 	Subject        string
+	IdentityID     string
 	PersonID       string
 	TenantID       string
 	Roles          []string

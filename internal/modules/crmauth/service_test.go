@@ -263,7 +263,7 @@ func TestNormalizeAuthorizationRequiresCatalogBoundMetadata(t *testing.T) {
 		mutate func(*verifiedClaims)
 	}{
 		{"tenant", func(c *verifiedClaims) { c.TenantID = "other" }},
-		{"identity id mismatch", func(c *verifiedClaims) { c.IdentityID = "other-user" }},
+		{"identity missing", func(c *verifiedClaims) { c.IdentityID = "" }},
 		{"revision", func(c *verifiedClaims) { c.AuthzRevision = 0 }},
 		{"subject width", func(c *verifiedClaims) { c.Subject = strings.Repeat("a", 65) }},
 		{"person whitespace", func(c *verifiedClaims) { c.PersonID = " PMS-A" }},

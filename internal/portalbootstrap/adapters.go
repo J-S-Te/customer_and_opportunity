@@ -106,7 +106,7 @@ func (a *OIDCAdapter) ExchangeAndValidate(ctx context.Context, code, verifier, n
 	// Token 中可能过期的业务权限快照。
 	contextClaims, effectiveToken, contextErr := a.authorizationContextWithRefresh(ctx, token)
 	if contextErr == nil {
-		if contextClaims.Subject != claims.Subject || (claims.TenantID != "" && contextClaims.TenantID != claims.TenantID) {
+		if contextClaims.Subject != claims.Subject || contextClaims.IdentityID != claims.IdentityID || (claims.TenantID != "" && contextClaims.TenantID != claims.TenantID) {
 			return account.Claims{}, errors.New("OIDC authorization context identity does not match token")
 		}
 		contextClaims.RoleConfigHash = a.roleConfigHash
@@ -139,7 +139,7 @@ type compactOIDCClaims struct {
 
 func validCompactPortalIdentity(raw compactOIDCClaims, nonce, accessToken string) bool {
 	return raw.Nonce == nonce && raw.TokenUse == "id_token" && strings.TrimSpace(raw.Subject) != "" &&
-		raw.Subject == strings.TrimSpace(raw.Subject) && (raw.IdentityID == "" || raw.IdentityID == raw.Subject) &&
+		raw.Subject == strings.TrimSpace(raw.Subject) && strings.TrimSpace(raw.IdentityID) != "" && raw.IdentityID == strings.TrimSpace(raw.IdentityID) &&
 		strings.TrimSpace(accessToken) != ""
 }
 
@@ -179,7 +179,7 @@ func (a *OIDCAdapter) authorizationContext(ctx context.Context, accessToken stri
 	if err != nil {
 		return account.Claims{}, fmt.Errorf("validate portal authorization context: %w", err)
 	}
-	return account.Claims{Subject: raw.Subject, PersonID: raw.PersonID, TenantID: raw.TenantID, Roles: raw.Roles, Permissions: raw.Permissions, DataScopes: scopes, AuthzRevision: raw.AuthorizationRevision}, nil
+	return account.Claims{Subject: raw.Subject, IdentityID: raw.IdentityID, PersonID: raw.PersonID, TenantID: raw.TenantID, Roles: raw.Roles, Permissions: raw.Permissions, DataScopes: scopes, AuthzRevision: raw.AuthorizationRevision}, nil
 }
 
 func (a *OIDCAdapter) authorizationContextWithRefresh(ctx context.Context, token *oauth2.Token) (account.Claims, *oauth2.Token, error) {

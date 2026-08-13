@@ -280,7 +280,12 @@ func (s *Service) CompleteLogin(ctx context.Context, state, code string, metadat
 		}
 		return LoginResult{}, ErrInvalidClaims
 	}
-	if activation.ExpectedPlatformUserID != "" && claims.Subject != activation.ExpectedPlatformUserID {
+	if claims.IdentityID == "" {
+		// Compatibility for in-process legacy adapters; the production OIDC
+		// adapter always requires identity_id in the ID token/context.
+		claims.IdentityID = claims.Subject
+	}
+	if activation.ExpectedPlatformUserID != "" && claims.IdentityID != activation.ExpectedPlatformUserID {
 		s.writeLoginSecurityEvent(ctx, activation, "SUBJECT_MISMATCH", "HIGH", "OIDC_SUBJECT_MISMATCH", metadata, now)
 		return LoginResult{}, ErrSubjectMismatch
 	}
@@ -300,7 +305,7 @@ func (s *Service) CompleteLogin(ctx context.Context, state, code string, metadat
 		s.writeLoginSecurityEvent(ctx, activation, "LOGIN_FAILED", "HIGH", "OIDC_TOKEN_INVALID", metadata, now)
 		return LoginResult{}, ErrInvalidClaims
 	}
-	link, err := s.repo.FindLink(ctx, claims.TenantID, claims.Subject)
+	link, err := s.repo.FindLink(ctx, claims.TenantID, claims.IdentityID)
 	if err != nil || link.Status == IdentityDisabled || (activation.CustomerID != 0 && link.CustomerID != activation.CustomerID) {
 		return LoginResult{}, ErrNotProvisioned
 	}
@@ -331,15 +336,15 @@ func (s *Service) CompleteLogin(ctx context.Context, state, code string, metadat
 	if err != nil {
 		return LoginResult{}, err
 	}
-	session := &Session{Model: newModel(claims.TenantID, claims.Subject, now), PublicID: publicSessionID, SessionIDHash: hash(rawSession), PlatformUserID: claims.Subject, CustomerID: link.CustomerID, AuthzRevision: claims.AuthzRevision, RoleConfigHash: claims.RoleConfigHash, Roles: append([]string(nil), claims.Roles...), Permissions: append([]string(nil), claims.Permissions...), DataScopes: cloneDataScopes(claims.DataScopes), AccessTokenCipher: accessTokenCipher, AuthorizationCheckedAt: now, ExpiresAt: expires, AbsoluteExpiry: expires, LastSeenAt: now, IPHash: metadata.IPHash, UserAgentHash: metadata.UserAgentHash, IPMasked: metadata.IPMasked, LocationSnapshot: metadata.Location, DeviceSnapshot: metadata.Device}
-	successEvent, err := s.newSecurityEvent(claims.TenantID, claims.Subject, link.CustomerID, "LOGIN_SUCCEEDED", "LOW", "", metadata, now)
+	session := &Session{Model: newModel(claims.TenantID, claims.IdentityID, now), PublicID: publicSessionID, SessionIDHash: hash(rawSession), PlatformUserID: claims.IdentityID, CustomerID: link.CustomerID, AuthzRevision: claims.AuthzRevision, RoleConfigHash: claims.RoleConfigHash, Roles: append([]string(nil), claims.Roles...), Permissions: append([]string(nil), claims.Permissions...), DataScopes: cloneDataScopes(claims.DataScopes), AccessTokenCipher: accessTokenCipher, AuthorizationCheckedAt: now, ExpiresAt: expires, AbsoluteExpiry: expires, LastSeenAt: now, IPHash: metadata.IPHash, UserAgentHash: metadata.UserAgentHash, IPMasked: metadata.IPMasked, LocationSnapshot: metadata.Location, DeviceSnapshot: metadata.Device}
+	successEvent, err := s.newSecurityEvent(claims.TenantID, claims.IdentityID, link.CustomerID, "LOGIN_SUCCEEDED", "LOW", "", metadata, now)
 	if err != nil {
 		return LoginResult{}, err
 	}
 	activatedNow := link.Status == IdentityPending
 	if err = s.repo.WithTransaction(ctx, func(txCtx context.Context) error {
 		if activatedNow {
-			if activateErr := s.repo.ActivateLink(txCtx, claims.TenantID, link.ID, claims.AuthzRevision, claims.Subject, now); activateErr != nil {
+			if activateErr := s.repo.ActivateLink(txCtx, claims.TenantID, link.ID, claims.AuthzRevision, claims.IdentityID, now); activateErr != nil {
 				return activateErr
 			}
 		}
@@ -352,11 +357,11 @@ func (s *Service) CompleteLogin(ctx context.Context, state, code string, metadat
 	}
 	// CRM 邀请消费故意放在最后：远端成功前浏览器会话已持久化；若消费失败则撤销会话并保留邀请可重试。
 	if inviteToken != "" {
-		if err = s.invites.Consume(ctx, inviteToken, claims.Subject); err != nil {
-			revokeErr := s.repo.RevokeSession(ctx, claims.TenantID, claims.Subject, session.SessionIDHash, now)
+		if err = s.invites.Consume(ctx, inviteToken, claims.IdentityID); err != nil {
+			revokeErr := s.repo.RevokeSession(ctx, claims.TenantID, claims.IdentityID, session.SessionIDHash, now)
 			var revertErr error
 			if activatedNow {
-				revertErr = s.repo.RevertActivation(ctx, claims.TenantID, link.ID, claims.AuthzRevision, claims.Subject, now)
+				revertErr = s.repo.RevertActivation(ctx, claims.TenantID, link.ID, claims.AuthzRevision, claims.IdentityID, now)
 			}
 			return LoginResult{}, errors.Join(err, revokeErr, revertErr)
 		}
@@ -365,6 +370,10 @@ func (s *Service) CompleteLogin(ctx context.Context, state, code string, metadat
 }
 
 func validPortalAuthorization(claims Claims, environmentCode string) bool {
+	identityID := claims.IdentityID
+	if identityID == "" {
+		identityID = claims.Subject
+	}
 	manifest := platformcatalog.PortalManifest()
 	if len(claims.Roles) != 1 || claims.Roles[0] != portalRole || !platformcatalog.HasRole(manifest, claims.Roles[0]) || len(claims.Permissions) == 0 {
 		return false
@@ -379,7 +388,7 @@ func validPortalAuthorization(claims Claims, environmentCode string) bool {
 		}
 		seen[permission] = struct{}{}
 	}
-	_, decision, err := sharedauthorization.ValidateScopes(claims.DataScopes, claims.Roles, environmentCode, claims.Subject, claims.PersonID)
+	_, decision, err := sharedauthorization.ValidateScopes(claims.DataScopes, claims.Roles, environmentCode, identityID, claims.PersonID)
 	// Portal data is always bound to the server-side IdentityLink customer.
 	// APPLICATION/TENANT/ENVIRONMENT and a matching SELF scope may authorize
 	// that customer; ORG/PROJECT-only scopes cannot be safely translated to a
@@ -448,7 +457,7 @@ func (s *Service) revokeAuthorization(ctx context.Context, tenantID, subject str
 }
 
 func samePortalAuthorization(session *Session, current Claims, tenantID, roleConfigHash, environmentCode string) bool {
-	return current.Subject == session.PlatformUserID && current.TenantID == tenantID && current.RoleConfigHash == roleConfigHash &&
+	return current.IdentityID == session.PlatformUserID && current.TenantID == tenantID && current.RoleConfigHash == roleConfigHash &&
 		current.AuthzRevision == session.AuthzRevision && validPortalAuthorization(current, environmentCode) &&
 		sameStringSet(session.Roles, current.Roles) && sameStringSet(session.Permissions, current.Permissions) &&
 		sameDataScopeSet(session.DataScopes, current.DataScopes)

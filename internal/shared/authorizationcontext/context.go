@@ -58,7 +58,7 @@ type ScopeDecision struct {
 // subsystem catalog is only an upper-bound allow-list.
 func Validate(response Response, expected Expectation) ([]sharedauth.DataScope, ScopeDecision, error) {
 	if response.Subject == "" || response.Subject != strings.TrimSpace(response.Subject) ||
-		response.IdentityID != response.Subject || response.TenantID == "" ||
+		response.IdentityID == "" || response.IdentityID != strings.TrimSpace(response.IdentityID) || response.TenantID == "" ||
 		response.TenantID != strings.TrimSpace(response.TenantID) || response.AuthorizationRevision == 0 {
 		return nil, ScopeDecision{}, errors.New("authorization context identity or revision is invalid")
 	}

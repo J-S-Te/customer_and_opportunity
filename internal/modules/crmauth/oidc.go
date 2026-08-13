@@ -121,9 +121,6 @@ func (c *platformOIDCClient) Exchange(ctx context.Context, code, verifier, nonce
 	}
 	// ID token 的 sub 是平台规范中的 canonical identity；若令牌同时返回别名，
 	// 两者必须一致，避免 CRM 在不同令牌载荷间产生两个主体。
-	if raw.IdentityID != "" && raw.IdentityID != raw.Subject {
-		return verifiedClaims{}, errors.New("CRM OIDC identity_id does not match sub")
-	}
 	claims := claimsFromPlatform(raw)
 	claims.AccessToken = token.AccessToken
 	claims.ExpiresAt = earliestExpiry(idToken.Expiry, token.Expiry)
@@ -133,7 +130,7 @@ func (c *platformOIDCClient) Exchange(ctx context.Context, code, verifier, nonce
 	if err != nil {
 		return verifiedClaims{}, fmt.Errorf("load CRM authorization context: %w", err)
 	}
-	if contextClaims.Subject != claims.Subject || contextClaims.IdentityID != claims.Subject || (claims.TenantID != "" && contextClaims.TenantID != claims.TenantID) {
+	if contextClaims.Subject != claims.Subject || contextClaims.IdentityID != claims.IdentityID || (claims.TenantID != "" && contextClaims.TenantID != claims.TenantID) {
 		return verifiedClaims{}, errors.New("CRM authorization context identity does not match OIDC identity")
 	}
 	contextClaims.DisplayName = claims.DisplayName
@@ -246,13 +243,13 @@ func claimsFromPlatform(raw platformClaims) verifiedClaims {
 	}
 	identityID := raw.IdentityID
 	if identityID == "" {
-		identityID = raw.Subject
+		return verifiedClaims{}
 	}
 	return verifiedClaims{Subject: raw.Subject, IdentityID: identityID, TenantID: raw.TenantID, PersonID: raw.PersonID, DisplayName: displayName}
 }
 
 func normalizeAuthorization(claims verifiedClaims, expectedTenantID, expectedRoleConfigHash, expectedEnvironmentCode string, maxRoles int) (verifiedClaims, error) {
-	if claims.Subject == "" || claims.Subject != strings.TrimSpace(claims.Subject) || claims.IdentityID != claims.Subject || claims.TenantID != expectedTenantID || claims.AuthzRevision == 0 {
+	if claims.Subject == "" || claims.Subject != strings.TrimSpace(claims.Subject) || claims.IdentityID == "" || claims.IdentityID != strings.TrimSpace(claims.IdentityID) || claims.TenantID != expectedTenantID || claims.AuthzRevision == 0 {
 		return verifiedClaims{}, errors.New("CRM OIDC identity or authorization metadata is invalid")
 	}
 	// role_config_hash 不再从 Keycloak Token 读取；它绑定 CRM 内置目录版本，
@@ -383,7 +380,7 @@ func normalizedSet(values []string, allow map[string]struct{}) ([]string, error)
 }
 
 func sameAuthorization(left, right verifiedClaims) bool {
-	if left.Subject != right.Subject || left.IdentityID != right.IdentityID || left.TenantID != right.TenantID || left.PersonID != right.PersonID || left.PrimaryOrgID != right.PrimaryOrgID || left.RoleConfigHash != right.RoleConfigHash || left.AuthzRevision != right.AuthzRevision || len(left.OrganizationIDs) != len(right.OrganizationIDs) || len(left.Roles) != len(right.Roles) || len(left.Permissions) != len(right.Permissions) {
+	if left.IdentityID != right.IdentityID || left.TenantID != right.TenantID || left.PersonID != right.PersonID || left.PrimaryOrgID != right.PrimaryOrgID || left.RoleConfigHash != right.RoleConfigHash || left.AuthzRevision != right.AuthzRevision || len(left.OrganizationIDs) != len(right.OrganizationIDs) || len(left.Roles) != len(right.Roles) || len(left.Permissions) != len(right.Permissions) {
 		return false
 	}
 	for index := range left.OrganizationIDs {
