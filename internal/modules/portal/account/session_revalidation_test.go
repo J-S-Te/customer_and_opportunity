@@ -114,11 +114,12 @@ func revalidationFixture(now time.Time) (*Service, *revalidationRepository, *rev
 		Model: database.Model{TenantID: "tenant-a"}, SessionIDHash: hash("session-token"),
 		PlatformUserID: "subject-a", CustomerID: 7, AuthzRevision: 3, RoleConfigHash: "catalog-v1",
 		Roles: []string{"portal_customer"}, Permissions: []string{"project.read", "report.read"},
+		DataScopes:        []DataScope{{RoleCode: "portal_customer", ScopeType: "APPLICATION"}},
 		AccessTokenCipher: []byte("access-token"), AuthorizationCheckedAt: now.Add(-16 * time.Second),
 		ExpiresAt: now.Add(time.Minute), AbsoluteExpiry: now.Add(time.Minute),
 	}
 	repo := &revalidationRepository{session: session, link: &IdentityLink{Model: database.Model{ID: 9, TenantID: "tenant-a"}, PlatformUserID: "subject-a", CustomerID: 7, Status: IdentityActive}}
-	oidc := &revalidationOIDC{claims: Claims{Subject: "subject-a", TenantID: "tenant-a", Roles: []string{"portal_customer"}, Permissions: []string{"report.read", "project.read"}, RoleConfigHash: "catalog-v1", AuthzRevision: 3}}
+	oidc := &revalidationOIDC{claims: Claims{Subject: "subject-a", TenantID: "tenant-a", Roles: []string{"portal_customer"}, Permissions: []string{"report.read", "project.read"}, DataScopes: []DataScope{{RoleCode: "portal_customer", ScopeType: "APPLICATION"}}, RoleConfigHash: "catalog-v1", AuthzRevision: 3}}
 	service := NewService(repo, oidc, nil, passthroughProtector{}, fixedClock{now: now}, unusedRandom{}, "catalog-v1", 15*time.Minute)
 	return service, repo, oidc
 }
@@ -150,7 +151,8 @@ func TestAuthenticateSessionRevokesAllSubjectSessionsWhenAuthorizationChanges(t 
 func TestAuthenticateSessionRevokesAllSubjectSessionsWhenDataScopesChange(t *testing.T) {
 	now := time.Date(2026, 8, 1, 1, 2, 3, 0, time.UTC)
 	service, repo, oidc := revalidationFixture(now)
-	scopes := []DataScope{{RoleCode: "portal_customer", ScopeType: "CUSTOMER", ScopeID: "customer-7", EnvironmentCode: "prod"}}
+	service.environmentCode = "prod"
+	scopes := []DataScope{{RoleCode: "portal_customer", ScopeType: "ENVIRONMENT", ScopeID: "env-prod", EnvironmentCode: "prod"}}
 	repo.session.DataScopes = append([]DataScope(nil), scopes...)
 	oidc.claims.DataScopes = append([]DataScope(nil), scopes...)
 	if _, err := service.AuthenticateSession(context.Background(), "tenant-a", "session-token"); err != nil {

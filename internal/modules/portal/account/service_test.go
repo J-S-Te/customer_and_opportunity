@@ -21,26 +21,49 @@ func TestHashDoesNotExposeSecret(t *testing.T) {
 }
 
 func TestPortalAuthorizationRejectsCrossApplicationClaims(t *testing.T) {
-	if !validPortalAuthorization([]string{"portal_customer"}, []string{"project.read", "report.read"}) {
+	valid := func(permissions []string) Claims {
+		return Claims{Subject: "identity-a", Roles: []string{"portal_customer"}, Permissions: permissions, DataScopes: []DataScope{{RoleCode: "portal_customer", ScopeType: "APPLICATION"}}}
+	}
+	if !validPortalAuthorization(valid([]string{"project.read", "report.read"}), "dev") {
 		t.Fatal("valid Portal catalog must be accepted")
 	}
-	if !validPortalAuthorization([]string{"portal_customer"}, []string{"evaluation.create", "evaluation.read"}) {
+	if !validPortalAuthorization(valid([]string{"evaluation.create", "evaluation.read"}), "dev") {
 		t.Fatal("evaluation permissions must be accepted by the Portal catalog")
 	}
-	if !validPortalAuthorization([]string{"portal_customer"}, []string{"filing.read", "filing.create", "filing.update", "filing.submit"}) {
+	if !validPortalAuthorization(valid([]string{"filing.read", "filing.create", "filing.update", "filing.submit"}), "dev") {
 		t.Fatal("filing permissions must be accepted by the Portal catalog")
 	}
-	if !validPortalAuthorization([]string{"portal_customer"}, []string{"feedback.create", "feedback.read", "feedback.reply"}) {
+	if !validPortalAuthorization(valid([]string{"feedback.create", "feedback.read", "feedback.reply"}), "dev") {
 		t.Fatal("feedback permissions must be accepted by the Portal catalog")
 	}
-	for _, test := range []struct{ roles, permissions []string }{
-		{[]string{"portal_customer", "crm_admin"}, []string{"project.read"}},
-		{[]string{"portal_customer"}, []string{"contract.read"}},
-		{[]string{"portal_customer"}, nil},
+	for _, test := range []Claims{
+		{Subject: "identity-a", Roles: []string{"portal_customer", "crm_admin"}, Permissions: []string{"project.read"}, DataScopes: []DataScope{{RoleCode: "portal_customer", ScopeType: "APPLICATION"}}},
+		valid([]string{"contract.read"}),
+		valid(nil),
 	} {
-		if validPortalAuthorization(test.roles, test.permissions) {
+		if validPortalAuthorization(test, "dev") {
 			t.Fatalf("cross-application authorization accepted: %#v", test)
 		}
+	}
+}
+
+func TestPortalAuthorizationScopeSemantics(t *testing.T) {
+	base := Claims{Subject: "identity-a", PersonID: "person-a", Roles: []string{"portal_customer"}, Permissions: []string{"project.read"}}
+	for _, scope := range []DataScope{
+		{RoleCode: "portal_customer", ScopeType: "APPLICATION"},
+		{RoleCode: "portal_customer", ScopeType: "TENANT"},
+		{RoleCode: "portal_customer", ScopeType: "ENVIRONMENT", ScopeID: "01ENV", EnvironmentCode: "dev"},
+		{RoleCode: "portal_customer", ScopeType: "SELF", ScopeID: "person-a", EnvironmentCode: "dev"},
+	} {
+		claims := base
+		claims.DataScopes = []DataScope{scope}
+		if !validPortalAuthorization(claims, "dev") {
+			t.Fatalf("valid scope rejected: %#v", scope)
+		}
+	}
+	base.DataScopes = []DataScope{{RoleCode: "portal_customer", ScopeType: "APPLICATION", ScopeID: "unexpected"}}
+	if validPortalAuthorization(base, "dev") {
+		t.Fatal("APPLICATION scope with scope_id was accepted")
 	}
 }
 

@@ -84,7 +84,7 @@ func New(ctx context.Context, config Config) (*App, error) {
 	if err != nil {
 		return nil, err
 	}
-	accountService := account.NewService(account.NewGORMRepository(db), oidcAdapter, inviteClient, protector, account.SystemClock{}, account.CryptoRandom{}, config.RoleConfigHash, config.SessionTTL)
+	accountService := account.NewService(account.NewGORMRepository(db), oidcAdapter, inviteClient, protector, account.SystemClock{}, account.CryptoRandom{}, config.RoleConfigHash, config.SessionTTL, config.PlatformEnvironmentCode)
 	// 登录事务、访问令牌和会话均保存在数据库并加密；账号服务通过 UserInfo 周期性重验当前
 	// 权限，避免仅依赖首次登录时的 ID Token 快照。
 	projectService := project.NewService(project.NewGORMRepository(db), unavailableProjectSource{})

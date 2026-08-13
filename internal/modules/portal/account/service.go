@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/platformcatalog"
+	sharedauthorization "github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/authorizationcontext"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/database"
 	requestctx "github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/request"
 )
@@ -18,20 +19,26 @@ import (
 const portalRole = "portal_customer"
 
 const authorizationCheckInterval = 15 * time.Second
+const authorizationMaxStale = 60 * time.Second
 
 type Service struct {
-	repo           Repository
-	oidc           OIDCClient
-	invites        InviteClient
-	protector      SecretProtector
-	clock          Clock
-	random         RandomSource
-	roleConfigHash string
-	maxSessionAge  time.Duration
+	repo            Repository
+	oidc            OIDCClient
+	invites         InviteClient
+	protector       SecretProtector
+	clock           Clock
+	random          RandomSource
+	roleConfigHash  string
+	maxSessionAge   time.Duration
+	environmentCode string
 }
 
-func NewService(repo Repository, oidc OIDCClient, invites InviteClient, protector SecretProtector, clock Clock, random RandomSource, roleConfigHash string, maxSessionAge time.Duration) *Service {
-	return &Service{repo: repo, oidc: oidc, invites: invites, protector: protector, clock: clock, random: random, roleConfigHash: roleConfigHash, maxSessionAge: maxSessionAge}
+func NewService(repo Repository, oidc OIDCClient, invites InviteClient, protector SecretProtector, clock Clock, random RandomSource, roleConfigHash string, maxSessionAge time.Duration, environmentCodes ...string) *Service {
+	environmentCode := "dev"
+	if len(environmentCodes) > 0 && strings.TrimSpace(environmentCodes[0]) != "" {
+		environmentCode = strings.TrimSpace(environmentCodes[0])
+	}
+	return &Service{repo: repo, oidc: oidc, invites: invites, protector: protector, clock: clock, random: random, roleConfigHash: roleConfigHash, maxSessionAge: maxSessionAge, environmentCode: environmentCode}
 }
 
 type ProvisionCommand struct {
@@ -196,6 +203,12 @@ func (s *Service) CompleteLogin(ctx context.Context, state, code string, metadat
 	claims, err := s.oidc.ExchangeAndValidate(ctx, code, string(verifier), string(nonce))
 	if err != nil {
 		s.writeLoginSecurityEvent(ctx, activation, "LOGIN_FAILED", "MEDIUM", "OIDC_EXCHANGE_REJECTED", metadata, now)
+		if errors.Is(err, sharedauthorization.ErrForbidden) {
+			return LoginResult{}, ErrPortalAuthorization
+		}
+		if errors.Is(err, sharedauthorization.ErrUnavailable) {
+			return LoginResult{}, ErrAuthorizationUnavailable
+		}
 		return LoginResult{}, ErrInvalidClaims
 	}
 	if activation.ExpectedPlatformUserID != "" && claims.Subject != activation.ExpectedPlatformUserID {
@@ -210,7 +223,7 @@ func (s *Service) CompleteLogin(ctx context.Context, state, code string, metadat
 		s.writeLoginSecurityEvent(ctx, activation, "LOGIN_FAILED", "HIGH", "OIDC_ROLE_CONFIG_MISMATCH", metadata, now)
 		return LoginResult{}, ErrInvalidClaims
 	}
-	if !validPortalAuthorization(claims.Roles, claims.Permissions) {
+	if !validPortalAuthorization(claims, s.environmentCode) {
 		s.writeLoginSecurityEvent(ctx, activation, "LOGIN_FAILED", "HIGH", "OIDC_PORTAL_AUTHORIZATION_REJECTED", metadata, now)
 		return LoginResult{}, ErrPortalAuthorization
 	}
@@ -282,14 +295,14 @@ func (s *Service) CompleteLogin(ctx context.Context, state, code string, metadat
 	return LoginResult{SessionToken: rawSession, CustomerID: link.CustomerID, ExpiresAt: expires, ReturnPath: activation.ReturnPath}, nil
 }
 
-func validPortalAuthorization(roles, permissions []string) bool {
+func validPortalAuthorization(claims Claims, environmentCode string) bool {
 	manifest := platformcatalog.PortalManifest()
-	if len(roles) != 1 || roles[0] != portalRole || !platformcatalog.HasRole(manifest, roles[0]) || len(permissions) == 0 {
+	if len(claims.Roles) != 1 || claims.Roles[0] != portalRole || !platformcatalog.HasRole(manifest, claims.Roles[0]) || len(claims.Permissions) == 0 {
 		return false
 	}
-	seen := make(map[string]struct{}, len(permissions))
-	for _, permission := range permissions {
-		if !platformcatalog.HasPermission(manifest, permission) || strings.TrimSpace(permission) != permission {
+	seen := make(map[string]struct{}, len(claims.Permissions))
+	for _, permission := range claims.Permissions {
+		if permission == "all" || !platformcatalog.HasPermission(manifest, permission) || strings.TrimSpace(permission) != permission {
 			return false
 		}
 		if _, duplicate := seen[permission]; duplicate {
@@ -297,7 +310,8 @@ func validPortalAuthorization(roles, permissions []string) bool {
 		}
 		seen[permission] = struct{}{}
 	}
-	return true
+	_, _, err := sharedauthorization.ValidateScopes(claims.DataScopes, claims.Roles, environmentCode, claims.Subject, claims.PersonID)
+	return err == nil
 }
 
 func (s *Service) AuthenticateSession(ctx context.Context, tenantID, rawToken string) (*Session, error) {
@@ -320,7 +334,17 @@ func (s *Service) AuthenticateSession(ctx context.Context, tenantID, rawToken st
 			return nil, ErrInvalidLoginState
 		}
 		current, currentErr := s.oidc.UserInfo(ctx, string(accessToken))
-		if currentErr != nil || !samePortalAuthorization(session, current, tenantID, s.roleConfigHash) {
+		if errors.Is(currentErr, sharedauthorization.ErrUnavailable) {
+			if now.Sub(session.AuthorizationCheckedAt) > authorizationMaxStale {
+				return nil, ErrAuthorizationUnavailable
+			}
+			if err = s.repo.TouchSession(ctx, tenantID, sessionHash, now, time.Time{}); err != nil {
+				return nil, ErrInvalidLoginState
+			}
+			session.LastSeenAt = now
+			return session, nil
+		}
+		if currentErr != nil || !samePortalAuthorization(session, current, tenantID, s.roleConfigHash, s.environmentCode) {
 			s.revokeAuthorization(ctx, tenantID, session.PlatformUserID, now, "USERINFO_REJECTED")
 			return nil, ErrInvalidLoginState
 		}
@@ -350,9 +374,9 @@ func (s *Service) revokeAuthorization(ctx context.Context, tenantID, subject str
 	}
 }
 
-func samePortalAuthorization(session *Session, current Claims, tenantID, roleConfigHash string) bool {
+func samePortalAuthorization(session *Session, current Claims, tenantID, roleConfigHash, environmentCode string) bool {
 	return current.Subject == session.PlatformUserID && current.TenantID == tenantID && current.RoleConfigHash == roleConfigHash &&
-		current.AuthzRevision == session.AuthzRevision && validPortalAuthorization(current.Roles, current.Permissions) &&
+		current.AuthzRevision == session.AuthzRevision && validPortalAuthorization(current, environmentCode) &&
 		sameStringSet(session.Roles, current.Roles) && sameStringSet(session.Permissions, current.Permissions) &&
 		sameDataScopeSet(session.DataScopes, current.DataScopes)
 }

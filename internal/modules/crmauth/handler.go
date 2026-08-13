@@ -1,6 +1,7 @@
 package crmauth
 
 import (
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/apperror"
+	sharedauthorization "github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/authorizationcontext"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/response"
 )
 
@@ -58,6 +60,10 @@ func (h *Handler) Callback(c *gin.Context) {
 			"has_code", strings.TrimSpace(c.Query("code")) != "",
 			"error", err,
 		)
+		if errors.Is(err, sharedauthorization.ErrUnavailable) {
+			response.Error(c, apperror.Wrap(err, http.StatusServiceUnavailable, "COMMON_DEPENDENCY_UNAVAILABLE", "authorization service is temporarily unavailable"))
+			return
+		}
 		response.Error(c, apperror.ErrUnauthenticated)
 		return
 	}

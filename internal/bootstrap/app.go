@@ -90,6 +90,7 @@ func New(config Config) (*App, error) {
 		Issuer: config.OIDCIssuer, BackchannelBaseURL: config.OIDCBackchannelBaseURL,
 		PlatformBaseURL: config.PlatformBaseURL,
 		ClientID:        config.OIDCClientID, ClientSecret: config.OIDCClientSecret,
+		ApplicationCode: config.PlatformApplicationCode, EnvironmentCode: config.PlatformEnvironmentCode,
 		RedirectURI: config.OIDCRedirectURI, Scopes: config.OIDCScopes,
 	})
 	if oidcErr != nil {
@@ -104,7 +105,7 @@ func New(config Config) (*App, error) {
 	}
 	authService, authErr := crmauth.NewService(crmauth.NewGORMRepository(db), oidcClient, config.EncryptionKey, crmauth.Options{
 		TenantID: config.OIDCTenantID, RoleConfigHash: config.OIDCRoleConfigHash,
-		SessionTTL: config.OIDCSessionTTL, MaxRoles: config.OIDCMaxRoles,
+		EnvironmentCode: config.PlatformEnvironmentCode, SessionTTL: config.OIDCSessionTTL, MaxRoles: config.OIDCMaxRoles,
 	}, brokerVerifier)
 	if authErr != nil {
 		return nil, authErr

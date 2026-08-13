@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"reflect"
-	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -101,7 +100,7 @@ func (f *fakeOIDC) UserInfo(_ context.Context, _ string) (verifiedClaims, error)
 }
 
 func validClaims(now time.Time) verifiedClaims {
-	return verifiedClaims{Subject: "user-1", IdentityID: "user-1", TenantID: "tenant-1", DisplayName: "User One", PrimaryOrgID: "org-a", OrganizationIDs: []string{"org-a", "org-b"}, Roles: []string{"sales"}, Permissions: catalogRolePermissions("sales"), RoleConfigHash: "hash-1", AuthzRevision: 8, ExpiresAt: now.Add(10 * time.Minute), AccessToken: "access-token"}
+	return verifiedClaims{Subject: "user-1", IdentityID: "user-1", TenantID: "tenant-1", DisplayName: "User One", Roles: []string{"sales"}, Permissions: catalogRolePermissions("sales"), DataScopes: []sharedauth.DataScope{{RoleCode: "sales", ScopeType: "APPLICATION"}}, RoleConfigHash: "hash-1", AuthzRevision: 8, ExpiresAt: now.Add(10 * time.Minute), AccessToken: "access-token"}
 }
 
 func catalogRolePermissions(roleCode string) []string {
@@ -115,7 +114,7 @@ func catalogRolePermissions(roleCode string) []string {
 
 func newTestService(t *testing.T, repo repository, oidc oidcClient, now time.Time, brokers ...brokerVerifier) *Service {
 	t.Helper()
-	service, err := NewService(repo, oidc, []byte(strings.Repeat("k", 32)), Options{TenantID: "tenant-1", RoleConfigHash: "hash-1", SessionTTL: 15 * time.Minute, MaxRoles: 3}, brokers...)
+	service, err := NewService(repo, oidc, []byte(strings.Repeat("k", 32)), Options{TenantID: "tenant-1", RoleConfigHash: "hash-1", EnvironmentCode: "dev", SessionTTL: 15 * time.Minute, MaxRoles: 3}, brokers...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -205,7 +204,7 @@ func TestAuthenticateMapsVerifiedClaimsAndRejectsAuthorizationChange(t *testing.
 	start, _ := service.BeginLogin(context.Background(), "/")
 	result, _ := service.CompleteLogin(context.Background(), strings.Split(start.AuthorizationURL, "state=")[1], "code")
 	principal, err := service.Authenticate(context.Background(), result.SessionToken)
-	if err != nil || principal.UserID != "user-1" || principal.PersonID != "" || principal.PrimaryOrgID != "org-a" || len(principal.OrganizationIDs) != 2 || principal.ScopeMode != sharedauth.ScopeSelf || !principal.HasPermission("customer.read") {
+	if err != nil || principal.UserID != "user-1" || principal.PersonID != "" || principal.PrimaryOrgID != "" || len(principal.OrganizationIDs) != 0 || principal.ScopeMode != sharedauth.ScopeAll || !principal.HasPermission("customer.read") {
 		t.Fatalf("Authenticate() = %+v, %v", principal, err)
 	}
 	service.now = func() time.Time { return now.Add(16 * time.Second) }
@@ -256,7 +255,7 @@ func TestPersonMappingChangeRevokesCRMServerSession(t *testing.T) {
 	}
 }
 
-func TestNormalizeAuthorizationRequiresExactCatalogMetadata(t *testing.T) {
+func TestNormalizeAuthorizationRequiresCatalogBoundMetadata(t *testing.T) {
 	now := time.Now()
 	base := validClaims(now)
 	tests := []struct {
@@ -274,12 +273,9 @@ func TestNormalizeAuthorizationRequiresExactCatalogMetadata(t *testing.T) {
 		{"person unsupported punctuation", func(c *verifiedClaims) { c.PersonID = "PMS/A" }},
 		{"unknown role", func(c *verifiedClaims) { c.Roles = []string{"administrator"} }},
 		{"all permission", func(c *verifiedClaims) { c.Permissions = []string{"all"} }},
-		{"known permission outside role", func(c *verifiedClaims) { c.Permissions = append(c.Permissions, "customer.merge") }},
-		{"missing effective permission", func(c *verifiedClaims) { c.Permissions = c.Permissions[:len(c.Permissions)-1] }},
 		{"duplicate permission", func(c *verifiedClaims) { c.Permissions = []string{"customer.read", "customer.read"} }},
-		{"unsorted organizations", func(c *verifiedClaims) { c.OrganizationIDs = []string{"org-b", "org-a"} }},
-		{"duplicate organization", func(c *verifiedClaims) { c.OrganizationIDs = []string{"org-a", "org-a"} }},
-		{"primary outside organizations", func(c *verifiedClaims) { c.PrimaryOrgID = "org-c" }},
+		{"scope role", func(c *verifiedClaims) { c.DataScopes[0].RoleCode = "other" }},
+		{"application scope id", func(c *verifiedClaims) { c.DataScopes[0].ScopeID = "unexpected" }},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -287,11 +283,21 @@ func TestNormalizeAuthorizationRequiresExactCatalogMetadata(t *testing.T) {
 			claims.Roles = append([]string(nil), base.Roles...)
 			claims.Permissions = append([]string(nil), base.Permissions...)
 			claims.OrganizationIDs = append([]string(nil), base.OrganizationIDs...)
+			claims.DataScopes = append([]sharedauth.DataScope(nil), base.DataScopes...)
 			test.mutate(&claims)
-			if _, err := normalizeAuthorization(claims, "tenant-1", "hash-1", 3); err == nil {
+			if _, err := normalizeAuthorization(claims, "tenant-1", "hash-1", "dev", 3); err == nil {
 				t.Fatal("normalizeAuthorization() unexpectedly succeeded")
 			}
 		})
+	}
+}
+
+func TestNormalizeAuthorizationAcceptsPlatformEffectivePermissionsWithoutRoleReDerivation(t *testing.T) {
+	claims := validClaims(time.Now())
+	claims.Permissions = []string{"customer.read"}
+	normalized, err := normalizeAuthorization(claims, "tenant-1", "hash-1", "dev", 3)
+	if err != nil || !reflect.DeepEqual(normalized.Permissions, []string{"customer.read"}) {
+		t.Fatalf("personal-exception permission result=%#v err=%v", normalized.Permissions, err)
 	}
 }
 
@@ -304,7 +310,7 @@ func TestOrganizationChangeRevokesCRMServerSession(t *testing.T) {
 	start, _ := service.BeginLogin(context.Background(), "/")
 	result, _ := service.CompleteLogin(context.Background(), strings.Split(start.AuthorizationURL, "state=")[1], "code")
 	service.now = func() time.Time { return now.Add(16 * time.Second) }
-	oidc.current.OrganizationIDs = []string{"org-a", "org-c"}
+	oidc.current.DataScopes = []sharedauth.DataScope{{RoleCode: "sales", ScopeType: "ORG", ScopeID: "org-c", EnvironmentCode: "dev"}}
 	if _, err := service.Authenticate(context.Background(), result.SessionToken); !errors.Is(err, ErrUnauthenticated) {
 		t.Fatalf("organization change error = %v", err)
 	}
@@ -314,8 +320,9 @@ func TestManagementRolesKeepTenantScopeWhileCarryingOrganizations(t *testing.T) 
 	claims := validClaims(time.Now())
 	claims.Roles = []string{"sales_director"}
 	claims.Permissions = catalogRolePermissions("sales_director")
+	claims.DataScopes = []sharedauth.DataScope{{RoleCode: "sales_director", ScopeType: "APPLICATION"}}
 	principal := principalFromClaims(claims)
-	if principal.ScopeMode != sharedauth.ScopeAll || len(principal.OrganizationIDs) != 2 {
+	if principal.ScopeMode != sharedauth.ScopeAll || len(principal.OrganizationIDs) != 0 {
 		t.Fatalf("management principal = %#v", principal)
 	}
 }
@@ -324,7 +331,8 @@ func TestNormalizeAuthorizationAcceptsImplementationEngineerRole(t *testing.T) {
 	claims := validClaims(time.Now())
 	claims.Roles = []string{"implementation_engineer"}
 	claims.Permissions = catalogRolePermissions("implementation_engineer")
-	if _, err := normalizeAuthorization(claims, "tenant-1", "hash-1", 3); err != nil {
+	claims.DataScopes = []sharedauth.DataScope{{RoleCode: "implementation_engineer", ScopeType: "ENVIRONMENT", ScopeID: "env-dev", EnvironmentCode: "dev"}}
+	if _, err := normalizeAuthorization(claims, "tenant-1", "hash-1", "dev", 3); err != nil {
 		t.Fatalf("implementation_engineer should be a recognized CRM role: %v", err)
 	}
 }
@@ -332,18 +340,17 @@ func TestNormalizeAuthorizationAcceptsImplementationEngineerRole(t *testing.T) {
 func TestNormalizeAuthorizationMapsPlatformSuperAdminToCRMSuperAdmin(t *testing.T) {
 	claims := validClaims(time.Now())
 	claims.Roles = []string{"platform-super-admin"}
-	// 平台超级管理员的上游权限集合可能是 platform:*，CRM 不信任该集合，
-	// 而是按 CRM 超级管理员角色目录重新计算有效权限。
-	claims.Permissions = []string{"platform:iam.admin"}
-	normalized, err := normalizeAuthorization(claims, "tenant-1", "hash-1", 3)
+	claims.DataScopes = []sharedauth.DataScope{{RoleCode: "platform-super-admin", ScopeType: "APPLICATION"}}
+	// 兼容角色别名，但不再从角色重新扩展权限；平台返回的权限仍须属于 CRM 目录。
+	claims.Permissions = []string{"customer.read"}
+	normalized, err := normalizeAuthorization(claims, "tenant-1", "hash-1", "dev", 3)
 	if err != nil {
 		t.Fatalf("platform-super-admin should map to crm_super_admin: %v", err)
 	}
 	if len(normalized.Roles) != 1 || normalized.Roles[0] != "crm_super_admin" {
 		t.Fatalf("normalized roles = %#v, want crm_super_admin", normalized.Roles)
 	}
-	want := catalogRolePermissions("crm_super_admin")
-	sort.Strings(want)
+	want := []string{"customer.read"}
 	if !reflect.DeepEqual(normalized.Permissions, want) {
 		t.Fatalf("normalized permissions = %#v, want CRM super-admin catalog", normalized.Permissions)
 	}

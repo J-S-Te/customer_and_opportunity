@@ -14,11 +14,14 @@ import (
 
 	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/platformcatalog"
+	sharedauth "github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/auth"
+	sharedauthorization "github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/authorizationcontext"
 	"golang.org/x/oauth2"
 )
 
 type OIDCOptions struct {
 	Issuer, BackchannelBaseURL, PlatformBaseURL, ClientID, ClientSecret, RedirectURI string
+	ApplicationCode, EnvironmentCode                                                 string
 	Scopes                                                                           []string
 }
 
@@ -26,6 +29,7 @@ type verifiedClaims struct {
 	Subject, IdentityID, TenantID, PersonID, DisplayName, RoleConfigHash string
 	PrimaryOrgID                                                         string
 	OrganizationIDs                                                      []string
+	DataScopes                                                           []sharedauth.DataScope
 	Roles, Permissions                                                   []string
 	AuthzRevision                                                        uint64
 	ExpiresAt                                                            time.Time
@@ -55,6 +59,7 @@ type platformOIDCClient struct {
 	provider        *oidc.Provider
 	httpClient      *http.Client
 	platformBaseURL string
+	expectedContext sharedauthorization.Expectation
 }
 
 func NewPlatformOIDCClient(ctx context.Context, options OIDCOptions) (*platformOIDCClient, error) {
@@ -80,6 +85,7 @@ func NewPlatformOIDCClient(ctx context.Context, options OIDCOptions) (*platformO
 	return &platformOIDCClient{
 		httpClient: httpClient, provider: provider,
 		platformBaseURL: strings.TrimRight(options.PlatformBaseURL, "/"),
+		expectedContext: sharedauthorization.Expectation{ClientID: options.ClientID, ApplicationCode: options.ApplicationCode, EnvironmentCode: options.EnvironmentCode},
 		verifier:        provider.Verifier(&oidc.Config{ClientID: options.ClientID}),
 		config:          oauth2.Config{ClientID: options.ClientID, ClientSecret: options.ClientSecret, Endpoint: provider.Endpoint(), RedirectURL: options.RedirectURI, Scopes: options.Scopes},
 	}, nil
@@ -123,7 +129,7 @@ func (c *platformOIDCClient) Exchange(ctx context.Context, code, verifier, nonce
 	claims.ExpiresAt = earliestExpiry(idToken.Expiry, token.Expiry)
 	// Keycloak Token 只承载稳定身份和少量 OIDC 元数据。详细角色、权限和组织范围
 	// 由基础平台授权上下文接口按当前快照返回，避免权限变更等待 Token 过期。
-	contextClaims, err := c.AuthorizationContext(ctx, token.AccessToken)
+	contextClaims, effectiveToken, err := c.authorizationContextWithRefresh(ctx, token)
 	if err != nil {
 		return verifiedClaims{}, fmt.Errorf("load CRM authorization context: %w", err)
 	}
@@ -132,8 +138,8 @@ func (c *platformOIDCClient) Exchange(ctx context.Context, code, verifier, nonce
 	}
 	contextClaims.DisplayName = claims.DisplayName
 	contextClaims.PersonID = firstNonEmpty(contextClaims.PersonID, claims.PersonID)
-	contextClaims.ExpiresAt = claims.ExpiresAt
-	contextClaims.AccessToken = token.AccessToken
+	contextClaims.ExpiresAt = earliestExpiry(claims.ExpiresAt, effectiveToken.Expiry)
+	contextClaims.AccessToken = effectiveToken.AccessToken
 	return contextClaims, nil
 }
 
@@ -166,20 +172,6 @@ func (c *platformOIDCClient) UserInfo(ctx context.Context, accessToken string) (
 	return claims, nil
 }
 
-type authorizationContextResponse struct {
-	Subject     string   `json:"sub"`
-	IdentityID  string   `json:"identity_id"`
-	TenantID    string   `json:"tenant_id"`
-	PersonID    string   `json:"person_id"`
-	Roles       []string `json:"roles"`
-	Permissions []string `json:"permissions"`
-	DataScopes  []struct {
-		ScopeType string `json:"scope_type"`
-		ScopeID   string `json:"scope_id"`
-	} `json:"data_scopes"`
-	AuthorizationRevision uint64 `json:"authorization_revision"`
-}
-
 func (c *platformOIDCClient) AuthorizationContext(ctx context.Context, accessToken string) (verifiedClaims, error) {
 	if c.platformBaseURL == "" {
 		return verifiedClaims{}, errors.New("CRM platform authorization context endpoint is not configured")
@@ -196,22 +188,46 @@ func (c *platformOIDCClient) AuthorizationContext(ctx context.Context, accessTok
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
-		return verifiedClaims{}, fmt.Errorf("authorization context returned HTTP %d", resp.StatusCode)
+		switch resp.StatusCode {
+		case http.StatusUnauthorized:
+			return verifiedClaims{}, fmt.Errorf("CRM authorization context returned HTTP 401: %w", sharedauthorization.ErrTokenRejected)
+		case http.StatusForbidden:
+			return verifiedClaims{}, fmt.Errorf("CRM authorization context returned HTTP 403: %w", sharedauthorization.ErrForbidden)
+		default:
+			if resp.StatusCode >= http.StatusInternalServerError {
+				return verifiedClaims{}, fmt.Errorf("CRM authorization context returned HTTP %d: %w", resp.StatusCode, sharedauthorization.ErrUnavailable)
+			}
+			return verifiedClaims{}, fmt.Errorf("CRM authorization context returned unexpected HTTP %d", resp.StatusCode)
+		}
 	}
-	var raw authorizationContextResponse
+	var raw sharedauthorization.Response
 	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
 		return verifiedClaims{}, fmt.Errorf("decode CRM authorization context: %w", err)
 	}
-	if raw.Subject == "" || raw.IdentityID == "" || raw.IdentityID != raw.Subject || raw.TenantID == "" || raw.AuthorizationRevision == 0 {
-		return verifiedClaims{}, errors.New("CRM authorization context identity or revision is invalid")
+	scopes, decision, err := sharedauthorization.Validate(raw, c.expectedContext)
+	if err != nil {
+		return verifiedClaims{}, fmt.Errorf("validate CRM authorization context: %w", err)
 	}
-	organizationIDs := make([]string, 0, len(raw.DataScopes))
-	for _, scope := range raw.DataScopes {
-		if scope.ScopeType == "ORG" && scope.ScopeID != "" {
-			organizationIDs = append(organizationIDs, scope.ScopeID)
-		}
+	primaryOrgID := ""
+	if len(decision.OrganizationIDs) > 0 {
+		primaryOrgID = decision.OrganizationIDs[0]
 	}
-	return verifiedClaims{Subject: raw.Subject, IdentityID: raw.IdentityID, TenantID: raw.TenantID, PersonID: raw.PersonID, Roles: raw.Roles, Permissions: raw.Permissions, OrganizationIDs: organizationIDs, AuthzRevision: raw.AuthorizationRevision}, nil
+	return verifiedClaims{Subject: raw.Subject, IdentityID: raw.IdentityID, TenantID: raw.TenantID, PersonID: raw.PersonID, PrimaryOrgID: primaryOrgID, Roles: raw.Roles, Permissions: raw.Permissions, OrganizationIDs: decision.OrganizationIDs, DataScopes: scopes, AuthzRevision: raw.AuthorizationRevision}, nil
+}
+
+func (c *platformOIDCClient) authorizationContextWithRefresh(ctx context.Context, token *oauth2.Token) (verifiedClaims, *oauth2.Token, error) {
+	claims, err := c.AuthorizationContext(ctx, token.AccessToken)
+	if err == nil || !errors.Is(err, sharedauthorization.ErrTokenRejected) || strings.TrimSpace(token.RefreshToken) == "" {
+		return claims, token, err
+	}
+	stale := *token
+	stale.Expiry = time.Now().Add(-time.Minute)
+	refreshed, refreshErr := c.config.TokenSource(oidc.ClientContext(ctx, c.httpClient), &stale).Token()
+	if refreshErr != nil {
+		return verifiedClaims{}, token, fmt.Errorf("refresh CRM access token after authorization 401: %w", refreshErr)
+	}
+	claims, err = c.AuthorizationContext(ctx, refreshed.AccessToken)
+	return claims, refreshed, err
 }
 
 func firstNonEmpty(values ...string) string {
@@ -235,7 +251,7 @@ func claimsFromPlatform(raw platformClaims) verifiedClaims {
 	return verifiedClaims{Subject: raw.Subject, IdentityID: identityID, TenantID: raw.TenantID, PersonID: raw.PersonID, DisplayName: displayName}
 }
 
-func normalizeAuthorization(claims verifiedClaims, expectedTenantID, expectedRoleConfigHash string, maxRoles int) (verifiedClaims, error) {
+func normalizeAuthorization(claims verifiedClaims, expectedTenantID, expectedRoleConfigHash, expectedEnvironmentCode string, maxRoles int) (verifiedClaims, error) {
 	if claims.Subject == "" || claims.Subject != strings.TrimSpace(claims.Subject) || claims.IdentityID != claims.Subject || claims.TenantID != expectedTenantID || claims.AuthzRevision == 0 {
 		return verifiedClaims{}, errors.New("CRM OIDC identity or authorization metadata is invalid")
 	}
@@ -265,35 +281,32 @@ func normalizeAuthorization(claims verifiedClaims, expectedTenantID, expectedRol
 		}
 		roleInputs = append(roleInputs, role)
 	}
+	canonicalScopes, scopeDecision, err := sharedauthorization.ValidateScopes(claims.DataScopes, claims.Roles, expectedEnvironmentCode, claims.IdentityID, claims.PersonID)
+	if err != nil {
+		return verifiedClaims{}, fmt.Errorf("CRM OIDC data scopes: %w", err)
+	}
 	manifest := platformcatalog.CRMManifest()
 	knownRoles := make(map[string]struct{}, len(manifest.Roles))
-	rolePermissions := make(map[string][]string, len(manifest.Roles))
 	for _, role := range manifest.Roles {
 		knownRoles[role.Code] = struct{}{}
-		rolePermissions[role.Code] = role.Permissions
 	}
 	roles, err := normalizedSet(roleInputs, knownRoles)
 	if err != nil {
 		return verifiedClaims{}, fmt.Errorf("CRM OIDC roles: %w", err)
 	}
-	var permissions []string
-	if platformSuperAdmin {
-		permissions = nil
-	} else {
-		if len(claims.Permissions) == 0 {
-			return verifiedClaims{}, errors.New("CRM OIDC role or permission set is invalid")
-		}
-		permissions, err = normalizedSet(claims.Permissions, nil)
-		if err != nil {
-			return verifiedClaims{}, fmt.Errorf("CRM OIDC permissions: %w", err)
-		}
-		for _, permission := range permissions {
-			if permission == "all" || !platformcatalog.HasPermission(manifest, permission) {
-				return verifiedClaims{}, errors.New("CRM OIDC permission is outside the CRM application catalog")
-			}
+	if len(claims.Permissions) == 0 {
+		return verifiedClaims{}, errors.New("CRM OIDC role or permission set is invalid")
+	}
+	permissions, err := normalizedSet(claims.Permissions, nil)
+	if err != nil {
+		return verifiedClaims{}, fmt.Errorf("CRM OIDC permissions: %w", err)
+	}
+	for _, permission := range permissions {
+		if permission == "all" || !platformcatalog.HasPermission(manifest, permission) {
+			return verifiedClaims{}, errors.New("CRM OIDC permission is outside the CRM application catalog")
 		}
 	}
-	organizationIDs, err := normalizedBoundedSet(claims.OrganizationIDs, 100, 64)
+	organizationIDs, err := normalizedBoundedSet(scopeDecision.OrganizationIDs, 100, 64)
 	if err != nil {
 		return verifiedClaims{}, fmt.Errorf("CRM OIDC organization_ids: %w", err)
 	}
@@ -305,29 +318,8 @@ func normalizeAuthorization(claims verifiedClaims, expectedTenantID, expectedRol
 			return verifiedClaims{}, errors.New("CRM OIDC primary_org_id is not in the active organization set")
 		}
 	}
-	expectedPermissions := make(map[string]struct{})
-	// 权限必须恰好等于有效角色的权限并集；既不允许额外权限，也不接受缺项造成的策略歧义。
-	for _, role := range roles {
-		for _, permission := range rolePermissions[role] {
-			expectedPermissions[permission] = struct{}{}
-		}
-	}
-	if platformSuperAdmin {
-		permissions = make([]string, 0, len(expectedPermissions))
-		for permission := range expectedPermissions {
-			permissions = append(permissions, permission)
-		}
-		sort.Strings(permissions)
-	}
-	if len(permissions) != len(expectedPermissions) {
-		return verifiedClaims{}, errors.New("CRM OIDC permission set does not match the effective role mapping")
-	}
-	for _, permission := range permissions {
-		if _, expected := expectedPermissions[permission]; !expected {
-			return verifiedClaims{}, errors.New("CRM OIDC permission set does not match the effective role mapping")
-		}
-	}
-	claims.Roles, claims.Permissions, claims.OrganizationIDs = roles, permissions, organizationIDs
+	_ = platformSuperAdmin // the controlled role alias does not expand permissions
+	claims.Roles, claims.Permissions, claims.OrganizationIDs, claims.DataScopes = roles, permissions, organizationIDs, canonicalScopes
 	return claims, nil
 }
 
@@ -406,6 +398,14 @@ func sameAuthorization(left, right verifiedClaims) bool {
 	}
 	for index := range left.Permissions {
 		if left.Permissions[index] != right.Permissions[index] {
+			return false
+		}
+	}
+	if len(left.DataScopes) != len(right.DataScopes) {
+		return false
+	}
+	for index := range left.DataScopes {
+		if left.DataScopes[index] != right.DataScopes[index] {
 			return false
 		}
 	}
