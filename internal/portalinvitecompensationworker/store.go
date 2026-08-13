@@ -14,6 +14,31 @@ type store struct{ db *gorm.DB }
 
 func newStore(db *gorm.DB) *store { return &store{db: db} }
 
+func (s *store) stats(ctx context.Context) (queueStats, error) {
+	var rows []struct {
+		Status string
+		Count  int64
+	}
+	if err := s.db.WithContext(ctx).Model(&portalinvite.CompensationTask{}).
+		Select("status, COUNT(*) AS count").Where("deleted_at IS NULL").Group("status").Scan(&rows).Error; err != nil {
+		return queueStats{}, err
+	}
+	result := queueStats{}
+	for _, row := range rows {
+		switch row.Status {
+		case portalinvite.CompensationPending:
+			result.Pending = row.Count
+		case portalinvite.CompensationProcessing:
+			result.Processing = row.Count
+		case portalinvite.CompensationRetryWait:
+			result.RetryWait = row.Count
+		case portalinvite.CompensationDeadLetter:
+			result.DeadLetter = row.Count
+		}
+	}
+	return result, nil
+}
+
 const claimTasksSQL = `SELECT * FROM crm_portal_compensation_tasks
 WHERE deleted_at IS NULL AND
  ((status IN ('PENDING','RETRY_WAIT') AND (next_retry_at IS NULL OR next_retry_at<=?))

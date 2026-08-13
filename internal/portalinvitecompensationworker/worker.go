@@ -17,6 +17,7 @@ type taskStore interface {
 	completeRole(context.Context, portalinvite.CompensationTask, string, time.Time) error
 	completeMapping(context.Context, portalinvite.CompensationTask, string, portalinvite.PortalMapping, time.Time) error
 	failed(context.Context, portalinvite.CompensationTask, string, time.Time, failure) error
+	stats(context.Context) (queueStats, error)
 }
 
 type roleAssigner interface {
@@ -75,7 +76,17 @@ func (w *Worker) RunOnce(ctx context.Context) (int, error) {
 			joined = errors.Join(joined, dispatchErr)
 		}
 	}
+	stats, statsErr := w.store.stats(ctx)
+	if statsErr != nil {
+		joined = errors.Join(joined, statsErr)
+	} else if len(tasks) > 0 || stats.DeadLetter > 0 {
+		log.Printf("Portal invite compensation queue: claimed=%d pending=%d processing=%d retry_wait=%d dead_letter=%d", len(tasks), stats.Pending, stats.Processing, stats.RetryWait, stats.DeadLetter)
+	}
 	return len(tasks), joined
+}
+
+type queueStats struct {
+	Pending, Processing, RetryWait, DeadLetter int64
 }
 
 func (w *Worker) dispatch(ctx context.Context, task portalinvite.CompensationTask) error {

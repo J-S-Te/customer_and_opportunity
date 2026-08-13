@@ -2,12 +2,14 @@ package middleware
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/url"
 
 	"github.com/gin-gonic/gin"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/apperror"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/auth"
+	sharedauthorization "github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/authorizationcontext"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/response"
 )
 
@@ -23,6 +25,11 @@ func SessionAuth(authenticator auth.Authenticator, cookieName string) gin.Handle
 		}
 		principal, err := authenticator.Authenticate(c.Request.Context(), cookie.Value)
 		if err != nil {
+			if errors.Is(err, sharedauthorization.ErrUnavailable) {
+				response.Error(c, apperror.Wrap(err, http.StatusServiceUnavailable, "COMMON_DEPENDENCY_UNAVAILABLE", "authorization service is temporarily unavailable"))
+				c.Abort()
+				return
+			}
 			response.Error(c, apperror.ErrUnauthenticated)
 			c.Abort()
 			return

@@ -34,10 +34,10 @@ type Principal struct {
 // DataScope keeps the authorization-context wire contract available to
 // subsystem business code without coupling it to an OIDC adapter.
 type DataScope struct {
-	RoleCode        string
-	ScopeType       string
-	ScopeID         string
-	EnvironmentCode string
+	RoleCode        string `json:"role_code"`
+	ScopeType       string `json:"scope_type"`
+	ScopeID         string `json:"scope_id"`
+	EnvironmentCode string `json:"environment_code"`
 }
 
 func (p Principal) HasPermission(permission string) bool {

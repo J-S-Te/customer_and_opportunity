@@ -21,6 +21,8 @@ type fakeStore struct {
 	claimWorker      string
 	claimLease       time.Duration
 	claimBatch       int
+	queue            queueStats
+	statsErr         error
 }
 
 func (s *fakeStore) claim(_ context.Context, worker string, _ time.Time, lease time.Duration, batch int) ([]portalinvite.CompensationTask, error) {
@@ -40,11 +42,21 @@ func (s *fakeStore) failed(_ context.Context, _ portalinvite.CompensationTask, _
 	s.failedTasks = append(s.failedTasks, value)
 	return nil
 }
+func (s *fakeStore) stats(context.Context) (queueStats, error) { return s.queue, s.statsErr }
 
 type fakeRoles struct{ err error }
 
 func (f fakeRoles) AssignPortalRole(context.Context, portalinvite.CompensationTask) error {
 	return f.err
+}
+
+func TestRunOnceReportsQueueStatsFailureWithoutLosingCompletedWork(t *testing.T) {
+	store := &fakeStore{tasks: []portalinvite.CompensationTask{validTask(portalinvite.CompensationRole)}, statsErr: errors.New("stats unavailable")}
+	worker := NewWorker(store, fakeRoles{}, fakeMappings{}, testConfig())
+	count, err := worker.RunOnce(context.Background())
+	if count != 1 || err == nil || store.completedRole != 1 {
+		t.Fatalf("count=%d completed=%d err=%v", count, store.completedRole, err)
+	}
 }
 
 type fakeMappings struct {

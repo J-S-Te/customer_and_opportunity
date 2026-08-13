@@ -19,6 +19,7 @@ import (
 
 	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/portal/account"
+	sharedauthorization "github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/authorizationcontext"
 	requestctx "github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/request"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/clientcredentials"
@@ -35,6 +36,7 @@ type OIDCAdapter struct {
 	httpClient      *http.Client
 	platformBaseURL string
 	roleConfigHash  string
+	expectedContext sharedauthorization.Expectation
 }
 
 func NewOIDCAdapter(ctx context.Context, config Config) (*OIDCAdapter, error) {
@@ -61,6 +63,7 @@ func NewOIDCAdapter(ctx context.Context, config Config) (*OIDCAdapter, error) {
 		config:   oauth2.Config{ClientID: config.OIDCClientID, ClientSecret: config.OIDCClientSecret, Endpoint: provider.Endpoint(), RedirectURL: config.OIDCRedirectURI, Scopes: config.OIDCScopes},
 		verifier: provider.Verifier(&oidc.Config{ClientID: config.OIDCClientID}), provider: provider, httpClient: httpClient,
 		platformBaseURL: strings.TrimRight(config.PlatformBaseURL, "/"), roleConfigHash: config.RoleConfigHash,
+		expectedContext: sharedauthorization.Expectation{ClientID: config.OIDCClientID, ApplicationCode: config.PlatformApplicationCode, EnvironmentCode: config.PlatformEnvironmentCode},
 	}, nil
 }
 
@@ -95,19 +98,20 @@ func (a *OIDCAdapter) ExchangeAndValidate(ctx context.Context, code, verifier, n
 	}
 	// 紧凑 Keycloak ID Token 只保证稳定身份；tenant_id、角色和权限由基础平台
 	// authorization-context 按当前 access token 返回。
-	if raw.Nonce != nonce || strings.TrimSpace(raw.Subject) == "" || raw.Subject != strings.TrimSpace(raw.Subject) || (raw.IdentityID != "" && raw.IdentityID != raw.Subject) || token.AccessToken == "" {
+	if !validCompactPortalIdentity(raw, nonce, token.AccessToken) {
 		return account.Claims{}, errors.New("OIDC identity claims are invalid")
 	}
 	claims := account.Claims{Subject: raw.Subject, TenantID: raw.TenantID, RoleConfigHash: a.roleConfigHash, ExpiresAt: earliestExpiry(idToken.Expiry, token.Expiry), AccessToken: token.AccessToken}
 	// 详细角色、权限和授权版本由基础平台按当前访问令牌计算，不能依赖 Keycloak
 	// Token 中可能过期的业务权限快照。
-	contextClaims, contextErr := a.authorizationContext(ctx, token.AccessToken)
+	contextClaims, effectiveToken, contextErr := a.authorizationContextWithRefresh(ctx, token)
 	if contextErr == nil {
 		if contextClaims.Subject != claims.Subject || (claims.TenantID != "" && contextClaims.TenantID != claims.TenantID) {
 			return account.Claims{}, errors.New("OIDC authorization context identity does not match token")
 		}
 		contextClaims.RoleConfigHash = a.roleConfigHash
-		contextClaims.ExpiresAt, contextClaims.AccessToken = claims.ExpiresAt, token.AccessToken
+		contextClaims.ExpiresAt = earliestExpiry(claims.ExpiresAt, effectiveToken.Expiry)
+		contextClaims.AccessToken = effectiveToken.AccessToken
 		return contextClaims, nil
 	}
 	return account.Claims{}, fmt.Errorf("load portal authorization context: %w", contextErr)
@@ -133,14 +137,10 @@ type compactOIDCClaims struct {
 	TokenUse   string `json:"token_use"`
 }
 
-type portalAuthorizationContext struct {
-	Subject               string              `json:"sub"`
-	IdentityID            string              `json:"identity_id"`
-	TenantID              string              `json:"tenant_id"`
-	Roles                 []string            `json:"roles"`
-	Permissions           []string            `json:"permissions"`
-	DataScopes            []account.DataScope `json:"data_scopes"`
-	AuthorizationRevision uint64              `json:"authorization_revision"`
+func validCompactPortalIdentity(raw compactOIDCClaims, nonce, accessToken string) bool {
+	return raw.Nonce == nonce && raw.TokenUse == "id_token" && strings.TrimSpace(raw.Subject) != "" &&
+		raw.Subject == strings.TrimSpace(raw.Subject) && (raw.IdentityID == "" || raw.IdentityID == raw.Subject) &&
+		strings.TrimSpace(accessToken) != ""
 }
 
 func (a *OIDCAdapter) authorizationContext(ctx context.Context, accessToken string) (account.Claims, error) {
@@ -159,36 +159,45 @@ func (a *OIDCAdapter) authorizationContext(ctx context.Context, accessToken stri
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
-		return account.Claims{}, fmt.Errorf("portal authorization context returned HTTP %d", resp.StatusCode)
+		switch resp.StatusCode {
+		case http.StatusUnauthorized:
+			return account.Claims{}, fmt.Errorf("portal authorization context returned HTTP 401: %w", sharedauthorization.ErrTokenRejected)
+		case http.StatusForbidden:
+			return account.Claims{}, fmt.Errorf("portal authorization context returned HTTP 403: %w", sharedauthorization.ErrForbidden)
+		default:
+			if resp.StatusCode >= http.StatusInternalServerError {
+				return account.Claims{}, fmt.Errorf("portal authorization context returned HTTP %d: %w", resp.StatusCode, sharedauthorization.ErrUnavailable)
+			}
+			return account.Claims{}, fmt.Errorf("portal authorization context returned unexpected HTTP %d", resp.StatusCode)
+		}
 	}
-	var raw portalAuthorizationContext
+	var raw sharedauthorization.Response
 	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
 		return account.Claims{}, fmt.Errorf("decode portal authorization context: %w", err)
 	}
-	if raw.Subject == "" || raw.IdentityID != raw.Subject || raw.TenantID == "" || raw.AuthorizationRevision == 0 {
-		return account.Claims{}, errors.New("portal authorization context identity or revision is invalid")
+	scopes, _, err := sharedauthorization.Validate(raw, a.expectedContext)
+	if err != nil {
+		return account.Claims{}, fmt.Errorf("validate portal authorization context: %w", err)
 	}
-	return account.Claims{Subject: raw.Subject, TenantID: raw.TenantID, Roles: raw.Roles, Permissions: raw.Permissions, DataScopes: cloneDataScopes(raw.DataScopes), AuthzRevision: raw.AuthorizationRevision}, nil
+	return account.Claims{Subject: raw.Subject, PersonID: raw.PersonID, TenantID: raw.TenantID, Roles: raw.Roles, Permissions: raw.Permissions, DataScopes: scopes, AuthzRevision: raw.AuthorizationRevision}, nil
 }
 
-func cloneDataScopes(scopes []account.DataScope) []account.DataScope {
-	if len(scopes) == 0 {
-		return []account.DataScope{}
+func (a *OIDCAdapter) authorizationContextWithRefresh(ctx context.Context, token *oauth2.Token) (account.Claims, *oauth2.Token, error) {
+	claims, err := a.authorizationContext(ctx, token.AccessToken)
+	if err == nil || !errors.Is(err, sharedauthorization.ErrTokenRejected) || strings.TrimSpace(token.RefreshToken) == "" {
+		return claims, token, err
 	}
-	result := make([]account.DataScope, 0, len(scopes))
-	for _, scope := range scopes {
-		// The authorization-context endpoint is the trusted source, but retain a
-		// small structural boundary here so malformed remote responses never end
-		// up as an unbounded local-session payload.
-		if strings.TrimSpace(scope.RoleCode) == "" || strings.TrimSpace(scope.ScopeType) == "" ||
-			strings.TrimSpace(scope.RoleCode) != scope.RoleCode || strings.TrimSpace(scope.ScopeType) != scope.ScopeType ||
-			strings.TrimSpace(scope.ScopeID) != scope.ScopeID || strings.TrimSpace(scope.EnvironmentCode) != scope.EnvironmentCode ||
-			len(scope.RoleCode) > 128 || len(scope.ScopeType) > 32 || len(scope.ScopeID) > 128 || len(scope.EnvironmentCode) > 64 {
-			continue
-		}
-		result = append(result, scope)
+	// A platform 401 can indicate an access token that expired between the
+	// authorization-code exchange and the online authorization request. Force
+	// one OAuth refresh and one retry; never loop and never retry 403/5xx.
+	stale := *token
+	stale.Expiry = time.Now().Add(-time.Minute)
+	refreshed, refreshErr := a.config.TokenSource(oidc.ClientContext(ctx, a.httpClient), &stale).Token()
+	if refreshErr != nil {
+		return account.Claims{}, token, fmt.Errorf("refresh portal access token after authorization 401: %w", refreshErr)
 	}
-	return result
+	claims, err = a.authorizationContext(ctx, refreshed.AccessToken)
+	return claims, refreshed, err
 }
 
 type issuerTransport struct {

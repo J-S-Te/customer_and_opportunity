@@ -10,15 +10,20 @@ import (
 	"time"
 
 	sharedauth "github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/auth"
+	sharedauthorization "github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/authorizationcontext"
 	"golang.org/x/oauth2"
 )
 
 const (
 	loginTTL                   = 10 * time.Minute
 	authorizationCheckInterval = 15 * time.Second
+	authorizationMaxStale      = 60 * time.Second
 )
 
-var ErrUnauthenticated = errors.New("CRM session is not authenticated")
+var (
+	ErrUnauthenticated          = errors.New("CRM session is not authenticated")
+	ErrAuthorizationUnavailable = sharedauthorization.ErrUnavailable
+)
 
 // loginFailure keeps the browser-facing error generic while preserving the
 // failed stage and the underlying cause for structured server diagnostics.
@@ -29,9 +34,9 @@ func loginFailure(stage string, cause error) error {
 }
 
 type Options struct {
-	TenantID, RoleConfigHash string
-	SessionTTL               time.Duration
-	MaxRoles                 int
+	TenantID, RoleConfigHash, EnvironmentCode string
+	SessionTTL                                time.Duration
+	MaxRoles                                  int
 }
 
 type Service struct {
@@ -115,7 +120,7 @@ func (s *Service) CompleteLogin(ctx context.Context, state, code string) (LoginR
 		return LoginResult{}, loginFailure("authorization_code_exchange", err)
 	}
 	// 不直接信任平台返回的扁平权限：必须与本地发布的角色目录精确一致，防止目录漂移或越权声明。
-	claims, err = normalizeAuthorization(claims, s.options.TenantID, s.options.RoleConfigHash, s.options.MaxRoles)
+	claims, err = normalizeAuthorization(claims, s.options.TenantID, s.options.RoleConfigHash, s.options.EnvironmentCode, s.options.MaxRoles)
 	if err != nil || !claims.ExpiresAt.After(now) {
 		if err == nil {
 			err = errors.New("authorization claims are expired")
@@ -147,6 +152,10 @@ func (s *Service) CompleteLogin(ctx context.Context, state, code string) (LoginR
 	if err != nil {
 		return LoginResult{}, err
 	}
+	dataScopesJSON, err := json.Marshal(claims.DataScopes)
+	if err != nil {
+		return LoginResult{}, err
+	}
 	organizationIDsJSON, err := json.Marshal(claims.OrganizationIDs)
 	if err != nil {
 		return LoginResult{}, err
@@ -155,7 +164,7 @@ func (s *Service) CompleteLogin(ctx context.Context, state, code string) (LoginR
 	if err != nil {
 		return LoginResult{}, err
 	}
-	session := &Session{SessionIDHash: tokenHash(rawSession), TenantID: claims.TenantID, PlatformUserID: claims.Subject, PersonID: claims.PersonID, DisplayName: claims.DisplayName, PrimaryOrgID: claims.PrimaryOrgID, OrganizationIDsJSON: organizationIDsJSON, RolesJSON: rolesJSON, PermissionsJSON: permissionsJSON, RoleConfigHash: claims.RoleConfigHash, AuthzRevision: claims.AuthzRevision, AccessTokenCipher: accessTokenCipher, ExpiresAt: expiresAt, AuthorizationCheckedAt: now, CreatedAt: now, LastSeenAt: now}
+	session := &Session{SessionIDHash: tokenHash(rawSession), TenantID: claims.TenantID, PlatformUserID: claims.Subject, PersonID: claims.PersonID, DisplayName: claims.DisplayName, PrimaryOrgID: claims.PrimaryOrgID, OrganizationIDsJSON: organizationIDsJSON, RolesJSON: rolesJSON, PermissionsJSON: permissionsJSON, DataScopesJSON: dataScopesJSON, RoleConfigHash: claims.RoleConfigHash, AuthzRevision: claims.AuthzRevision, AccessTokenCipher: accessTokenCipher, ExpiresAt: expiresAt, AuthorizationCheckedAt: now, CreatedAt: now, LastSeenAt: now}
 	if err := s.repo.CreateSession(ctx, session); err != nil {
 		return LoginResult{}, err
 	}
@@ -185,11 +194,20 @@ func (s *Service) Authenticate(ctx context.Context, rawSession string) (sharedau
 			return sharedauth.Principal{}, ErrUnauthenticated
 		}
 		current, currentErr := s.oidc.UserInfo(ctx, accessToken)
+		if errors.Is(currentErr, sharedauthorization.ErrUnavailable) {
+			if now.Sub(session.AuthorizationCheckedAt) > authorizationMaxStale {
+				return sharedauth.Principal{}, ErrAuthorizationUnavailable
+			}
+			if err := s.repo.TouchSession(ctx, session.SessionIDHash, now, time.Time{}); err != nil {
+				return sharedauth.Principal{}, ErrUnauthenticated
+			}
+			return principalFromClaims(stored), nil
+		}
 		if currentErr != nil {
 			_ = s.repo.RevokeSession(ctx, session.SessionIDHash, now)
 			return sharedauth.Principal{}, ErrUnauthenticated
 		}
-		current, currentErr = normalizeAuthorization(current, s.options.TenantID, s.options.RoleConfigHash, s.options.MaxRoles)
+		current, currentErr = normalizeAuthorization(current, s.options.TenantID, s.options.RoleConfigHash, s.options.EnvironmentCode, s.options.MaxRoles)
 		if currentErr != nil || !sameAuthorization(stored, current) {
 			_ = s.repo.RevokeSessionsForSubject(ctx, session.TenantID, session.PlatformUserID, now)
 			return sharedauth.Principal{}, ErrUnauthenticated
@@ -210,6 +228,7 @@ func (s *Service) Logout(ctx context.Context, rawSession string) {
 
 func claimsFromSession(session *Session) (verifiedClaims, error) {
 	var organizationIDs, roles, permissions []string
+	var dataScopes []sharedauth.DataScope
 	if err := json.Unmarshal(session.OrganizationIDsJSON, &organizationIDs); err != nil {
 		return verifiedClaims{}, err
 	}
@@ -219,7 +238,10 @@ func claimsFromSession(session *Session) (verifiedClaims, error) {
 	if err := json.Unmarshal(session.PermissionsJSON, &permissions); err != nil {
 		return verifiedClaims{}, err
 	}
-	return verifiedClaims{Subject: session.PlatformUserID, IdentityID: session.PlatformUserID, TenantID: session.TenantID, PersonID: session.PersonID, DisplayName: session.DisplayName, PrimaryOrgID: session.PrimaryOrgID, OrganizationIDs: organizationIDs, Roles: roles, Permissions: permissions, RoleConfigHash: session.RoleConfigHash, AuthzRevision: session.AuthzRevision}, nil
+	if err := json.Unmarshal(session.DataScopesJSON, &dataScopes); err != nil {
+		return verifiedClaims{}, err
+	}
+	return verifiedClaims{Subject: session.PlatformUserID, IdentityID: session.PlatformUserID, TenantID: session.TenantID, PersonID: session.PersonID, DisplayName: session.DisplayName, PrimaryOrgID: session.PrimaryOrgID, OrganizationIDs: organizationIDs, Roles: roles, Permissions: permissions, DataScopes: dataScopes, RoleConfigHash: session.RoleConfigHash, AuthzRevision: session.AuthzRevision}, nil
 }
 
 func principalFromClaims(claims verifiedClaims) sharedauth.Principal {
@@ -227,17 +249,22 @@ func principalFromClaims(claims verifiedClaims) sharedauth.Principal {
 	for _, permission := range claims.Permissions {
 		permissions[permission] = struct{}{}
 	}
-	scope := scopeForRoles(claims.Roles)
+	scope := scopeForDataScopes(claims.DataScopes)
 	// PersonID 只能来自平台显式、租户内的人员绑定；没有绑定时保持为空，绝不能由 sub 猜测，
 	// 否则售前任务等以人员身份授权的数据会被错误归属。
-	return sharedauth.Principal{UserID: claims.Subject, PersonID: claims.PersonID, TenantID: claims.TenantID, DisplayName: claims.DisplayName, PrimaryOrgID: claims.PrimaryOrgID, Roles: append([]string(nil), claims.Roles...), Permissions: permissions, ScopeMode: scope, OrganizationIDs: append([]string(nil), claims.OrganizationIDs...), RoleConfigHash: claims.RoleConfigHash, AuthzRevision: claims.AuthzRevision}
+	return sharedauth.Principal{UserID: claims.Subject, PersonID: claims.PersonID, TenantID: claims.TenantID, DisplayName: claims.DisplayName, PrimaryOrgID: claims.PrimaryOrgID, Roles: append([]string(nil), claims.Roles...), Permissions: permissions, DataScopes: append([]sharedauth.DataScope(nil), claims.DataScopes...), ScopeMode: scope, OrganizationIDs: append([]string(nil), claims.OrganizationIDs...), RoleConfigHash: claims.RoleConfigHash, AuthzRevision: claims.AuthzRevision}
 }
 
-func scopeForRoles(roles []string) sharedauth.ScopeMode {
-	for _, role := range roles {
-		switch role {
-		case "admin", "platform-super-admin", "platform_security_admin", "sales_director", "technical_director", "team_lead", "technical_lead", "customer_admin", "crm_super_admin", "auditor":
+func scopeForDataScopes(scopes []sharedauth.DataScope) sharedauth.ScopeMode {
+	for _, scope := range scopes {
+		switch scope.ScopeType {
+		case sharedauthorization.ScopeApplication, sharedauthorization.ScopeEnvironment, sharedauthorization.ScopeTenant:
 			return sharedauth.ScopeAll
+		}
+	}
+	for _, scope := range scopes {
+		if scope.ScopeType == sharedauthorization.ScopeOrg {
+			return sharedauth.ScopeOrg
 		}
 	}
 	return sharedauth.ScopeSelf

@@ -3,10 +3,13 @@ package account
 import (
 	"context"
 	"time"
+
+	sharedauth "github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/auth"
 )
 
 type Claims struct {
 	Subject        string
+	PersonID       string
 	TenantID       string
 	Roles          []string
 	Permissions    []string
@@ -25,12 +28,7 @@ type Claims struct {
 // scopes are forwarded to the request principal so future Portal capabilities
 // can make explicit, role-aware data decisions without minting a second
 // authorization source.
-type DataScope struct {
-	RoleCode        string `json:"role_code"`
-	ScopeType       string `json:"scope_type"`
-	ScopeID         string `json:"scope_id"`
-	EnvironmentCode string `json:"environment_code"`
-}
+type DataScope = sharedauth.DataScope
 
 // OIDCClient 负责授权地址、授权码兑换，以及发行方、受众、签名、nonce 与 token_use 的密码学校验。
 // 业务服务只接收已验证声明，不能把浏览器回传字段直接提升为登录主体。

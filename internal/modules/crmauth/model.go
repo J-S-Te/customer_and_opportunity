@@ -28,6 +28,7 @@ type Session struct {
 	OrganizationIDsJSON    []byte `gorm:"type:json;not null"`
 	RolesJSON              []byte `gorm:"type:json;not null"`
 	PermissionsJSON        []byte `gorm:"type:json;not null"`
+	DataScopesJSON         []byte `gorm:"type:json;not null"`
 	RoleConfigHash         string `gorm:"size:128;not null"`
 	AuthzRevision          uint64 `gorm:"not null"`
 	AccessTokenCipher      []byte `gorm:"type:blob;not null"`
