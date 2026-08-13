@@ -61,6 +61,18 @@ func (r *GORMRepository) FindLink(ctx context.Context, tenantID, subject string)
 	return &value, err
 }
 
+func (r *GORMRepository) FindLinksBySubjects(ctx context.Context, tenantID string, subjects []string) ([]IdentityLink, error) {
+	values := make([]IdentityLink, 0, len(subjects))
+	if len(subjects) == 0 {
+		return values, nil
+	}
+	err := r.tx(ctx).
+		Where("tenant_id = ? AND platform_user_id IN ? AND deleted_at IS NULL", tenantID, subjects).
+		Order("platform_user_id ASC, id ASC").
+		Find(&values).Error
+	return values, err
+}
+
 type identityDisableOperation struct {
 	ID                 uint64    `gorm:"column:id;primaryKey;autoIncrement"`
 	IdentityLinkID     uint64    `gorm:"column:identity_link_id;not null"`

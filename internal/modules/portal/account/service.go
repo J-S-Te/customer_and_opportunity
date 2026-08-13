@@ -64,6 +64,75 @@ type DisableResult struct {
 	Version        uint64         `json:"version"`
 }
 
+type ReconciliationSnapshot struct {
+	PlatformUserID  string         `json:"platform_user_id"`
+	Found           bool           `json:"found"`
+	PortalAccountID string         `json:"portal_account_id,omitempty"`
+	AccountNo       string         `json:"account_no,omitempty"`
+	CustomerID      uint64         `json:"customer_id,omitempty"`
+	ContactID       *uint64        `json:"contact_id,omitempty"`
+	Status          IdentityStatus `json:"status,omitempty"`
+	Version         uint64         `json:"version,omitempty"`
+}
+
+// ReconciliationSnapshots is a bounded, machine-only read projection. Missing
+// subjects are returned explicitly and no search, contact details, tokens or
+// display names are exposed.
+func (s *Service) ReconciliationSnapshots(ctx context.Context, tenantID string, subjects []string) ([]ReconciliationSnapshot, error) {
+	tenantID = strings.TrimSpace(tenantID)
+	if tenantID == "" || tenantID != strings.TrimSpace(tenantID) || len(subjects) == 0 || len(subjects) > 100 {
+		return nil, ErrInvalidClaims
+	}
+	canonical := make([]string, 0, len(subjects))
+	seen := make(map[string]struct{}, len(subjects))
+	for _, raw := range subjects {
+		subject := strings.TrimSpace(raw)
+		if subject == "" || subject != raw || len(subject) > 128 {
+			return nil, ErrInvalidClaims
+		}
+		if _, duplicate := seen[subject]; duplicate {
+			return nil, ErrInvalidClaims
+		}
+		seen[subject] = struct{}{}
+		canonical = append(canonical, subject)
+	}
+	repo, ok := s.repo.(IdentityReconciliationRepository)
+	if !ok || repo == nil {
+		return nil, ErrNotProvisioned
+	}
+	links, err := repo.FindLinksBySubjects(ctx, tenantID, canonical)
+	if err != nil {
+		return nil, err
+	}
+	bySubject := make(map[string]IdentityLink, len(links))
+	for _, link := range links {
+		if link.TenantID != tenantID {
+			return nil, ErrInvalidClaims
+		}
+		if _, requested := seen[link.PlatformUserID]; !requested {
+			return nil, ErrInvalidClaims
+		}
+		if _, duplicate := bySubject[link.PlatformUserID]; duplicate {
+			return nil, ErrInvalidClaims
+		}
+		bySubject[link.PlatformUserID] = link
+	}
+	result := make([]ReconciliationSnapshot, 0, len(canonical))
+	for _, subject := range canonical {
+		link, found := bySubject[subject]
+		if !found {
+			result = append(result, ReconciliationSnapshot{PlatformUserID: subject, Found: false})
+			continue
+		}
+		result = append(result, ReconciliationSnapshot{
+			PlatformUserID: subject, Found: true, PortalAccountID: portalAccountID(link.ID),
+			AccountNo: link.AccountNo, CustomerID: link.CustomerID, ContactID: link.ContactID,
+			Status: link.Status, Version: link.Version,
+		})
+	}
+	return result, nil
+}
+
 // Disable 先冻结 Portal 本地身份映射，再由调用方撤销平台角色。
 // 即使远端步骤需要由持久化 Saga 重试，本地会话边界也已关闭，不会继续放行旧权限。
 func (s *Service) Disable(ctx context.Context, cmd DisableCommand) (DisableResult, error) {
@@ -310,8 +379,12 @@ func validPortalAuthorization(claims Claims, environmentCode string) bool {
 		}
 		seen[permission] = struct{}{}
 	}
-	_, _, err := sharedauthorization.ValidateScopes(claims.DataScopes, claims.Roles, environmentCode, claims.Subject, claims.PersonID)
-	return err == nil
+	_, decision, err := sharedauthorization.ValidateScopes(claims.DataScopes, claims.Roles, environmentCode, claims.Subject, claims.PersonID)
+	// Portal data is always bound to the server-side IdentityLink customer.
+	// APPLICATION/TENANT/ENVIRONMENT and a matching SELF scope may authorize
+	// that customer; ORG/PROJECT-only scopes cannot be safely translated to a
+	// customer and therefore fail closed.
+	return err == nil && (decision.AllowAll || len(decision.SelfIDs) > 0)
 }
 
 func (s *Service) AuthenticateSession(ctx context.Context, tenantID, rawToken string) (*Session, error) {

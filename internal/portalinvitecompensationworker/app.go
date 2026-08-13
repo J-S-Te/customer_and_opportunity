@@ -49,6 +49,7 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 		return nil, err
 	}
 	worker := NewWorker(newStore(db), httpRoleAssigner{client: roleClient}, httpMappingProvisioner{client: portalClient}, cfg)
+	worker.withReconciler(newReconciler(newReconciliationStore(db), portalClient, cfg.WorkerID, cfg.ReconciliationBatchSize), cfg.ReconciliationInterval)
 	return &App{db: db, worker: worker}, nil
 }
 

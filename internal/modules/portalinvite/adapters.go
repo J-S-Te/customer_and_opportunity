@@ -290,6 +290,89 @@ func (a *HTTPPortalProvisioner) ProvisionMapping(ctx context.Context, contact Co
 	return a.ProvisionMappingIdempotent(ctx, contact, identity, portalMappingIdempotencyKey(contact, identity))
 }
 
+// ReconciliationSnapshots reuses the same least-privilege CRM→Portal machine
+// identity as provisioning, but calls a read-only bounded projection. The
+// endpoint is derived from the reviewed provision URL so deployments do not
+// need a second manually maintained internal URL.
+func (a *HTTPPortalProvisioner) ReconciliationSnapshots(ctx context.Context, subjects []string) ([]PortalIdentitySnapshot, error) {
+	if a == nil || a.client == nil || len(subjects) == 0 || len(subjects) > 100 || !strings.HasSuffix(a.endpoint, "/accounts/provision") {
+		return nil, errors.New("Portal reconciliation request is invalid")
+	}
+	seen := make(map[string]struct{}, len(subjects))
+	items := make([]map[string]string, 0, len(subjects))
+	for _, subject := range subjects {
+		if !validPortalIntegrationString(subject, 128) {
+			return nil, errors.New("Portal reconciliation identity is invalid")
+		}
+		if _, duplicate := seen[subject]; duplicate {
+			return nil, errors.New("Portal reconciliation identity is duplicated")
+		}
+		seen[subject] = struct{}{}
+		items = append(items, map[string]string{"platform_user_id": subject})
+	}
+	raw, err := json.Marshal(map[string]any{"items": items})
+	if err != nil {
+		return nil, err
+	}
+	endpoint := strings.TrimSuffix(a.endpoint, "/provision") + "/reconciliation-snapshot"
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(raw))
+	if err != nil {
+		return nil, err
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Accept", "application/json")
+	request.Header.Set("X-Integration-Timestamp", a.now().UTC().Format(time.RFC3339Nano))
+	nonce := make([]byte, 32)
+	if _, err = io.ReadFull(a.nonceReader, nonce); err != nil {
+		return nil, errors.New("generate Portal reconciliation request nonce failed")
+	}
+	request.Header.Set("X-Integration-Nonce", base64.RawURLEncoding.EncodeToString(nonce))
+	response, err := a.client.Do(request)
+	if err != nil {
+		return nil, errors.New("Portal reconciliation transport failed")
+	}
+	defer response.Body.Close()
+	rawResponse, err := io.ReadAll(io.LimitReader(response.Body, maxIntegrationResponseBytes+1))
+	if err != nil || len(rawResponse) > maxIntegrationResponseBytes || response.StatusCode != http.StatusOK ||
+		!strings.HasPrefix(response.Header.Get("Content-Type"), "application/json") {
+		return nil, errors.New("Portal reconciliation endpoint returned an invalid response")
+	}
+	var envelope struct {
+		Code      string `json:"code"`
+		Message   string `json:"message"`
+		RequestID string `json:"request_id"`
+		Data      struct {
+			Items []PortalIdentitySnapshot `json:"items"`
+		} `json:"data"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(rawResponse))
+	decoder.DisallowUnknownFields()
+	if err = decoder.Decode(&envelope); err != nil || decoder.Decode(&struct{}{}) != io.EOF || envelope.Code != "OK" ||
+		!validPortalIntegrationString(envelope.RequestID, 128) || len(envelope.Data.Items) != len(subjects) {
+		return nil, errors.New("Portal reconciliation endpoint returned an invalid response")
+	}
+	result := make([]PortalIdentitySnapshot, 0, len(subjects))
+	for _, item := range envelope.Data.Items {
+		if _, requested := seen[item.PlatformUserID]; !requested {
+			return nil, errors.New("Portal reconciliation endpoint returned an unknown identity")
+		}
+		delete(seen, item.PlatformUserID)
+		if item.Found {
+			if !validPortalIntegrationString(item.PortalAccountID, 64) || !validPortalIntegrationString(item.AccountNo, 64) ||
+				item.CustomerID == 0 || item.Version == 0 || (item.Status != "PENDING" && item.Status != "ACTIVE" && item.Status != "DISABLED") {
+				return nil, errors.New("Portal reconciliation endpoint returned an invalid mapping")
+			}
+		} else if item.PortalAccountID != "" || item.AccountNo != "" || item.CustomerID != 0 || item.ContactID != nil || item.Status != "" || item.Version != 0 {
+			return nil, errors.New("Portal reconciliation endpoint returned data for a missing identity")
+		}
+		result = append(result, item)
+	}
+	if len(seen) != 0 {
+		return nil, errors.New("Portal reconciliation endpoint omitted an identity")
+	}
+	return result, nil
+}
+
 // 补偿任务以不透明且稳定的任务编号作为幂等键，不在请求头暴露客户身份信息。
 func (a *HTTPPortalProvisioner) ProvisionMappingIdempotent(ctx context.Context, contact ContactIdentity, identity ProvisionedIdentity, idempotencyKey string) (PortalMapping, error) {
 	if a == nil || a.endpoint == "" || a.client == nil || !validPortalMappingIdentity(contact, identity) {

@@ -28,15 +28,28 @@ type mappingProvisioner interface {
 	ProvisionMapping(context.Context, portalinvite.CompensationTask) (portalinvite.PortalMapping, error)
 }
 
+type identityReconciler interface {
+	RunOnce(context.Context) (reconciliationMetrics, error)
+}
+
 type Worker struct {
-	store         taskStore
-	roles         roleAssigner
-	mappings      mappingProvisioner
-	workerID      string
-	pollInterval  time.Duration
-	leaseDuration time.Duration
-	batchSize     int
-	now           func() time.Time
+	store          taskStore
+	roles          roleAssigner
+	mappings       mappingProvisioner
+	workerID       string
+	pollInterval   time.Duration
+	leaseDuration  time.Duration
+	batchSize      int
+	now            func() time.Time
+	reconciler     identityReconciler
+	reconcileEvery time.Duration
+	nextReconcile  time.Time
+}
+
+func (w *Worker) withReconciler(reconciler identityReconciler, every time.Duration) *Worker {
+	w.reconciler = reconciler
+	w.reconcileEvery = every
+	return w
 }
 
 func NewWorker(store taskStore, roles roleAssigner, mappings mappingProvisioner, cfg Config) *Worker {
@@ -81,6 +94,15 @@ func (w *Worker) RunOnce(ctx context.Context) (int, error) {
 		joined = errors.Join(joined, statsErr)
 	} else if len(tasks) > 0 || stats.DeadLetter > 0 {
 		log.Printf("Portal invite compensation queue: claimed=%d pending=%d processing=%d retry_wait=%d dead_letter=%d", len(tasks), stats.Pending, stats.Processing, stats.RetryWait, stats.DeadLetter)
+	}
+	if w.reconciler != nil && (w.nextReconcile.IsZero() || !w.now().Before(w.nextReconcile)) {
+		metrics, reconciliationErr := w.reconciler.RunOnce(ctx)
+		w.nextReconcile = w.now().Add(w.reconcileEvery)
+		if reconciliationErr != nil {
+			joined = errors.Join(joined, reconciliationErr)
+		} else {
+			log.Printf("Portal identity reconciliation: scanned=%d consistent=%d auto_compensation=%d needs_review=%d", metrics.Scanned, metrics.Consistent, metrics.AutoCompensation, metrics.NeedsReview)
+		}
 	}
 	return len(tasks), joined
 }

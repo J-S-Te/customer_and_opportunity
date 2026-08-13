@@ -65,6 +65,15 @@ func TestPortalAuthorizationScopeSemantics(t *testing.T) {
 	if validPortalAuthorization(base, "dev") {
 		t.Fatal("APPLICATION scope with scope_id was accepted")
 	}
+	for _, scope := range []DataScope{
+		{RoleCode: "portal_customer", ScopeType: "ORGANIZATION", ScopeID: "org-a"},
+		{RoleCode: "portal_customer", ScopeType: "PROJECT", ScopeID: "project-a"},
+	} {
+		base.DataScopes = []DataScope{scope}
+		if validPortalAuthorization(base, "dev") {
+			t.Fatalf("scope without a safe customer binding was accepted: %#v", scope)
+		}
+	}
 }
 
 func TestPortalAccountIDIsStableBusinessIdentifier(t *testing.T) {

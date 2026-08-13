@@ -15,13 +15,15 @@ const requiredPortalScope = "portal.identity_mapping.provision"
 
 // Worker 使用独立 CRM 数据库连接和最小权限的 CRM→Portal OAuth 客户端；浏览器凭据及 Portal→CRM 凭据不得复用。
 type Config struct {
-	MySQLDSN      string
-	WorkerID      string
-	PollInterval  time.Duration
-	LeaseDuration time.Duration
-	BatchSize     int
-	Portal        PortalConfig
-	Platform      PlatformConfig
+	MySQLDSN                string
+	WorkerID                string
+	PollInterval            time.Duration
+	LeaseDuration           time.Duration
+	BatchSize               int
+	ReconciliationInterval  time.Duration
+	ReconciliationBatchSize int
+	Portal                  PortalConfig
+	Platform                PlatformConfig
 }
 
 type PlatformConfig struct {
@@ -48,11 +50,13 @@ func LoadConfig() (Config, error) {
 		return Config{}, err
 	}
 	cfg := Config{
-		MySQLDSN:      os.Getenv("PORTAL_INVITE_COMPENSATION_MYSQL_DSN"),
-		WorkerID:      env("PORTAL_INVITE_COMPENSATION_WORKER_ID", hostname()),
-		PollInterval:  durationEnv("PORTAL_INVITE_COMPENSATION_POLL_INTERVAL", 5*time.Second),
-		LeaseDuration: durationEnv("PORTAL_INVITE_COMPENSATION_LEASE_DURATION", time.Minute),
-		BatchSize:     intEnv("PORTAL_INVITE_COMPENSATION_BATCH_SIZE", 20),
+		MySQLDSN:                os.Getenv("PORTAL_INVITE_COMPENSATION_MYSQL_DSN"),
+		WorkerID:                env("PORTAL_INVITE_COMPENSATION_WORKER_ID", hostname()),
+		PollInterval:            durationEnv("PORTAL_INVITE_COMPENSATION_POLL_INTERVAL", 5*time.Second),
+		LeaseDuration:           durationEnv("PORTAL_INVITE_COMPENSATION_LEASE_DURATION", time.Minute),
+		BatchSize:               intEnv("PORTAL_INVITE_COMPENSATION_BATCH_SIZE", 20),
+		ReconciliationInterval:  durationEnv("PORTAL_IDENTITY_RECONCILIATION_INTERVAL", 5*time.Minute),
+		ReconciliationBatchSize: intEnv("PORTAL_IDENTITY_RECONCILIATION_BATCH_SIZE", 100),
 		Portal: PortalConfig{
 			ProvisionURL: os.Getenv("PORTAL_INVITE_COMPENSATION_PORTAL_PROVISION_URL"),
 			TokenURL:     os.Getenv("PORTAL_INVITE_COMPENSATION_PORTAL_TOKEN_URL"),
@@ -102,7 +106,8 @@ func (c Config) validate() error {
 			return fmt.Errorf("%s is required", key)
 		}
 	}
-	if len(c.WorkerID) > 128 || c.PollInterval <= 0 || c.LeaseDuration < 15*time.Second || c.BatchSize < 1 || c.BatchSize > 100 {
+	if len(c.WorkerID) > 128 || c.PollInterval <= 0 || c.LeaseDuration < 15*time.Second || c.BatchSize < 1 || c.BatchSize > 100 ||
+		c.ReconciliationInterval <= 0 || c.ReconciliationBatchSize < 1 || c.ReconciliationBatchSize > 100 {
 		return fmt.Errorf("invalid Portal invite compensation scheduling configuration")
 	}
 	if strings.TrimSpace(c.Portal.Scope) != requiredPortalScope {

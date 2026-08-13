@@ -405,6 +405,41 @@ func TestAccountProvisionUsesOnlyAuthenticatedMachineTenant(t *testing.T) {
 	}
 }
 
+func TestAccountReconciliationSnapshotUsesAuthenticatedTenantAndExactMachineClient(t *testing.T) {
+	for _, item := range []struct {
+		name, subject string
+		status        int
+		calls         int
+	}{
+		{name: "configured client", subject: "crm-portal-provision", status: http.StatusOK, calls: 1},
+		{name: "different client", subject: "other-client", status: http.StatusForbidden},
+	} {
+		t.Run(item.name, func(t *testing.T) {
+			calls := 0
+			deps := RouterDependencies{
+				Config: Config{PathPrefix: "/customer-portal", PublicOrigin: "https://portal.example", CRMProvisionClientSubject: "crm-portal-provision"},
+				MachineAuthenticator: fakeMachineAuthenticator{principal: sharedauth.Principal{
+					UserID: "machine:" + item.subject, TenantID: "tenant-a", Permissions: map[string]struct{}{"portal.identity_mapping.provision": {}},
+				}},
+				ReconcileAccounts: func(_ context.Context, tenantID string, subjects []string) ([]account.ReconciliationSnapshot, error) {
+					calls++
+					if tenantID != "tenant-a" || len(subjects) != 1 || subjects[0] != "subject-a" {
+						t.Fatalf("tenant=%q subjects=%#v", tenantID, subjects)
+					}
+					return []account.ReconciliationSnapshot{{PlatformUserID: "subject-a", Found: false}}, nil
+				},
+			}
+			request := httptest.NewRequest(http.MethodPost, "/customer-portal/internal/accounts/reconciliation-snapshot", strings.NewReader(`{"items":[{"platform_user_id":"subject-a"}]}`))
+			request.Header.Set("Content-Type", "application/json")
+			response := httptest.NewRecorder()
+			NewRouter(deps).ServeHTTP(response, request)
+			if response.Code != item.status || calls != item.calls {
+				t.Fatalf("status=%d calls=%d body=%s", response.Code, calls, response.Body.String())
+			}
+		})
+	}
+}
+
 func TestAccountRoutesRequireConfiguredExactMachineClientSubject(t *testing.T) {
 	for _, item := range []struct {
 		name, path, scope, expectedSubject, actualSubject string

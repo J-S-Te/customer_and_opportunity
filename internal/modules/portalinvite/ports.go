@@ -18,6 +18,17 @@ type ProvisionedIdentity struct {
 }
 type PortalMapping struct{ PortalAccountID string }
 
+type PortalIdentitySnapshot struct {
+	PlatformUserID  string  `json:"platform_user_id"`
+	Found           bool    `json:"found"`
+	PortalAccountID string  `json:"portal_account_id,omitempty"`
+	AccountNo       string  `json:"account_no,omitempty"`
+	CustomerID      uint64  `json:"customer_id,omitempty"`
+	ContactID       *uint64 `json:"contact_id,omitempty"`
+	Status          string  `json:"status,omitempty"`
+	Version         uint64  `json:"version,omitempty"`
+}
+
 type CustomerReader interface {
 	RegistrationContact(context.Context, auth.Principal, uint64) (ContactIdentity, error)
 }

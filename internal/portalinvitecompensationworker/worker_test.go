@@ -50,6 +50,61 @@ func (f fakeRoles) AssignPortalRole(context.Context, portalinvite.CompensationTa
 	return f.err
 }
 
+type fakeIdentityReconciler struct {
+	calls   int
+	metrics reconciliationMetrics
+	err     error
+}
+
+func (r *fakeIdentityReconciler) RunOnce(context.Context) (reconciliationMetrics, error) {
+	r.calls++
+	return r.metrics, r.err
+}
+
+func TestReconciliationRunsOnStartupAndAtInterval(t *testing.T) {
+	now := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	reconciler := &fakeIdentityReconciler{}
+	worker := NewWorker(&fakeStore{}, fakeRoles{}, fakeMappings{}, testConfig()).withReconciler(reconciler, time.Minute)
+	worker.now = func() time.Time { return now }
+	if _, err := worker.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := worker.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if reconciler.calls != 1 {
+		t.Fatalf("calls before interval=%d", reconciler.calls)
+	}
+	now = now.Add(time.Minute)
+	if _, err := worker.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if reconciler.calls != 2 {
+		t.Fatalf("calls after interval=%d", reconciler.calls)
+	}
+
+	// A restarted process has no in-memory deadline and reconciles immediately;
+	// durable run/finding rows make this safe and observable.
+	restarted := NewWorker(&fakeStore{}, fakeRoles{}, fakeMappings{}, testConfig()).withReconciler(reconciler, time.Minute)
+	restarted.now = worker.now
+	if _, err := restarted.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if reconciler.calls != 3 {
+		t.Fatalf("restart did not trigger reconciliation: calls=%d", reconciler.calls)
+	}
+}
+
+func TestReconciliationFailureDoesNotLoseCompletedCompensation(t *testing.T) {
+	store := &fakeStore{tasks: []portalinvite.CompensationTask{validTask(portalinvite.CompensationRole)}}
+	reconciler := &fakeIdentityReconciler{err: errors.New("snapshot unavailable")}
+	worker := NewWorker(store, fakeRoles{}, fakeMappings{}, testConfig()).withReconciler(reconciler, time.Minute)
+	count, err := worker.RunOnce(context.Background())
+	if count != 1 || err == nil || store.completedRole != 1 || reconciler.calls != 1 {
+		t.Fatalf("count=%d completed=%d reconciliation_calls=%d err=%v", count, store.completedRole, reconciler.calls, err)
+	}
+}
+
 func TestRunOnceReportsQueueStatsFailureWithoutLosingCompletedWork(t *testing.T) {
 	store := &fakeStore{tasks: []portalinvite.CompensationTask{validTask(portalinvite.CompensationRole)}, statsErr: errors.New("stats unavailable")}
 	worker := NewWorker(store, fakeRoles{}, fakeMappings{}, testConfig())
@@ -106,6 +161,18 @@ func TestUnavailableRoleFailsClosedWithoutLeakingCause(t *testing.T) {
 	got := store.failedTasks[0]
 	if got.code != "PLATFORM_ROLE_ASSIGN_UNAVAILABLE" || got.summary != "platform role assignment is unavailable" {
 		t.Fatalf("unsafe persisted failure: %#v", got)
+	}
+}
+
+func TestPortalMappingFaultIsPersistedForBoundedRetryWithoutLeakingCause(t *testing.T) {
+	store := &fakeStore{tasks: []portalinvite.CompensationTask{validTask(portalinvite.CompensationMapping)}}
+	worker := NewWorker(store, fakeRoles{}, fakeMappings{err: errors.New("upstream response contained customer-secret")}, testConfig())
+	_, err := worker.RunOnce(context.Background())
+	if err == nil || len(store.failedTasks) != 1 || store.completedMapping != 0 {
+		t.Fatalf("error=%v failures=%#v completed=%d", err, store.failedTasks, store.completedMapping)
+	}
+	if got := store.failedTasks[0]; got.code != "PORTAL_MAPPING_RETRY_FAILED" || got.summary != "Portal mapping retry failed" || strings.Contains(got.summary, "customer-secret") {
+		t.Fatalf("unsafe mapping failure=%#v", got)
 	}
 }
 
