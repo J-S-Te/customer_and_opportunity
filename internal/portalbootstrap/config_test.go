@@ -11,7 +11,8 @@ func validPortalConfig() Config {
 		MySQLDSN: "portal:secret@tcp(mysql:3306)/portal", PathPrefix: "/customer-portal", PublicOrigin: "https://portal.example",
 		TenantID: "tenant-a", RoleConfigHash: "sha256:catalog", OIDCIssuer: "https://identity.example",
 		OIDCClientID: "portal-browser", OIDCClientSecret: "browser-secret", OIDCRedirectURI: "https://portal.example/customer-portal/auth/callback", OIDCScopes: []string{"openid", "profile"},
-		SessionCookieName: "portal_session", SessionCookieSecure: true, SessionTTL: 15 * time.Minute,
+		OIDCIdentityProviderHint: "basic-platform",
+		SessionCookieName:        "portal_session", SessionCookieSecure: true, SessionTTL: 15 * time.Minute,
 		AccountSecurityCenterURL: "https://identity.example/account/security",
 		MachineTokenIssuer:       "basic-platform", MachineTokenAudience: "basic-platform-application",
 		MachineTokenPublicKeyPath: "/run/secrets/basic-platform-application-jwt-public.pem",
@@ -23,6 +24,25 @@ func validPortalConfig() Config {
 		PlatformBaseURL: "https://identity.example", PlatformApplicationCode: "customer_portal", PlatformEnvironmentCode: "test",
 		PlatformAuditClientID: "portal-audit", PlatformAuditClientSecret: "audit-secret", PlatformAuditWorkerID: "portal-api-audit",
 		PlatformAuditPollInterval: time.Second, PlatformAuditBatchSize: 100,
+	}
+}
+
+func TestPortalConfigRejectsUntrimmedIdentityProviderHint(t *testing.T) {
+	config := validPortalConfig()
+	config.OIDCIdentityProviderHint = " basic-platform"
+	if err := config.validate(); err == nil || !strings.Contains(err.Error(), "PORTAL_OIDC_IDP_HINT") {
+		t.Fatalf("validate() error = %v", err)
+	}
+}
+
+func TestPortalOIDCIdentityProviderHintDefaultsAndCanBeOverridden(t *testing.T) {
+	t.Setenv("PORTAL_OIDC_IDP_HINT", "")
+	if got := portalOIDCIdentityProviderHint(); got != "basic-platform" {
+		t.Fatalf("default identity provider hint = %q", got)
+	}
+	t.Setenv("PORTAL_OIDC_IDP_HINT", "corporate-broker")
+	if got := portalOIDCIdentityProviderHint(); got != "corporate-broker" {
+		t.Fatalf("configured identity provider hint = %q", got)
 	}
 }
 

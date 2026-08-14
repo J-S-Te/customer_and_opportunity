@@ -27,6 +27,7 @@ type Config struct {
 	OIDCBackchannelBaseURL    string
 	OIDCClientID              string
 	OIDCClientSecret          string
+	OIDCIDPHint               string
 	OIDCRedirectURI           string
 	OIDCPostLogoutRedirectURI string
 	OIDCScopes                []string
@@ -256,7 +257,7 @@ func LoadConfig() (Config, error) {
 	config := Config{
 		Address: valueOrDefault("HTTP_ADDRESS", ":8090"), MySQLDSN: os.Getenv("MYSQL_DSN"), PathPrefix: valueOrDefault("APP_PATH_PREFIX", "/customer-opportunity"), PublicOrigin: os.Getenv("APP_PUBLIC_ORIGIN"), EncryptionKey: encryptionKey, HMACKey: hmacKey,
 		OIDCIssuer: os.Getenv("OIDC_ISSUER"), OIDCBackchannelBaseURL: os.Getenv("OIDC_BACKCHANNEL_BASE_URL"),
-		OIDCClientID: os.Getenv("OIDC_CLIENT_ID"), OIDCClientSecret: os.Getenv("OIDC_CLIENT_SECRET"), OIDCRedirectURI: os.Getenv("OIDC_REDIRECT_URI"), OIDCPostLogoutRedirectURI: os.Getenv("OIDC_POST_LOGOUT_REDIRECT_URI"),
+		OIDCClientID: os.Getenv("OIDC_CLIENT_ID"), OIDCClientSecret: os.Getenv("OIDC_CLIENT_SECRET"), OIDCIDPHint: strings.TrimSpace(valueOrDefault("OIDC_IDP_HINT", "basic-platform")), OIDCRedirectURI: os.Getenv("OIDC_REDIRECT_URI"), OIDCPostLogoutRedirectURI: os.Getenv("OIDC_POST_LOGOUT_REDIRECT_URI"),
 		OIDCScopes: splitFields(valueOrDefault("OIDC_SCOPES", "openid profile")), OIDCTenantID: os.Getenv("OIDC_TENANT_ID"), OIDCRoleConfigHash: os.Getenv("OIDC_ROLE_CONFIG_HASH"),
 		OIDCSessionCookieName: valueOrDefault("OIDC_SESSION_COOKIE_NAME", "customer_opportunity_session"), OIDCSessionTTL: sessionTTL, OIDCSessionSecure: sessionSecure, OIDCMaxRoles: maxRoles,
 		AllowInsecureHTTPSession: allowInsecureHTTPSession,

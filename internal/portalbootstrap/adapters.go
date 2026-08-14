@@ -36,6 +36,7 @@ type OIDCAdapter struct {
 	httpClient      *http.Client
 	platformBaseURL string
 	roleConfigHash  string
+	idpHint         string
 	expectedContext sharedauthorization.Expectation
 }
 
@@ -63,6 +64,7 @@ func NewOIDCAdapter(ctx context.Context, config Config) (*OIDCAdapter, error) {
 		config:   oauth2.Config{ClientID: config.OIDCClientID, ClientSecret: config.OIDCClientSecret, Endpoint: provider.Endpoint(), RedirectURL: config.OIDCRedirectURI, Scopes: config.OIDCScopes},
 		verifier: provider.Verifier(&oidc.Config{ClientID: config.OIDCClientID}), provider: provider, httpClient: httpClient,
 		platformBaseURL: strings.TrimRight(config.PlatformBaseURL, "/"), roleConfigHash: config.RoleConfigHash,
+		idpHint:         config.OIDCIdentityProviderHint,
 		expectedContext: sharedauthorization.Expectation{ClientID: config.OIDCClientID, ApplicationCode: config.PlatformApplicationCode, EnvironmentCode: config.PlatformEnvironmentCode},
 	}, nil
 }
@@ -71,7 +73,15 @@ func (a *OIDCAdapter) AuthorizationURL(state, nonce, codeChallenge, _ string) (s
 	if state == "" || nonce == "" || codeChallenge == "" {
 		return "", errors.New("OIDC login parameters are incomplete")
 	}
-	return a.config.AuthCodeURL(state, oidc.Nonce(nonce), oauth2.SetAuthURLParam("code_challenge", codeChallenge), oauth2.SetAuthURLParam("code_challenge_method", "S256")), nil
+	options := []oauth2.AuthCodeOption{
+		oidc.Nonce(nonce),
+		oauth2.SetAuthURLParam("code_challenge", codeChallenge),
+		oauth2.SetAuthURLParam("code_challenge_method", "S256"),
+	}
+	if a.idpHint != "" {
+		options = append(options, oauth2.SetAuthURLParam("kc_idp_hint", a.idpHint))
+	}
+	return a.config.AuthCodeURL(state, options...), nil
 }
 
 func (a *OIDCAdapter) ExchangeAndValidate(ctx context.Context, code, verifier, nonce string) (account.Claims, error) {
@@ -101,7 +111,7 @@ func (a *OIDCAdapter) ExchangeAndValidate(ctx context.Context, code, verifier, n
 	if !validCompactPortalIdentity(raw, nonce, token.AccessToken) {
 		return account.Claims{}, errors.New("OIDC identity claims are invalid")
 	}
-	claims := account.Claims{Subject: raw.Subject, TenantID: raw.TenantID, RoleConfigHash: a.roleConfigHash, ExpiresAt: earliestExpiry(idToken.Expiry, token.Expiry), AccessToken: token.AccessToken}
+	claims := compactPortalClaims(raw, a.roleConfigHash, earliestExpiry(idToken.Expiry, token.Expiry), token.AccessToken)
 	// 详细角色、权限和授权版本由基础平台按当前访问令牌计算，不能依赖 Keycloak
 	// Token 中可能过期的业务权限快照。
 	contextClaims, effectiveToken, contextErr := a.authorizationContextWithRefresh(ctx, token)
@@ -115,6 +125,17 @@ func (a *OIDCAdapter) ExchangeAndValidate(ctx context.Context, code, verifier, n
 		return contextClaims, nil
 	}
 	return account.Claims{}, fmt.Errorf("load portal authorization context: %w", contextErr)
+}
+
+func compactPortalClaims(raw compactOIDCClaims, roleConfigHash string, expiresAt time.Time, accessToken string) account.Claims {
+	return account.Claims{
+		Subject:        raw.Subject,
+		IdentityID:     raw.IdentityID,
+		TenantID:       raw.TenantID,
+		RoleConfigHash: roleConfigHash,
+		ExpiresAt:      expiresAt,
+		AccessToken:    accessToken,
+	}
 }
 
 func (a *OIDCAdapter) UserInfo(ctx context.Context, accessToken string) (account.Claims, error) {
