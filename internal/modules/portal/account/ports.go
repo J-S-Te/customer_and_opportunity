@@ -19,6 +19,9 @@ type Claims struct {
 	AuthzRevision  uint64
 	ExpiresAt      time.Time
 	AccessToken    string
+	// CustomerRef 是平台 authorization-context 下发的客户绑定声明（Phase 4 开关
+	// PORTAL_USE_PLATFORM_BINDING 打开后生效）；为空表示平台未下发或尚未开启。
+	CustomerRef string
 }
 
 // DataScope is the application-scoped data boundary resolved online by the

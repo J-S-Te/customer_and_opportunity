@@ -23,6 +23,7 @@ type fakeStore struct {
 	claimBatch       int
 	queue            queueStats
 	statsErr         error
+	completedBinding int
 }
 
 func (s *fakeStore) claim(_ context.Context, worker string, _ time.Time, lease time.Duration, batch int) ([]portalinvite.CompensationTask, error) {
@@ -40,6 +41,10 @@ func (s *fakeStore) completeMapping(_ context.Context, _ portalinvite.Compensati
 }
 func (s *fakeStore) failed(_ context.Context, _ portalinvite.CompensationTask, _ string, _ time.Time, value failure) error {
 	s.failedTasks = append(s.failedTasks, value)
+	return nil
+}
+func (s *fakeStore) completeBinding(context.Context, portalinvite.CompensationTask, string, time.Time) error {
+	s.completedBinding++
 	return nil
 }
 func (s *fakeStore) stats(context.Context) (queueStats, error) { return s.queue, s.statsErr }
@@ -133,6 +138,41 @@ func validTask(taskType string) portalinvite.CompensationTask {
 
 func testConfig() Config {
 	return Config{WorkerID: "worker-a", PollInterval: time.Second, LeaseDuration: time.Minute, BatchSize: 10}
+}
+
+type fakeBindingRepair struct {
+	calls int
+	err   error
+}
+
+func (r *fakeBindingRepair) RepairBinding(context.Context, portalinvite.CompensationTask) error {
+	r.calls++
+	return r.err
+}
+
+func TestRunOnceDispatchesBindingRepairByType(t *testing.T) {
+	store := &fakeStore{tasks: []portalinvite.CompensationTask{validTask(portalinvite.CompensationBinding), validTask(portalinvite.CompensationBindingDisable)}}
+	repair := &fakeBindingRepair{}
+	worker := NewWorker(store, fakeRoles{}, fakeMappings{}, testConfig()).withBindingRepair(repair)
+	worker.now = func() time.Time { return time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC) }
+	if _, err := worker.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if repair.calls != 2 || store.completedBinding != 2 {
+		t.Fatalf("repair calls = %d, completed = %d; want 2/2", repair.calls, store.completedBinding)
+	}
+}
+
+func TestRunOnceFailsBindingRepairWhenNotConfigured(t *testing.T) {
+	store := &fakeStore{tasks: []portalinvite.CompensationTask{validTask(portalinvite.CompensationBinding)}}
+	worker := NewWorker(store, fakeRoles{}, fakeMappings{}, testConfig())
+	worker.now = func() time.Time { return time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC) }
+	if _, err := worker.RunOnce(context.Background()); err == nil {
+		t.Fatal("RunOnce() succeeded without a binding repair adapter")
+	}
+	if len(store.failedTasks) != 1 || store.failedTasks[0].code != "BINDING_REPAIR_NOT_CONFIGURED" || store.completedBinding != 0 {
+		t.Fatalf("failures = %#v, completed = %d", store.failedTasks, store.completedBinding)
+	}
 }
 
 func TestRunOnceDispatchesRoleAndMappingByType(t *testing.T) {

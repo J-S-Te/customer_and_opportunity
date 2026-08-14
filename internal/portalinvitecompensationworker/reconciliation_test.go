@@ -10,6 +10,40 @@ import (
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/portalinvite"
 )
 
+func TestClassifyPlatformBinding(t *testing.T) {
+	tests := []struct {
+		name       string
+		crmStatus  string
+		found      bool
+		status     string
+		wantCode   string
+		wantNil    bool
+	}{
+		{name: "active and bound", crmStatus: "ACTIVE", found: true, status: "ACTIVE", wantNil: true},
+		{name: "active but missing", crmStatus: "ACTIVE", found: false, wantCode: "PLATFORM_BINDING_MISSING"},
+		{name: "active but disabled", crmStatus: "ACTIVE", found: true, status: "DISABLED", wantCode: "PLATFORM_BINDING_STATUS_MISMATCH"},
+		{name: "disabled and unbound", crmStatus: "DISABLED", found: false, wantNil: true},
+		{name: "disabled and bound disabled", crmStatus: "DISABLED", found: true, status: "DISABLED", wantNil: true},
+		{name: "disabled but bound active", crmStatus: "DISABLED", found: true, status: "ACTIVE", wantCode: "PLATFORM_BINDING_STATUS_MISMATCH"},
+		{name: "pending invite any binding", crmStatus: "PENDING", found: true, status: "ACTIVE", wantNil: true},
+		{name: "unknown crm status", crmStatus: "BROKEN", found: true, status: "ACTIVE", wantCode: "CRM_IDENTITY_STATUS_UNKNOWN"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			finding := classifyPlatformBinding(reconciliationCandidate{CRMStatus: test.crmStatus}, test.status, test.found)
+			if test.wantNil {
+				if finding != nil {
+					t.Fatalf("finding = %#v, want nil", finding)
+				}
+				return
+			}
+			if finding == nil || finding.Code != test.wantCode {
+				t.Fatalf("finding = %#v, want code %s", finding, test.wantCode)
+			}
+		})
+	}
+}
+
 func TestReconciliationCandidateQueryBindsCustomerContactAndRegistrationContact(t *testing.T) {
 	for _, fragment := range []string{
 		"c.tenant_id=l.tenant_id", "c.deleted_at IS NULL", "ct.tenant_id=l.tenant_id",

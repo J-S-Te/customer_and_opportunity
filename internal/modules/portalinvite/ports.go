@@ -56,6 +56,16 @@ type PortalMappingDisabler interface {
 	DisableMapping(context.Context, string, uint64, string, string, string) error
 }
 
+// PlatformBindingWriter / PlatformBindingDisabler 是客户绑定收敛到平台后的双写适配器
+// （Phase 2）。门户映射仍是权威，平台绑定调用失败不中断现有 saga，由对账路径按幂等键补齐。
+type PlatformBindingWriter interface {
+	BindCustomerIdempotent(context.Context, string, string, string) error
+}
+
+type PlatformBindingDisabler interface {
+	DisableCustomerBindingIdempotent(context.Context, string, string, string) error
+}
+
 // OperationProtector 对恢复快照和一次性邀请令牌做认证加密；实现不得记录明文，也不得把明文带入错误。
 type OperationProtector interface {
 	Encrypt(context.Context, []byte) ([]byte, error)

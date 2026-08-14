@@ -59,6 +59,9 @@ type Config struct {
 	PlatformRoleRevokeClientID       string
 	PlatformRoleRevokeClientSecret   string
 	PlatformRoleRevokeScope          string
+	PlatformCustomerBindingBaseURL   string
+	PortalMappingDualWrite           bool
+	PortalMappingPlatformOnly        bool
 	OwnerDirectoryEnabled            bool
 	PlatformOwnerDirectoryURL        string
 	PlatformOwnerDirectoryClientID   string
@@ -182,6 +185,14 @@ func LoadConfig() (Config, error) {
 	if err != nil {
 		return Config{}, fmt.Errorf("PLATFORM_EXTERNAL_IDENTITY_ENABLED: %w", err)
 	}
+	portalMappingDualWrite, err := strconv.ParseBool(valueOrDefault("PORTAL_MAPPING_DUAL_WRITE", "false"))
+	if err != nil {
+		return Config{}, fmt.Errorf("PORTAL_MAPPING_DUAL_WRITE: %w", err)
+	}
+	portalMappingPlatformOnly, err := strconv.ParseBool(valueOrDefault("PORTAL_MAPPING_PLATFORM_ONLY", "false"))
+	if err != nil {
+		return Config{}, fmt.Errorf("PORTAL_MAPPING_PLATFORM_ONLY: %w", err)
+	}
 	ownerDirectoryEnabled, err := strconv.ParseBool(valueOrDefault("OWNER_DIRECTORY_ENABLED", "false"))
 	if err != nil {
 		return Config{}, fmt.Errorf("OWNER_DIRECTORY_ENABLED: %w", err)
@@ -275,6 +286,9 @@ func LoadConfig() (Config, error) {
 		PlatformExternalUserScope:        valueOrDefault("PLATFORM_EXTERNAL_USER_SCOPE", "external_user.provision"),
 		PlatformRoleAssignClientID:       os.Getenv("PLATFORM_ROLE_ASSIGN_CLIENT_ID"),
 		PlatformRoleAssignClientSecret:   os.Getenv("PLATFORM_ROLE_ASSIGN_CLIENT_SECRET"),
+		PlatformCustomerBindingBaseURL:   os.Getenv("PLATFORM_CUSTOMER_BINDING_BASE_URL"),
+		PortalMappingDualWrite:           portalMappingDualWrite,
+		PortalMappingPlatformOnly:        portalMappingPlatformOnly,
 		PlatformRoleAssignScope:          valueOrDefault("PLATFORM_ROLE_ASSIGN_SCOPE", "application_role.assign"),
 		PlatformRoleRevokeClientID:       os.Getenv("PLATFORM_ROLE_REVOKE_CLIENT_ID"),
 		PlatformRoleRevokeClientSecret:   os.Getenv("PLATFORM_ROLE_REVOKE_CLIENT_SECRET"),
@@ -411,6 +425,24 @@ func LoadConfig() (Config, error) {
 		}
 		if !config.PlatformExternalIdentityEnabled {
 			return Config{}, fmt.Errorf("PLATFORM_EXTERNAL_IDENTITY_ENABLED must be true when PORTAL_INVITE_ENABLED=true")
+		}
+	}
+	if config.PortalMappingPlatformOnly && !config.PortalMappingDualWrite {
+		return Config{}, fmt.Errorf("PORTAL_MAPPING_PLATFORM_ONLY requires PORTAL_MAPPING_DUAL_WRITE")
+	}
+	if config.PortalMappingDualWrite {
+		if !config.PlatformExternalIdentityEnabled || !config.PortalInviteEnabled {
+			return Config{}, fmt.Errorf("PORTAL_MAPPING_DUAL_WRITE requires PORTAL_INVITE_ENABLED and PLATFORM_EXTERNAL_IDENTITY_ENABLED")
+		}
+		if strings.TrimSpace(config.PlatformCustomerBindingBaseURL) == "" {
+			return Config{}, fmt.Errorf("PLATFORM_CUSTOMER_BINDING_BASE_URL is required when PORTAL_MAPPING_DUAL_WRITE=true")
+		}
+		parsed, err := url.ParseRequestURI(config.PlatformCustomerBindingBaseURL)
+		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+			return Config{}, fmt.Errorf("PLATFORM_CUSTOMER_BINDING_BASE_URL must be a valid HTTP(S) URL without credentials, query or fragment")
+		}
+		if err := config.PlatformManagementTLS.ValidateEndpoints(config.PlatformManagementTokenURL, config.PlatformCustomerBindingBaseURL); err != nil {
+			return Config{}, fmt.Errorf("platform customer binding TLS: %w", err)
 		}
 	}
 	if config.PlatformExternalIdentityEnabled {

@@ -127,6 +127,10 @@ const (
 	CompensationDeadLetter = "DEAD_LETTER"
 	CompensationRole       = "ASSIGN_PORTAL_ROLE"
 	CompensationMapping    = "PROVISION_PORTAL_MAPPING"
+	// CompensationBinding / CompensationBindingDisable 是平台客户绑定收敛（Phase 2 起）
+	// 的补偿任务类型：平台 BIND/DISABLE_BIND 失败时入队，由补偿 worker 按幂等键补齐。
+	CompensationBinding        = "BIND_PLATFORM_CUSTOMER"
+	CompensationBindingDisable = "DISABLE_PLATFORM_CUSTOMER"
 )
 
 // CompensationTask 记录已经对外产生影响但尚未收敛的半完成状态。AccountNo 在任务创建时冻结

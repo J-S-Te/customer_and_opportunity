@@ -19,12 +19,18 @@ type disableRepoFake struct {
 	link       *IdentityLink
 	operations []*AccessDisableOperation
 	revoked    int
+
+	compensations []*CompensationTask
 }
 
 func (r *disableRepoFake) WithTransaction(ctx context.Context, fn func(context.Context) error) error {
 	return fn(ctx)
 }
 func (r *disableRepoFake) LockCustomer(context.Context, string, uint64) error { return nil }
+func (r *disableRepoFake) CreateCompensation(_ context.Context, task *CompensationTask) error {
+	r.compensations = append(r.compensations, task)
+	return nil
+}
 func (r *disableRepoFake) RevokePending(context.Context, string, uint64, string, string, time.Time) error {
 	r.revoked++
 	return nil
