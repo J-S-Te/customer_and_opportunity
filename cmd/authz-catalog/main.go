@@ -55,7 +55,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	fmt.Printf("application=%s\ncatalog_version=%s\ncatalog_checksum=%s\nclaims_role_config_hash=%s\n", application, manifest.Version, checksum, hash)
+	fmt.Printf("application=%s\ncatalog_version=%s\ncatalog_checksum=%s\nclaims_role_config_hash=%s\nmax_effective_roles=%d\n", application, manifest.Version, checksum, hash, manifest.Policy.MaxEffectiveRoles)
 }
 
 func parseArguments(arguments []string) (string, string) {
