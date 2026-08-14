@@ -3,6 +3,7 @@ package portalinvitecompensationworker
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -145,6 +146,23 @@ func (s *store) completeMapping(ctx context.Context, task portalinvite.Compensat
 		}
 		return newStore(tx).complete(ctx, task, workerID, now, nil)
 	})
+}
+
+// bindingFenced 检查 CRM 侧身份映射是否已被管理端禁用：禁用后 BIND 补偿不得复活
+// 平台绑定（P1-4）。DISABLE_BIND 任务不受此围栏限制。
+func (s *store) bindingFenced(ctx context.Context, task portalinvite.CompensationTask) (bool, error) {
+	if task.TaskType != portalinvite.CompensationBinding {
+		return false, nil
+	}
+	var count int64
+	err := s.db.WithContext(ctx).Table("crm_portal_identity_links").
+		Where("tenant_id=? AND customer_id=? AND contact_id=? AND platform_user_id=? AND status=? AND deleted_at IS NULL",
+			task.TenantID, task.CustomerID, task.ContactID, task.PlatformUserID, "DISABLED").
+		Count(&count).Error
+	if err != nil {
+		return false, fmt.Errorf("check customer binding fence: %w", err)
+	}
+	return count > 0, nil
 }
 
 // completeBinding 完成平台客户绑定补偿（BIND / DISABLE_BIND 共用）：绑定是纯派生状态，

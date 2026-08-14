@@ -173,7 +173,7 @@ func LoadConfig() (Config, error) {
 	if err != nil {
 		return Config{}, fmt.Errorf("OIDC_SESSION_TTL: %w", err)
 	}
-	maxRoles, err := strconv.Atoi(valueOrDefault("OIDC_MAX_EFFECTIVE_ROLES", "3"))
+	maxRoles, err := strconv.Atoi(valueOrDefault("OIDC_MAX_EFFECTIVE_ROLES", "10"))
 	if err != nil {
 		return Config{}, fmt.Errorf("OIDC_MAX_EFFECTIVE_ROLES: %w", err)
 	}

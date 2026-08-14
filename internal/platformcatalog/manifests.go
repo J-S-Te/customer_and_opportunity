@@ -73,7 +73,7 @@ func CRMManifest() Manifest {
 			"presale.read", "presale.contact_phone.read", "presale.create", "presale.approve", "presale.approval_rule.manage", "presale.assign", "presale.progress", "presale.worklog", "presale.worklog.retry", "presale.cancel", "presale.engineer.sync", "presale.alert.config", "presale.report"),
 		role("auditor", "审计员", "只读查看经营数据和审计记录", "customer.read", "customer.audit.read", "opportunity.read", "opportunity.attachment.read", "presale.read", "presale.report"),
 	}
-	return Manifest{Version: "crm-2026.08.10-v8", Permissions: permissions, Roles: roles, Policy: Policy{MaxEffectiveRoles: 3}}
+	return Manifest{Version: "crm-2026.08.14-v9", Permissions: permissions, Roles: roles, Policy: Policy{MaxEffectiveRoles: 10}}
 }
 
 // Portal 与 CRM 虽由同一仓库交付，授权目录仍相互独立。Portal 会话只接受一个外部客户角色，
