@@ -84,7 +84,13 @@ func New(ctx context.Context, config Config) (*App, error) {
 	if err != nil {
 		return nil, err
 	}
-	accountService := account.NewService(account.NewGORMRepository(db), oidcAdapter, inviteClient, protector, account.SystemClock{}, account.CryptoRandom{}, config.RoleConfigHash, config.SessionTTL, config.PlatformEnvironmentCode)
+	var accountServiceOptions []account.ServiceOption
+	if config.UsePlatformBinding {
+		// Phase 4：平台绑定开启后，非邀请登录以 authorization-context 的 customer_ref 为
+		// 客户边界；邀请链路与回退仍使用本地 portal_identity_links。
+		accountServiceOptions = append(accountServiceOptions, account.WithPlatformBinding())
+	}
+	accountService := account.NewServiceWithOptions(account.NewGORMRepository(db), oidcAdapter, inviteClient, protector, account.SystemClock{}, account.CryptoRandom{}, config.RoleConfigHash, config.SessionTTL, config.PlatformEnvironmentCode, accountServiceOptions...)
 	// 登录事务、访问令牌和会话均保存在数据库并加密；账号服务通过 UserInfo 周期性重验当前
 	// 权限，避免仅依赖首次登录时的 ID Token 快照。
 	projectService := project.NewService(project.NewGORMRepository(db), unavailableProjectSource{})

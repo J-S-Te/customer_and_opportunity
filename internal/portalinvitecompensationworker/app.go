@@ -49,7 +49,38 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 		return nil, err
 	}
 	worker := NewWorker(newStore(db), httpRoleAssigner{client: roleClient}, httpMappingProvisioner{client: portalClient}, cfg)
-	worker.withReconciler(newReconciler(newReconciliationStore(db), portalClient, cfg.WorkerID, cfg.ReconciliationBatchSize), cfg.ReconciliationInterval)
+	var platformObserver httpBindingStatusReader
+	if cfg.Binding.Enabled {
+		bindingWriter, bindErr := portalinvite.NewHTTPPlatformBindingWriter(ctx, portalinvite.PlatformBindingWriterOptions{
+			BaseURL: cfg.Binding.BaseURL, TokenURL: cfg.Binding.TokenURL,
+			ClientID: cfg.Binding.ClientID, ClientSecret: cfg.Binding.ClientSecret,
+			Scope: cfg.Binding.Scope, ApplicationCode: cfg.Binding.ApplicationCode, TLS: cfg.Binding.TLS,
+		})
+		if bindErr != nil {
+			_ = sqlDB.Close()
+			return nil, bindErr
+		}
+		repair := httpBindingRepair{writer: bindingWriter}
+		platformObserver = httpBindingStatusReader{writer: bindingWriter}
+		if cfg.Binding.DisableClientID != "" {
+			bindingDisabler, disableErr := portalinvite.NewHTTPPlatformBindingDisabler(ctx, portalinvite.PlatformBindingDisablerOptions{
+				BaseURL: cfg.Binding.BaseURL, TokenURL: cfg.Binding.TokenURL,
+				ClientID: cfg.Binding.DisableClientID, ClientSecret: cfg.Binding.DisableClientSecret,
+				Scope: cfg.Binding.DisableScope, ApplicationCode: cfg.Binding.ApplicationCode, TLS: cfg.Binding.TLS,
+			})
+			if disableErr != nil {
+				_ = sqlDB.Close()
+				return nil, disableErr
+			}
+			repair.disabler = bindingDisabler
+		}
+		worker.withBindingRepair(repair)
+	}
+	reconciler := newReconciler(newReconciliationStore(db), portalClient, cfg.WorkerID, cfg.ReconciliationBatchSize)
+	if cfg.Binding.Enabled {
+		reconciler.withPlatform(platformObserver)
+	}
+	worker.withReconciler(reconciler, cfg.ReconciliationInterval)
 	return &App{db: db, worker: worker}, nil
 }
 

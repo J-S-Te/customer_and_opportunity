@@ -30,13 +30,17 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 		_ = sqlDB.Close()
 		return nil, err
 	}
-	portalClient, err := portalinvite.NewHTTPPortalMappingDisabler(ctx, portalinvite.PortalMappingDisablerOptions{
-		Endpoint: cfg.Portal.DisableURL, TokenURL: cfg.Portal.TokenURL, ClientID: cfg.Portal.ClientID,
-		ClientSecret: cfg.Portal.ClientSecret, Scope: cfg.Portal.Scope, TLS: cfg.Portal.TLS,
-	})
-	if err != nil {
-		_ = sqlDB.Close()
-		return nil, err
+	var portalClient portalinvite.PortalMappingDisabler
+	if !cfg.PlatformOnly {
+		client, portalErr := portalinvite.NewHTTPPortalMappingDisabler(ctx, portalinvite.PortalMappingDisablerOptions{
+			Endpoint: cfg.Portal.DisableURL, TokenURL: cfg.Portal.TokenURL, ClientID: cfg.Portal.ClientID,
+			ClientSecret: cfg.Portal.ClientSecret, Scope: cfg.Portal.Scope, TLS: cfg.Portal.TLS,
+		})
+		if portalErr != nil {
+			_ = sqlDB.Close()
+			return nil, portalErr
+		}
+		portalClient = client
 	}
 	platformClient, err := portalinvite.NewHTTPPlatformRoleRevoker(ctx, portalinvite.PlatformRoleRevokerOptions{
 		Endpoint: cfg.Platform.RoleRevokeURL, TokenURL: cfg.Platform.TokenURL, ClientID: cfg.Platform.ClientID,
@@ -47,7 +51,20 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 		return nil, err
 	}
 	repo := portalinvite.NewGORMRepository(db)
-	service := portalinvite.NewAccessDisableService(repo, nil, platformClient, portalClient, audit.NewGORMWriter(db), portalinvite.SystemClock{}, portalinvite.CryptoRandom{})
+	var options []portalinvite.AccessDisableServiceOption
+	if cfg.PlatformOnly {
+		bindingDisabler, disableErr := portalinvite.NewHTTPPlatformBindingDisabler(ctx, portalinvite.PlatformBindingDisablerOptions{
+			BaseURL: cfg.Binding.BaseURL, TokenURL: cfg.Platform.TokenURL,
+			ClientID: cfg.Binding.ClientID, ClientSecret: cfg.Binding.ClientSecret,
+			Scope: cfg.Binding.Scope, ApplicationCode: cfg.Platform.ApplicationCode, TLS: cfg.Binding.TLS,
+		})
+		if disableErr != nil {
+			_ = sqlDB.Close()
+			return nil, disableErr
+		}
+		options = append(options, portalinvite.WithPlatformBindingDisabler(bindingDisabler), portalinvite.WithPlatformOnlyDisable())
+	}
+	service := portalinvite.NewAccessDisableService(repo, nil, platformClient, portalClient, audit.NewGORMWriter(db), portalinvite.SystemClock{}, portalinvite.CryptoRandom{}, options...)
 	return &App{db: db, worker: NewWorker(newStore(db), service, cfg)}, nil
 }
 

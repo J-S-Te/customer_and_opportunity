@@ -53,13 +53,26 @@ type reconciliationPortal interface {
 	ReconciliationSnapshots(context.Context, []string) ([]portalinvite.PortalIdentitySnapshot, error)
 }
 
+// reconciliationPlatform 是对账的平台侧观察端口（Phase 2 双轨）：只读平台客户绑定状态，
+// 不执行修复；修复由补偿 worker 按幂等任务完成。
+type reconciliationPlatform interface {
+	BindingStatus(context.Context, string) (string, bool, error)
+}
+
 type Reconciler struct {
 	store    reconciliationStore
 	portal   reconciliationPortal
+	platform reconciliationPlatform
 	workerID string
 	batch    int
 	now      func() time.Time
 	newRunID func() string
+}
+
+// withPlatform 打开平台绑定双轨观察；未注入时保持门户单轨行为。
+func (r *Reconciler) withPlatform(platform reconciliationPlatform) *Reconciler {
+	r.platform = platform
+	return r
 }
 
 func newReconciler(store reconciliationStore, portal reconciliationPortal, workerID string, batch int) *Reconciler {
@@ -125,6 +138,17 @@ func (r *Reconciler) RunOnce(ctx context.Context) (metrics reconciliationMetrics
 				return metrics, errors.New("Portal identity reconciliation snapshot is incomplete")
 			}
 			finding := classifyReconciliation(candidate, snapshot)
+			// 平台绑定双轨观察：门户仍是权威，门户侧发现的问题优先；门户一致时再检查
+			// 平台绑定是否与 CRM 状态收敛，发现即记人工复核，不在此处执行写修复。
+			if finding == nil && r.platform != nil {
+				status, found, statusErr := r.platform.BindingStatus(ctx, candidate.PlatformUserID)
+				if statusErr != nil {
+					return metrics, statusErr
+				}
+				if platformFinding := classifyPlatformBinding(candidate, status, found); platformFinding != nil {
+					finding = platformFinding
+				}
+			}
 			metrics.Scanned++
 			if finding == nil {
 				metrics.Consistent++
@@ -177,6 +201,28 @@ func classifyReconciliation(candidate reconciliationCandidate, portal portalinvi
 		return needsReview("IDENTITY_STATUS_MISMATCH")
 	}
 	if candidate.CRMStatus != "PENDING" && candidate.CRMStatus != "ACTIVE" && candidate.CRMStatus != "DISABLED" {
+		return needsReview("CRM_IDENTITY_STATUS_UNKNOWN")
+	}
+	return nil
+}
+
+func classifyPlatformBinding(candidate reconciliationCandidate, status string, found bool) *reconciliationFinding {
+	switch candidate.CRMStatus {
+	case "ACTIVE":
+		if !found {
+			return needsReview("PLATFORM_BINDING_MISSING")
+		}
+		if status != "ACTIVE" {
+			return needsReview("PLATFORM_BINDING_STATUS_MISMATCH")
+		}
+	case "DISABLED":
+		if found && status == "ACTIVE" {
+			return needsReview("PLATFORM_BINDING_STATUS_MISMATCH")
+		}
+		// DISABLED 且平台侧无绑定或已禁用：收敛一致。
+	case "PENDING":
+		// 邀请尚未消费：绑定由开通 saga 先行建立，任一状态均可接受，等待后续观察。
+	default:
 		return needsReview("CRM_IDENTITY_STATUS_UNKNOWN")
 	}
 	return nil

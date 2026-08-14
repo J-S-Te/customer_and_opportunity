@@ -200,7 +200,7 @@ func (a *OIDCAdapter) authorizationContext(ctx context.Context, accessToken stri
 	if err != nil {
 		return account.Claims{}, fmt.Errorf("validate portal authorization context: %w", err)
 	}
-	return account.Claims{Subject: raw.Subject, IdentityID: raw.IdentityID, PersonID: raw.PersonID, TenantID: raw.TenantID, Roles: raw.Roles, Permissions: raw.Permissions, DataScopes: scopes, AuthzRevision: raw.AuthorizationRevision}, nil
+	return account.Claims{Subject: raw.Subject, IdentityID: raw.IdentityID, PersonID: raw.PersonID, TenantID: raw.TenantID, Roles: raw.Roles, Permissions: raw.Permissions, DataScopes: scopes, AuthzRevision: raw.AuthorizationRevision, CustomerRef: raw.CustomerRef}, nil
 }
 
 func (a *OIDCAdapter) authorizationContextWithRefresh(ctx context.Context, token *oauth2.Token) (account.Claims, *oauth2.Token, error) {

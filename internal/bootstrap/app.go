@@ -221,15 +221,44 @@ func New(config Config) (*App, error) {
 		}
 		portalInviteRepo := portalinvite.NewGORMRepository(db)
 		portalCustomerAdapter := portalinvite.NewCustomerAdapter(db, codec)
+		var inviteServiceOptions []portalinvite.ServiceOption
+		var disableServiceOptions []portalinvite.AccessDisableServiceOption
+		if config.PortalMappingDualWrite {
+			// Phase 2 双写：门户映射仍是权威，平台绑定失败不中断 saga，由对账路径补齐。
+			bindingWriter, bindErr := portalinvite.NewHTTPPlatformBindingWriter(context.Background(), portalinvite.PlatformBindingWriterOptions{
+				BaseURL: config.PlatformCustomerBindingBaseURL, TokenURL: config.PlatformManagementTokenURL,
+				ClientID: config.PortalProvisionClientID, ClientSecret: config.PortalProvisionClientSecret,
+				Scope: "portal_mapping_provision", ApplicationCode: config.PlatformPortalApplicationCode, TLS: config.PlatformManagementTLS,
+			})
+			if bindErr != nil {
+				return nil, bindErr
+			}
+			bindingDisabler, disableBindErr := portalinvite.NewHTTPPlatformBindingDisabler(context.Background(), portalinvite.PlatformBindingDisablerOptions{
+				BaseURL: config.PlatformCustomerBindingBaseURL, TokenURL: config.PlatformManagementTokenURL,
+				ClientID: config.PortalDisableClientID, ClientSecret: config.PortalDisableClientSecret,
+				Scope: "portal_mapping_disable", ApplicationCode: config.PlatformPortalApplicationCode, TLS: config.PlatformManagementTLS,
+			})
+			if disableBindErr != nil {
+				return nil, disableBindErr
+			}
+			inviteServiceOptions = append(inviteServiceOptions, portalinvite.WithPlatformBindingWriter(bindingWriter))
+			disableServiceOptions = append(disableServiceOptions, portalinvite.WithPlatformBindingDisabler(bindingDisabler))
+			if config.PortalMappingPlatformOnly {
+				// Phase 5 单写：门户映射表退役，平台绑定成为唯一权威，门户调用全部跳过。
+				inviteServiceOptions = append(inviteServiceOptions, portalinvite.WithPlatformBindingOnly())
+				disableServiceOptions = append(disableServiceOptions, portalinvite.WithPlatformOnlyDisable())
+			}
+		}
 		portalInviteService := portalinvite.NewService(
 			portalInviteRepo, portalCustomerAdapter, platformProvisioner,
 			portalProvisioner, auditWriter,
 			config.PortalInvitePepper, config.PortalPublicURL, portalinvite.SystemClock{}, portalinvite.CryptoRandom{}, portalInviteOperationProtector{codec: codec},
+			inviteServiceOptions...,
 		)
 		portalInviteHandler = portalinvite.NewHandler(portalInviteService)
 		portalinvite.RegisterRoutes(api, portalInviteHandler)
 		portalinvite.RegisterAccessDisableRoute(api, portalinvite.NewAccessDisableHandler(portalinvite.NewAccessDisableService(
-			portalInviteRepo, portalCustomerAdapter, platformRoleRevoker, portalDisabler, auditWriter, portalinvite.SystemClock{}, portalinvite.CryptoRandom{},
+			portalInviteRepo, portalCustomerAdapter, platformRoleRevoker, portalDisabler, auditWriter, portalinvite.SystemClock{}, portalinvite.CryptoRandom{}, disableServiceOptions...,
 		)))
 	}
 	opportunityRepo := opportunity.NewGORMRepository(db)

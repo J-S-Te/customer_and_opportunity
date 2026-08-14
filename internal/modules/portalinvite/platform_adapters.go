@@ -26,6 +26,8 @@ const (
 	externalUserProvisionScope = "external_user.provision"
 	applicationRoleAssignScope = "application_role.assign"
 	applicationRoleRevokeScope = "application_role.revoke"
+	portalMappingProvisionScope  = "portal_mapping_provision"
+	portalMappingDisableScope    = "portal_mapping_disable"
 	portalApplicationRole      = "portal_customer"
 )
 
@@ -257,6 +259,209 @@ func (p *HTTPPlatformRoleRevoker) RevokePortalRole(ctx context.Context, platform
 	return nil
 }
 
+// HTTPPlatformBindingWriter 是平台客户绑定 BIND 接口的防腐层（Phase 2 双写）。
+// 与门户映射写入共用 portal_mapping_provision 机器客户端；平台校验 scope 与请求防重放证明。
+type HTTPPlatformBindingWriter struct {
+	baseURL     string
+	application string
+	client      *http.Client
+	now         func() time.Time
+	nonceReader io.Reader
+}
+
+type PlatformBindingWriterOptions struct {
+	BaseURL, TokenURL, ClientID, ClientSecret, Scope, ApplicationCode string
+	TLS                                                                integrationhttp.TLSOptions
+	HTTPClient                                                         *http.Client
+	Now                                                                func() time.Time
+	NonceReader                                                        io.Reader
+}
+
+func NewHTTPPlatformBindingWriter(ctx context.Context, options PlatformBindingWriterOptions) (*HTTPPlatformBindingWriter, error) {
+	for name, value := range map[string]string{"base URL": options.BaseURL, "token URL": options.TokenURL, "client ID": options.ClientID, "client secret": options.ClientSecret, "application code": options.ApplicationCode} {
+		if strings.TrimSpace(value) == "" || value != strings.TrimSpace(value) {
+			return nil, fmt.Errorf("platform customer binding %s is required", name)
+		}
+	}
+	if options.Scope != portalMappingProvisionScope || !validPlatformIntegrationURL(options.BaseURL) || !validPlatformIntegrationURL(options.TokenURL) {
+		return nil, errors.New("platform customer binding configuration is invalid")
+	}
+	transport, err := platformIntegrationTransport(options.HTTPClient, options.TLS, options.TokenURL, options.BaseURL)
+	if err != nil {
+		return nil, err
+	}
+	now, nonceReader := platformIntegrationDependencies(options.Now, options.NonceReader)
+	client := platformOAuthClient(ctx, transport, options.TokenURL, options.ClientID, options.ClientSecret, portalMappingProvisionScope)
+	return &HTTPPlatformBindingWriter{baseURL: options.BaseURL, application: options.ApplicationCode, client: client, now: now, nonceReader: nonceReader}, nil
+}
+
+func (writer *HTTPPlatformBindingWriter) BindCustomerIdempotent(ctx context.Context, platformUserID, customerRef, idempotencyKey string) error {
+	platformUserID = strings.TrimSpace(platformUserID)
+	customerRef = strings.TrimSpace(customerRef)
+	if writer == nil || writer.client == nil || platformUserID == "" || len(platformUserID) > 128 ||
+		customerRef == "" || len(customerRef) > 64 || customerRef != strings.TrimSpace(customerRef) {
+		return errors.New("platform customer binding request is invalid")
+	}
+	if strings.TrimSpace(idempotencyKey) == "" {
+		idempotencyKey = platformIdempotencyKey("portal-binding", platformUserID, customerRef)
+	}
+	payload := struct {
+		CustomerRef string `json:"customer_ref"`
+	}{CustomerRef: customerRef}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	endpoint := writer.bindingEndpoint(platformUserID)
+	request, err := newPlatformIntegrationRequest(ctx, http.MethodPut, endpoint, idempotencyKey, raw, writer.now, writer.nonceReader)
+	if err != nil {
+		return err
+	}
+	var envelope platformBindingEnvelope
+	if err = doStrictPlatformJSON(writer.client, request, http.StatusOK, &envelope); err != nil {
+		return err
+	}
+	if !validPlatformBindingEnvelope(envelope, writer.application, platformUserID, domainStatusActive) {
+		return errors.New("platform customer binding endpoint returned an invalid response")
+	}
+	return nil
+}
+
+func (writer *HTTPPlatformBindingWriter) bindingEndpoint(platformUserID string) string {
+	return strings.TrimRight(writer.baseURL, "/") + "/" + url.PathEscape(platformUserID) + "/customer-binding"
+}
+
+// BindingStatus 是对账读取：返回平台绑定当前状态。found=false 表示该身份没有绑定记录；
+// 网络/协议错误与"未找到"分开返回，供对账层决定是否需要人工介入。
+func (writer *HTTPPlatformBindingWriter) BindingStatus(ctx context.Context, platformUserID string) (status string, found bool, err error) {
+	platformUserID = strings.TrimSpace(platformUserID)
+	if writer == nil || writer.client == nil || platformUserID == "" || len(platformUserID) > 128 {
+		return "", false, errors.New("platform customer binding status request is invalid")
+	}
+	request, requestErr := newPlatformIntegrationRequest(ctx, http.MethodGet, writer.bindingEndpoint(platformUserID), platformIdempotencyKey("portal-binding-status", platformUserID), nil, writer.now, writer.nonceReader)
+	if requestErr != nil {
+		return "", false, requestErr
+	}
+	response, err := writer.client.Do(request)
+	if err != nil {
+		return "", false, fmt.Errorf("platform management transport failed: %w", err)
+	}
+	defer response.Body.Close()
+	raw, readErr := io.ReadAll(io.LimitReader(response.Body, maxIntegrationResponseBytes+1))
+	if readErr != nil || len(raw) > maxIntegrationResponseBytes {
+		return "", false, errors.New("platform management endpoint returned an invalid response")
+	}
+	if response.StatusCode == http.StatusNotFound {
+		return "", false, nil
+	}
+	if response.StatusCode != http.StatusOK {
+		return "", false, fmt.Errorf("platform management endpoint returned HTTP %d", response.StatusCode)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	var envelope platformBindingEnvelope
+	if err = decoder.Decode(&envelope); err != nil {
+		return "", false, errors.New("platform management endpoint returned an invalid response")
+	}
+	if err = decoder.Decode(&struct{}{}); err != io.EOF {
+		return "", false, errors.New("platform management endpoint returned an invalid response")
+	}
+	if envelope.Code != "OK" || !validPlatformRequestID(envelope.RequestID) || envelope.Data.PlatformUserID != platformUserID ||
+		envelope.Data.ApplicationCode != writer.application || envelope.Data.Status == "" {
+		return "", false, errors.New("platform customer binding status endpoint returned an invalid response")
+	}
+	return envelope.Data.Status, true, nil
+}
+
+// HTTPPlatformBindingDisabler 是平台客户绑定 DISABLE_BIND 接口的防腐层；与门户禁用共用
+// portal_mapping_disable 机器客户端。
+type HTTPPlatformBindingDisabler struct {
+	baseURL     string
+	application string
+	client      *http.Client
+	now         func() time.Time
+	nonceReader io.Reader
+}
+
+type PlatformBindingDisablerOptions struct {
+	BaseURL, TokenURL, ClientID, ClientSecret, Scope, ApplicationCode string
+	TLS                                                                integrationhttp.TLSOptions
+	HTTPClient                                                         *http.Client
+	Now                                                                func() time.Time
+	NonceReader                                                        io.Reader
+}
+
+func NewHTTPPlatformBindingDisabler(ctx context.Context, options PlatformBindingDisablerOptions) (*HTTPPlatformBindingDisabler, error) {
+	for name, value := range map[string]string{"base URL": options.BaseURL, "token URL": options.TokenURL, "client ID": options.ClientID, "client secret": options.ClientSecret, "application code": options.ApplicationCode} {
+		if strings.TrimSpace(value) == "" || value != strings.TrimSpace(value) {
+			return nil, fmt.Errorf("platform customer binding disable %s is required", name)
+		}
+	}
+	if options.Scope != portalMappingDisableScope || !validPlatformIntegrationURL(options.BaseURL) || !validPlatformIntegrationURL(options.TokenURL) {
+		return nil, errors.New("platform customer binding disable configuration is invalid")
+	}
+	transport, err := platformIntegrationTransport(options.HTTPClient, options.TLS, options.TokenURL, options.BaseURL)
+	if err != nil {
+		return nil, err
+	}
+	now, nonceReader := platformIntegrationDependencies(options.Now, options.NonceReader)
+	client := platformOAuthClient(ctx, transport, options.TokenURL, options.ClientID, options.ClientSecret, portalMappingDisableScope)
+	return &HTTPPlatformBindingDisabler{baseURL: options.BaseURL, application: options.ApplicationCode, client: client, now: now, nonceReader: nonceReader}, nil
+}
+
+func (disabler *HTTPPlatformBindingDisabler) DisableCustomerBindingIdempotent(ctx context.Context, platformUserID, customerRef, idempotencyKey string) error {
+	platformUserID = strings.TrimSpace(platformUserID)
+	customerRef = strings.TrimSpace(customerRef)
+	if disabler == nil || disabler.client == nil || platformUserID == "" || len(platformUserID) > 128 ||
+		customerRef == "" || len(customerRef) > 64 || customerRef != strings.TrimSpace(customerRef) {
+		return errors.New("platform customer binding disable request is invalid")
+	}
+	if strings.TrimSpace(idempotencyKey) == "" {
+		idempotencyKey = platformIdempotencyKey("portal-binding-disable", platformUserID, customerRef)
+	}
+	payload := struct {
+		CustomerRef string `json:"customer_ref"`
+	}{CustomerRef: customerRef}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	endpoint := strings.TrimRight(disabler.baseURL, "/") + "/" + url.PathEscape(platformUserID) + "/customer-binding/disable"
+	request, err := newPlatformIntegrationRequest(ctx, http.MethodPost, endpoint, idempotencyKey, raw, disabler.now, disabler.nonceReader)
+	if err != nil {
+		return err
+	}
+	var envelope platformBindingEnvelope
+	if err = doStrictPlatformJSON(disabler.client, request, http.StatusOK, &envelope); err != nil {
+		return err
+	}
+	if !validPlatformBindingEnvelope(envelope, disabler.application, platformUserID, domainStatusDisabled) {
+		return errors.New("platform customer binding disable endpoint returned an invalid response")
+	}
+	return nil
+}
+
+const (
+	domainStatusActive   = "ACTIVE"
+	domainStatusDisabled = "DISABLED"
+)
+
+type platformBindingEnvelope struct {
+	Code      string `json:"code"`
+	Message   string `json:"message"`
+	RequestID string `json:"request_id"`
+	Data      struct {
+		PlatformUserID  string `json:"platform_user_id"`
+		ApplicationCode string `json:"application_code"`
+		Status          string `json:"status"`
+	} `json:"data"`
+}
+
+func validPlatformBindingEnvelope(envelope platformBindingEnvelope, application, platformUserID, status string) bool {
+	return envelope.Code == "OK" && validPlatformRequestID(envelope.RequestID) &&
+		envelope.Data.PlatformUserID == platformUserID && envelope.Data.ApplicationCode == application && envelope.Data.Status == status
+}
+
 type platformProvisionEnvelope struct {
 	Code      string `json:"code"`
 	Message   string `json:"message"`
@@ -327,10 +532,14 @@ func rejectPlatformIntegrationRedirect(*http.Request, []*http.Request) error {
 }
 
 func newPlatformIntegrationPOST(ctx context.Context, endpoint, idempotencyKey string, raw []byte, now func() time.Time, nonceReader io.Reader) (*http.Request, error) {
+	return newPlatformIntegrationRequest(ctx, http.MethodPost, endpoint, idempotencyKey, raw, now, nonceReader)
+}
+
+func newPlatformIntegrationRequest(ctx context.Context, method, endpoint, idempotencyKey string, raw []byte, now func() time.Time, nonceReader io.Reader) (*http.Request, error) {
 	if idempotencyKey = strings.TrimSpace(idempotencyKey); idempotencyKey == "" || len(idempotencyKey) > 128 {
 		return nil, errors.New("platform integration idempotency key is invalid")
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(raw))
+	request, err := http.NewRequestWithContext(ctx, method, endpoint, bytes.NewReader(raw))
 	if err != nil {
 		return nil, err
 	}
@@ -352,7 +561,7 @@ func newPlatformIntegrationPOST(ctx context.Context, endpoint, idempotencyKey st
 func doStrictPlatformJSON(client *http.Client, request *http.Request, expectedStatus int, target any) error {
 	response, err := client.Do(request)
 	if err != nil {
-		return errors.New("platform management transport failed")
+		return fmt.Errorf("platform management transport failed: %w", err)
 	}
 	defer response.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(response.Body, maxIntegrationResponseBytes+1))

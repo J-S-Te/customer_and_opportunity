@@ -36,6 +36,8 @@ type Repository interface {
 // AccessDisableRepository 与邀请持久化分离，避免邀请生命周期及其测试替身隐式获得停用访问的权限。
 type AccessDisableRepository interface {
 	WithTransaction(context.Context, func(context.Context) error) error
+	// CreateCompensation 在平台绑定禁用失败时入队补偿任务（Phase 2 起）。
+	CreateCompensation(context.Context, *CompensationTask) error
 	LockCustomer(context.Context, string, uint64) error
 	RevokePending(context.Context, string, uint64, string, string, time.Time) error
 	FindIdentityLink(context.Context, string, uint64) (*IdentityLink, error)

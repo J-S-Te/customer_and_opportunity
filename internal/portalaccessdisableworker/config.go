@@ -24,6 +24,15 @@ type Config struct {
 	BatchSize     int
 	Portal        PortalConfig
 	Platform      PlatformConfig
+	// PlatformOnly 进入 Phase 5 单写：跳过门户禁用调用，平台绑定禁用成为唯一远程收敛点。
+	PlatformOnly bool
+	Binding      BindingConfig
+}
+
+// BindingConfig 是平台客户绑定禁用收敛的机器凭据（portal_mapping_disable scope）。
+type BindingConfig struct {
+	BaseURL, ClientID, ClientSecret, Scope string
+	TLS                                    integrationhttp.TLSOptions
 }
 
 type PortalConfig struct {
@@ -45,7 +54,12 @@ func LoadConfig() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	platformOnly, err := boolEnv("PORTAL_ACCESS_DISABLE_PLATFORM_ONLY", false)
+	if err != nil {
+		return Config{}, err
+	}
 	cfg := Config{
+		PlatformOnly: platformOnly,
 		MySQLDSN: os.Getenv("PORTAL_ACCESS_DISABLE_MYSQL_DSN"), WorkerID: env("PORTAL_ACCESS_DISABLE_WORKER_ID", hostname()),
 		PollInterval: durationEnv("PORTAL_ACCESS_DISABLE_POLL_INTERVAL", 5*time.Second), LeaseDuration: durationEnv("PORTAL_ACCESS_DISABLE_LEASE_DURATION", time.Minute),
 		BatchSize: intEnv("PORTAL_ACCESS_DISABLE_BATCH_SIZE", 20),
@@ -54,6 +68,12 @@ func LoadConfig() (Config, error) {
 			ClientID: os.Getenv("PORTAL_ACCESS_DISABLE_PORTAL_CLIENT_ID"), ClientSecret: os.Getenv("PORTAL_ACCESS_DISABLE_PORTAL_CLIENT_SECRET"),
 			Scope: env("PORTAL_ACCESS_DISABLE_PORTAL_SCOPE", requiredPortalScope),
 			TLS:   integrationhttp.TLSOptions{RootCAFile: os.Getenv("PORTAL_ACCESS_DISABLE_PORTAL_TLS_ROOT_CA_FILE"), ClientCertFile: os.Getenv("PORTAL_ACCESS_DISABLE_PORTAL_TLS_CLIENT_CERT_FILE"), ClientKeyFile: os.Getenv("PORTAL_ACCESS_DISABLE_PORTAL_TLS_CLIENT_KEY_FILE"), ServerName: os.Getenv("PORTAL_ACCESS_DISABLE_PORTAL_TLS_SERVER_NAME"), RequireMTLS: portalMTLS},
+		},
+		Binding: BindingConfig{
+			BaseURL: os.Getenv("PORTAL_ACCESS_DISABLE_PLATFORM_BINDING_BASE_URL"),
+			ClientID: os.Getenv("PORTAL_ACCESS_DISABLE_PLATFORM_BINDING_CLIENT_ID"), ClientSecret: os.Getenv("PORTAL_ACCESS_DISABLE_PLATFORM_BINDING_CLIENT_SECRET"),
+			Scope: env("PORTAL_ACCESS_DISABLE_PLATFORM_BINDING_SCOPE", "portal_mapping_disable"),
+			TLS:   integrationhttp.TLSOptions{RootCAFile: os.Getenv("PORTAL_ACCESS_DISABLE_PLATFORM_TLS_ROOT_CA_FILE"), ClientCertFile: os.Getenv("PORTAL_ACCESS_DISABLE_PLATFORM_TLS_CLIENT_CERT_FILE"), ClientKeyFile: os.Getenv("PORTAL_ACCESS_DISABLE_PLATFORM_TLS_CLIENT_KEY_FILE"), ServerName: os.Getenv("PORTAL_ACCESS_DISABLE_PLATFORM_TLS_SERVER_NAME"), RequireMTLS: platformMTLS},
 		},
 		Platform: PlatformConfig{
 			RoleRevokeURL: os.Getenv("PORTAL_ACCESS_DISABLE_PLATFORM_ROLE_REVOKE_URL"), TokenURL: os.Getenv("PORTAL_ACCESS_DISABLE_PLATFORM_TOKEN_URL"),
@@ -66,14 +86,23 @@ func LoadConfig() (Config, error) {
 }
 
 func (c Config) validate() error {
-	for key, value := range map[string]string{
+	required := map[string]string{
 		"PORTAL_ACCESS_DISABLE_MYSQL_DSN": c.MySQLDSN, "PORTAL_ACCESS_DISABLE_WORKER_ID": c.WorkerID,
-		"PORTAL_ACCESS_DISABLE_PORTAL_URL": c.Portal.DisableURL, "PORTAL_ACCESS_DISABLE_PORTAL_TOKEN_URL": c.Portal.TokenURL,
-		"PORTAL_ACCESS_DISABLE_PORTAL_CLIENT_ID": c.Portal.ClientID, "PORTAL_ACCESS_DISABLE_PORTAL_CLIENT_SECRET": c.Portal.ClientSecret,
 		"PORTAL_ACCESS_DISABLE_PLATFORM_ROLE_REVOKE_URL": c.Platform.RoleRevokeURL, "PORTAL_ACCESS_DISABLE_PLATFORM_TOKEN_URL": c.Platform.TokenURL,
 		"PORTAL_ACCESS_DISABLE_PLATFORM_CLIENT_ID": c.Platform.ClientID, "PORTAL_ACCESS_DISABLE_PLATFORM_CLIENT_SECRET": c.Platform.ClientSecret,
 		"PORTAL_ACCESS_DISABLE_PLATFORM_APPLICATION_CODE": c.Platform.ApplicationCode,
-	} {
+	}
+	if !c.PlatformOnly {
+		required["PORTAL_ACCESS_DISABLE_PORTAL_URL"] = c.Portal.DisableURL
+		required["PORTAL_ACCESS_DISABLE_PORTAL_TOKEN_URL"] = c.Portal.TokenURL
+		required["PORTAL_ACCESS_DISABLE_PORTAL_CLIENT_ID"] = c.Portal.ClientID
+		required["PORTAL_ACCESS_DISABLE_PORTAL_CLIENT_SECRET"] = c.Portal.ClientSecret
+	} else {
+		required["PORTAL_ACCESS_DISABLE_PLATFORM_BINDING_BASE_URL"] = c.Binding.BaseURL
+		required["PORTAL_ACCESS_DISABLE_PLATFORM_BINDING_CLIENT_ID"] = c.Binding.ClientID
+		required["PORTAL_ACCESS_DISABLE_PLATFORM_BINDING_CLIENT_SECRET"] = c.Binding.ClientSecret
+	}
+	for key, value := range required {
 		if strings.TrimSpace(value) == "" || value != strings.TrimSpace(value) {
 			return fmt.Errorf("%s is required and must not contain surrounding whitespace", key)
 		}
@@ -81,23 +110,36 @@ func (c Config) validate() error {
 	if len(c.WorkerID) > 128 || c.PollInterval <= 0 || c.LeaseDuration < 30*time.Second || c.BatchSize < 1 || c.BatchSize > 100 {
 		return fmt.Errorf("invalid Portal access disable worker scheduling configuration")
 	}
-	if c.Portal.Scope != requiredPortalScope {
+	if !c.PlatformOnly && c.Portal.Scope != requiredPortalScope {
 		return fmt.Errorf("PORTAL_ACCESS_DISABLE_PORTAL_SCOPE must be %s", requiredPortalScope)
 	}
 	if c.Platform.Scope != requiredPlatformScope {
 		return fmt.Errorf("PORTAL_ACCESS_DISABLE_PLATFORM_SCOPE must be %s", requiredPlatformScope)
 	}
-	for key, raw := range map[string]string{
-		"PORTAL_ACCESS_DISABLE_PORTAL_URL": c.Portal.DisableURL, "PORTAL_ACCESS_DISABLE_PORTAL_TOKEN_URL": c.Portal.TokenURL,
+	if c.PlatformOnly && c.Binding.Scope != "portal_mapping_disable" {
+		return fmt.Errorf("PORTAL_ACCESS_DISABLE_PLATFORM_BINDING_SCOPE must be portal_mapping_disable")
+	}
+	endpoints := map[string]string{
 		"PORTAL_ACCESS_DISABLE_PLATFORM_ROLE_REVOKE_URL": c.Platform.RoleRevokeURL, "PORTAL_ACCESS_DISABLE_PLATFORM_TOKEN_URL": c.Platform.TokenURL,
-	} {
+	}
+	if !c.PlatformOnly {
+		endpoints["PORTAL_ACCESS_DISABLE_PORTAL_URL"] = c.Portal.DisableURL
+		endpoints["PORTAL_ACCESS_DISABLE_PORTAL_TOKEN_URL"] = c.Portal.TokenURL
+	} else {
+		endpoints["PORTAL_ACCESS_DISABLE_PLATFORM_BINDING_BASE_URL"] = c.Binding.BaseURL
+	}
+	for key, raw := range endpoints {
 		parsed, err := url.ParseRequestURI(raw)
 		if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
 			return fmt.Errorf("%s must be an HTTPS URL without credentials, query or fragment", key)
 		}
 	}
-	if err := c.Portal.TLS.ValidateEndpoints(c.Portal.TokenURL, c.Portal.DisableURL); err != nil {
-		return fmt.Errorf("Portal access disable Portal TLS: %w", err)
+	if !c.PlatformOnly {
+		if err := c.Portal.TLS.ValidateEndpoints(c.Portal.TokenURL, c.Portal.DisableURL); err != nil {
+			return fmt.Errorf("Portal access disable Portal TLS: %w", err)
+		}
+	} else if err := c.Binding.TLS.ValidateEndpoints(c.Platform.TokenURL, c.Binding.BaseURL); err != nil {
+		return fmt.Errorf("Portal access disable binding TLS: %w", err)
 	}
 	if err := c.Platform.TLS.ValidateEndpoints(c.Platform.TokenURL, c.Platform.RoleRevokeURL); err != nil {
 		return fmt.Errorf("Portal access disable platform TLS: %w", err)

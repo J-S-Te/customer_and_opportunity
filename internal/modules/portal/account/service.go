@@ -31,6 +31,17 @@ type Service struct {
 	roleConfigHash  string
 	maxSessionAge   time.Duration
 	environmentCode string
+	// usePlatformBinding 打开后，非邀请登录以平台 authorization-context 下发的
+	// customer_ref 作为客户边界，不再依赖本地 portal_identity_links（Phase 4）。
+	usePlatformBinding bool
+}
+
+// ServiceOption 允许装配层在 Phase 4 过渡期打开平台绑定路径；默认关闭保持旧行为。
+type ServiceOption func(*Service)
+
+// WithPlatformBinding 打开平台客户绑定路径（nil 语义：调用即开启）。
+func WithPlatformBinding() ServiceOption {
+	return func(service *Service) { service.usePlatformBinding = true }
 }
 
 func NewService(repo Repository, oidc OIDCClient, invites InviteClient, protector SecretProtector, clock Clock, random RandomSource, roleConfigHash string, maxSessionAge time.Duration, environmentCodes ...string) *Service {
@@ -38,7 +49,17 @@ func NewService(repo Repository, oidc OIDCClient, invites InviteClient, protecto
 	if len(environmentCodes) > 0 && strings.TrimSpace(environmentCodes[0]) != "" {
 		environmentCode = strings.TrimSpace(environmentCodes[0])
 	}
-	return &Service{repo: repo, oidc: oidc, invites: invites, protector: protector, clock: clock, random: random, roleConfigHash: roleConfigHash, maxSessionAge: maxSessionAge, environmentCode: environmentCode}
+	service := &Service{repo: repo, oidc: oidc, invites: invites, protector: protector, clock: clock, random: random, roleConfigHash: roleConfigHash, maxSessionAge: maxSessionAge, environmentCode: environmentCode}
+	return service
+}
+
+// NewServiceWithOptions 是带选项的构造入口；保留 NewService 供既有装配与测试使用。
+func NewServiceWithOptions(repo Repository, oidc OIDCClient, invites InviteClient, protector SecretProtector, clock Clock, random RandomSource, roleConfigHash string, maxSessionAge time.Duration, environmentCode string, options ...ServiceOption) *Service {
+	service := NewService(repo, oidc, invites, protector, clock, random, roleConfigHash, maxSessionAge, environmentCode)
+	for _, apply := range options {
+		apply(service)
+	}
+	return service
 }
 
 type ProvisionCommand struct {
@@ -180,6 +201,11 @@ func (s *Service) BeginInvitationLogin(ctx context.Context, inviteToken, returnP
 	if err != nil {
 		return LoginStart{}, err
 	}
+	if s.usePlatformBinding {
+		// Phase 5：本地映射退役。邀请登录的客户边界在 OIDC 回调时由平台 customer_ref
+		// 与邀请的 CustomerID 双重匹配，不再查 portal_identity_links。
+		return s.begin(ctx, verified.TenantID, verified.ExpectedPlatformUserID, verified.CustomerID, inviteToken, returnPath)
+	}
 	link, err := s.repo.FindLink(ctx, verified.TenantID, verified.ExpectedPlatformUserID)
 	if err != nil || link.CustomerID != verified.CustomerID || link.Status == IdentityDisabled {
 		return LoginStart{}, ErrNotProvisioned
@@ -305,12 +331,36 @@ func (s *Service) CompleteLogin(ctx context.Context, state, code string, metadat
 		s.writeLoginSecurityEvent(ctx, activation, "LOGIN_FAILED", "HIGH", "OIDC_TOKEN_INVALID", metadata, now)
 		return LoginResult{}, ErrInvalidClaims
 	}
-	link, err := s.repo.FindLink(ctx, claims.TenantID, claims.IdentityID)
-	if err != nil || link.Status == IdentityDisabled || (activation.CustomerID != 0 && link.CustomerID != activation.CustomerID) {
-		return LoginResult{}, ErrNotProvisioned
-	}
-	if activation.ExpectedPlatformUserID == "" && link.Status != IdentityActive {
-		return LoginResult{}, ErrNotProvisioned
+	// Phase 4：平台绑定开启且声明存在时，非邀请登录直接以 customer_ref 作为客户边界，
+	// 不查本地映射；邀请登录仍走本地映射消费（映射激活由邀请链路负责）。声明缺失或
+	// 开关关闭时回退旧路径（本地 portal_identity_links 仍为权威）。
+	customerID := uint64(0)
+	var link *IdentityLink
+	if s.usePlatformBinding && claims.CustomerRef != "" {
+		parsed, parseErr := strconv.ParseUint(claims.CustomerRef, 10, 64)
+		if parseErr != nil || parsed == 0 {
+			s.writeLoginSecurityEvent(ctx, activation, "LOGIN_FAILED", "HIGH", "OIDC_CUSTOMER_REF_INVALID", metadata, now)
+			return LoginResult{}, ErrNotProvisioned
+		}
+		customerID = parsed
+		if activation.ExpectedPlatformUserID != "" {
+			// Phase 5：邀请路径的客户边界 = 平台 customer_ref 与邀请 CustomerID 双匹配；
+			// 不再依赖本地映射，邀请消费仍由 CRM 侧收敛。
+			if activation.CustomerID != 0 && activation.CustomerID != customerID {
+				s.writeLoginSecurityEvent(ctx, activation, "SUBJECT_MISMATCH", "HIGH", "OIDC_CUSTOMER_REF_MISMATCH", metadata, now)
+				return LoginResult{}, ErrSubjectMismatch
+			}
+		}
+	} else {
+		found, linkErr := s.repo.FindLink(ctx, claims.TenantID, claims.IdentityID)
+		if linkErr != nil || found.Status == IdentityDisabled || (activation.CustomerID != 0 && found.CustomerID != activation.CustomerID) {
+			return LoginResult{}, ErrNotProvisioned
+		}
+		if activation.ExpectedPlatformUserID == "" && found.Status != IdentityActive {
+			return LoginResult{}, ErrNotProvisioned
+		}
+		link = found
+		customerID = link.CustomerID
 	}
 	var inviteToken string
 	if activation.InviteTokenHash != hash("") {
@@ -336,12 +386,12 @@ func (s *Service) CompleteLogin(ctx context.Context, state, code string, metadat
 	if err != nil {
 		return LoginResult{}, err
 	}
-	session := &Session{Model: newModel(claims.TenantID, claims.IdentityID, now), PublicID: publicSessionID, SessionIDHash: hash(rawSession), PlatformUserID: claims.IdentityID, CustomerID: link.CustomerID, AuthzRevision: claims.AuthzRevision, RoleConfigHash: claims.RoleConfigHash, Roles: append([]string(nil), claims.Roles...), Permissions: append([]string(nil), claims.Permissions...), DataScopes: cloneDataScopes(claims.DataScopes), AccessTokenCipher: accessTokenCipher, AuthorizationCheckedAt: now, ExpiresAt: expires, AbsoluteExpiry: expires, LastSeenAt: now, IPHash: metadata.IPHash, UserAgentHash: metadata.UserAgentHash, IPMasked: metadata.IPMasked, LocationSnapshot: metadata.Location, DeviceSnapshot: metadata.Device}
-	successEvent, err := s.newSecurityEvent(claims.TenantID, claims.IdentityID, link.CustomerID, "LOGIN_SUCCEEDED", "LOW", "", metadata, now)
+	session := &Session{Model: newModel(claims.TenantID, claims.IdentityID, now), PublicID: publicSessionID, SessionIDHash: hash(rawSession), PlatformUserID: claims.IdentityID, CustomerID: customerID, AuthzRevision: claims.AuthzRevision, RoleConfigHash: claims.RoleConfigHash, Roles: append([]string(nil), claims.Roles...), Permissions: append([]string(nil), claims.Permissions...), DataScopes: cloneDataScopes(claims.DataScopes), AccessTokenCipher: accessTokenCipher, AuthorizationCheckedAt: now, ExpiresAt: expires, AbsoluteExpiry: expires, LastSeenAt: now, IPHash: metadata.IPHash, UserAgentHash: metadata.UserAgentHash, IPMasked: metadata.IPMasked, LocationSnapshot: metadata.Location, DeviceSnapshot: metadata.Device}
+	successEvent, err := s.newSecurityEvent(claims.TenantID, claims.IdentityID, customerID, "LOGIN_SUCCEEDED", "LOW", "", metadata, now)
 	if err != nil {
 		return LoginResult{}, err
 	}
-	activatedNow := link.Status == IdentityPending
+	activatedNow := link != nil && link.Status == IdentityPending
 	if err = s.repo.WithTransaction(ctx, func(txCtx context.Context) error {
 		if activatedNow {
 			if activateErr := s.repo.ActivateLink(txCtx, claims.TenantID, link.ID, claims.AuthzRevision, claims.IdentityID, now); activateErr != nil {
@@ -366,7 +416,7 @@ func (s *Service) CompleteLogin(ctx context.Context, state, code string, metadat
 			return LoginResult{}, errors.Join(err, revokeErr, revertErr)
 		}
 	}
-	return LoginResult{SessionToken: rawSession, CustomerID: link.CustomerID, ExpiresAt: expires, ReturnPath: activation.ReturnPath}, nil
+	return LoginResult{SessionToken: rawSession, CustomerID: customerID, ExpiresAt: expires, ReturnPath: activation.ReturnPath}, nil
 }
 
 func validPortalAuthorization(claims Claims, environmentCode string) bool {
@@ -404,9 +454,18 @@ func (s *Service) AuthenticateSession(ctx context.Context, tenantID, rawToken st
 	if err != nil {
 		return nil, ErrInvalidLoginState
 	}
-	link, err := s.repo.FindLink(ctx, tenantID, session.PlatformUserID)
-	if err != nil || link.Status != IdentityActive || link.CustomerID != session.CustomerID {
-		return nil, ErrIdentityDisabled
+	var link *IdentityLink
+	if s.usePlatformBinding {
+		// 平台绑定路径：会话客户边界由登录时的 customer_ref 建立，本地映射不再是权威。
+		if session.CustomerID == 0 {
+			return nil, ErrIdentityDisabled
+		}
+	} else {
+		found, linkErr := s.repo.FindLink(ctx, tenantID, session.PlatformUserID)
+		if linkErr != nil || found.Status != IdentityActive || found.CustomerID != session.CustomerID {
+			return nil, ErrIdentityDisabled
+		}
+		link = found
 	}
 	checkedAt := time.Time{}
 	if now.Sub(session.AuthorizationCheckedAt) >= authorizationCheckInterval {
@@ -430,10 +489,20 @@ func (s *Service) AuthenticateSession(ctx context.Context, tenantID, rawToken st
 			s.revokeAuthorization(ctx, tenantID, session.PlatformUserID, now, "USERINFO_REJECTED")
 			return nil, ErrInvalidLoginState
 		}
+		if s.usePlatformBinding {
+			// 客户重绑定必须即时生效：customer_ref 与登录时建立的边界不一致即撤销会话。
+			parsed, parseErr := strconv.ParseUint(current.CustomerRef, 10, 64)
+			if parseErr != nil || parsed != session.CustomerID {
+				s.revokeAuthorization(ctx, tenantID, session.PlatformUserID, now, "CUSTOMER_REF_CHANGED")
+				return nil, ErrInvalidLoginState
+			}
+		}
 		checkedAt = now
-		if err = s.repo.MarkLinkVerified(ctx, tenantID, link.ID, current.AuthzRevision, now); err != nil {
-			s.revokeAuthorization(ctx, tenantID, session.PlatformUserID, now, "IDENTITY_LINK_INVALID")
-			return nil, ErrInvalidLoginState
+		if link != nil {
+			if err = s.repo.MarkLinkVerified(ctx, tenantID, link.ID, current.AuthzRevision, now); err != nil {
+				s.revokeAuthorization(ctx, tenantID, session.PlatformUserID, now, "IDENTITY_LINK_INVALID")
+				return nil, ErrInvalidLoginState
+			}
 		}
 		session.AuthorizationCheckedAt = now
 	}

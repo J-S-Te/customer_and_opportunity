@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -32,12 +33,34 @@ type Service struct {
 	customers CustomerReader
 	platform  PlatformProvisioner
 	portal    PortalProvisioner
+	binding   PlatformBindingWriter
 	audit     audit.Writer
 	pepper    []byte
 	publicURL string
 	clock     Clock
 	random    RandomSource
 	protector OperationProtector
+	// platformOnly 表示门户本地映射已退役（Phase 5）：平台客户绑定是唯一权威，
+	// 不再调用门户 provision，绑定失败即进入重试等待。
+	platformOnly bool
+}
+
+// ServiceOption 允许装配层在 Phase 2 双写过渡期注入平台绑定适配器；未注入时行为与旧版一致。
+type ServiceOption func(*Service)
+
+// WithPlatformBindingWriter 打开平台客户绑定双写（nil 或未配置时关闭）。
+func WithPlatformBindingWriter(writer PlatformBindingWriter) ServiceOption {
+	return func(service *Service) {
+		if writer != nil {
+			service.binding = writer
+		}
+	}
+}
+
+// WithPlatformBindingOnly 进入 Phase 5 单写模式：跳过门户映射调用，平台绑定成为唯一权威。
+// 调用方必须同时注入 PlatformBindingWriter。
+func WithPlatformBindingOnly() ServiceOption {
+	return func(service *Service) { service.platformOnly = true }
 }
 
 type AccessDisableService struct {
@@ -45,13 +68,39 @@ type AccessDisableService struct {
 	customers CustomerAccessChecker
 	platform  PlatformRoleRevoker
 	portal    PortalMappingDisabler
+	binding   PlatformBindingDisabler
 	audit     audit.Writer
 	clock     Clock
 	random    RandomSource
+	// platformOnly 表示门户映射表已退役（Phase 5）：跳过门户禁用调用，平台绑定禁用
+	// 成为唯一远程收敛点，失败即进入重试等待。
+	platformOnly bool
 }
 
-func NewAccessDisableService(repo AccessDisableRepository, customers CustomerAccessChecker, platform PlatformRoleRevoker, portal PortalMappingDisabler, auditWriter audit.Writer, clock Clock, random RandomSource) *AccessDisableService {
-	return &AccessDisableService{repo: repo, customers: customers, platform: platform, portal: portal, audit: auditWriter, clock: clock, random: random}
+// AccessDisableServiceOption 允许装配层在 Phase 2 双写过渡期注入平台绑定禁用适配器。
+type AccessDisableServiceOption func(*AccessDisableService)
+
+// WithPlatformBindingDisabler 打开禁用 saga 的平台绑定双写（nil 或未配置时关闭）。
+func WithPlatformBindingDisabler(disabler PlatformBindingDisabler) AccessDisableServiceOption {
+	return func(service *AccessDisableService) {
+		if disabler != nil {
+			service.binding = disabler
+		}
+	}
+}
+
+// WithPlatformOnlyDisable 进入 Phase 5 单写模式：跳过门户禁用调用，平台绑定禁用成为
+// 唯一远程收敛点。调用方必须同时注入 PlatformBindingDisabler。
+func WithPlatformOnlyDisable() AccessDisableServiceOption {
+	return func(service *AccessDisableService) { service.platformOnly = true }
+}
+
+func NewAccessDisableService(repo AccessDisableRepository, customers CustomerAccessChecker, platform PlatformRoleRevoker, portal PortalMappingDisabler, auditWriter audit.Writer, clock Clock, random RandomSource, options ...AccessDisableServiceOption) *AccessDisableService {
+	service := &AccessDisableService{repo: repo, customers: customers, platform: platform, portal: portal, audit: auditWriter, clock: clock, random: random}
+	for _, apply := range options {
+		apply(service)
+	}
+	return service
 }
 
 func (s *AccessDisableService) Disable(ctx context.Context, customerID uint64, command DisableAccessRequest) (*DisableAccessResult, error) {
@@ -175,13 +224,17 @@ func (s *AccessDisableService) resumeDisable(ctx context.Context, principal auth
 	if operation.Stage == DisableStageCompleted {
 		return publicDisable(operation), nil
 	}
-	if s.portal == nil || s.platform == nil {
+	if (s.platform == nil) || (s.portal == nil && !s.platformOnly) {
 		return nil, dependency(errors.New("portal access disable integrations are not configured"))
 	}
 	now := s.clock.Now().UTC()
 	if operation.Stage == DisableStagePrepared {
-		if err := s.portal.DisableMapping(ctx, operation.TenantID, operation.CustomerID, operation.PlatformUserID, operation.Reason, disableRemoteKey(operation, "mapping")); err != nil {
-			return nil, s.failDisable(ctx, operation, leaseOwner, "PORTAL_MAPPING_DISABLE_FAILED", err)
+		// Phase 5 单写：门户映射表退役后不再调用门户禁用；平台绑定禁用与本地会话
+		// 冻结（本仓库 CRM 侧链接）已经关闭访问。
+		if !s.platformOnly {
+			if err := s.portal.DisableMapping(ctx, operation.TenantID, operation.CustomerID, operation.PlatformUserID, operation.Reason, disableRemoteKey(operation, "mapping")); err != nil {
+				return nil, s.failDisable(ctx, operation, leaseOwner, "PORTAL_MAPPING_DISABLE_FAILED", err)
+			}
 		}
 		if err := s.repo.WithTransaction(ctx, func(txCtx context.Context) error {
 			locked, lockErr := s.repo.FindAccessDisableOperationForUpdate(txCtx, operation.TenantID, operation.ID)
@@ -219,6 +272,26 @@ func (s *AccessDisableService) resumeDisable(ctx context.Context, principal auth
 	if operation.Stage == DisableStageMappingDisabled {
 		if err := s.platform.RevokePortalRole(ctx, operation.PlatformUserID, disableRemoteKey(operation, "role")); err != nil {
 			return nil, s.failDisable(ctx, operation, leaseOwner, "PLATFORM_ROLE_REVOKE_FAILED", err)
+		}
+		// Phase 2 双写：门户本地冻结与角色回收已关闭访问，平台绑定禁用失败不阻断收敛；
+		// 失败入队绑定禁用补偿任务。Phase 5 单写时绑定禁用是唯一远程收敛点，失败即重试等待。
+		if s.binding != nil {
+			customerRef := strconv.FormatUint(operation.CustomerID, 10)
+			bindingResult := "SUCCESS"
+			if disableErr := s.binding.DisableCustomerBindingIdempotent(ctx, operation.PlatformUserID, customerRef, disableRemoteKey(operation, "binding")); disableErr != nil {
+				bindingResult = "PENDING"
+				compensationErr := s.repo.CreateCompensation(ctx, &CompensationTask{
+					Model:          database.Model{TenantID: operation.TenantID, CreatedBy: operation.ActorID, UpdatedBy: operation.ActorID, CreatedAt: s.clock.Now().UTC(), UpdatedAt: s.clock.Now().UTC(), Version: 1},
+					TaskNo:         disableRemoteKey(operation, "binding"), TaskType: CompensationBindingDisable,
+					CustomerID:     operation.CustomerID, ContactID: operation.ContactID,
+					PlatformUserID: operation.PlatformUserID, AccountNo: "EXT-" + strings.ToUpper(operation.PlatformUserID),
+					Status:         CompensationPending, LastErrorCode: "PLATFORM_BINDING_DISABLE_FAILED",
+				})
+				if s.platformOnly {
+					return nil, s.failDisable(ctx, operation, leaseOwner, "PLATFORM_BINDING_DISABLE_FAILED", errors.Join(disableErr, compensationErr))
+				}
+			}
+			_ = s.audit.Write(ctx, audit.Event{TenantID: operation.TenantID, Module: "portal_invite", Operation: "PLATFORM_BINDING_DISABLE", ResourceType: "customer", ResourceID: fmt.Sprint(operation.CustomerID), ActorID: "portal-machine", AfterJSON: audit.JSON(map[string]any{"platform_user_id": operation.PlatformUserID, "customer_ref": customerRef}), Result: bindingResult})
 		}
 		completedAt := s.clock.Now().UTC()
 		if err := s.repo.WithTransaction(ctx, func(txCtx context.Context) error {
@@ -324,6 +397,9 @@ func disableRemoteKey(operation *AccessDisableOperation, step string) string {
 	if step == "role" {
 		return operation.OperationNo + "R"
 	}
+	if step == "binding" {
+		return operation.OperationNo + "B"
+	}
 	return operation.OperationNo + "M"
 }
 
@@ -376,8 +452,12 @@ func (s *AccessDisableService) Current(ctx context.Context, customerID uint64) (
 	return result, nil
 }
 
-func NewService(repo Repository, customers CustomerReader, platform PlatformProvisioner, portal PortalProvisioner, auditWriter audit.Writer, pepper []byte, publicURL string, clock Clock, random RandomSource, protector OperationProtector) *Service {
-	return &Service{repo: repo, customers: customers, platform: platform, portal: portal, audit: auditWriter, pepper: append([]byte(nil), pepper...), publicURL: strings.TrimRight(publicURL, "/"), clock: clock, random: random, protector: protector}
+func NewService(repo Repository, customers CustomerReader, platform PlatformProvisioner, portal PortalProvisioner, auditWriter audit.Writer, pepper []byte, publicURL string, clock Clock, random RandomSource, protector OperationProtector, options ...ServiceOption) *Service {
+	service := &Service{repo: repo, customers: customers, platform: platform, portal: portal, audit: auditWriter, pepper: append([]byte(nil), pepper...), publicURL: strings.TrimRight(publicURL, "/"), clock: clock, random: random, protector: protector}
+	for _, apply := range options {
+		apply(service)
+	}
+	return service
 }
 
 type SystemClock struct{}
@@ -635,6 +715,9 @@ func operationRemoteKey(operation *ProvisionOperation, step string) string {
 	if step == "portal-role" {
 		suffix = "R"
 	}
+	if step == "binding" {
+		suffix = "B"
+	}
 	return operation.OperationNo + suffix
 }
 
@@ -679,10 +762,34 @@ func (s *Service) resumeProvision(ctx context.Context, principal auth.Principal,
 		}
 	}
 	if operation.Stage == OperationStageRoleAssigned {
-		mapping, mappingErr := s.portal.ProvisionMappingIdempotent(ctx, contact, identity, operationRemoteKey(operation, "portal-mapping"))
-		if mappingErr != nil || strings.TrimSpace(mapping.PortalAccountID) == "" {
-			compensationErr := s.recordCompensationForOperation(ctx, principal, contact, identity, CompensationMapping, "PORTAL_MAPPING_FAILED", operationRemoteKey(operation, "portal-mapping"))
-			return nil, s.failProvision(ctx, operation, "PORTAL_MAPPING_FAILED", errors.Join(mappingErr, compensationErr))
+		// Phase 2 双写：门户映射仍是权威，平台客户绑定失败不中断邀请开通；失败入队绑定
+		// 补偿任务，由补偿 worker 按同一幂等键补齐，对账 worker 观察残余差异。
+		if s.binding != nil {
+			customerRef := strconv.FormatUint(contact.CustomerID, 10)
+			bindingResult := "SUCCESS"
+			if bindErr := s.binding.BindCustomerIdempotent(ctx, identity.PlatformUserID, customerRef, operationRemoteKey(operation, "binding")); bindErr != nil {
+				bindingResult = "PENDING"
+				compensationErr := s.recordCompensationForOperation(ctx, principal, contact, identity, CompensationBinding, "PLATFORM_BINDING_FAILED", operationRemoteKey(operation, "binding"))
+				if s.platformOnly {
+					// Phase 5 单写：平台绑定是唯一权威，失败即进入重试等待，不产生半开通状态。
+					return nil, s.failProvision(ctx, operation, "PLATFORM_BINDING_FAILED", errors.Join(bindErr, compensationErr))
+				}
+			}
+			// 审计采用 best-effort：绑定双写成败不影响开通主线，安全事件不可用也不阻断。
+			_ = s.audit.Write(ctx, audit.Event{TenantID: operation.TenantID, Module: "portal_invite", Operation: "PLATFORM_BINDING", ResourceType: "customer", ResourceID: fmt.Sprint(operation.CustomerID), ActorID: "portal-machine", AfterJSON: audit.JSON(map[string]any{"platform_user_id": identity.PlatformUserID, "customer_ref": customerRef}), Result: bindingResult})
+		}
+		var mapping PortalMapping
+		var mappingErr error
+		if s.platformOnly {
+			// 门户映射表退役：不再调用门户 provision，本地合成门户账号标识以完成状态机；
+			// 门户侧以平台 customer_ref 作为客户边界。
+			mapping = PortalMapping{PortalAccountID: "PA-" + strconv.FormatUint(contact.CustomerID, 10)}
+		} else {
+			mapping, mappingErr = s.portal.ProvisionMappingIdempotent(ctx, contact, identity, operationRemoteKey(operation, "portal-mapping"))
+			if mappingErr != nil || strings.TrimSpace(mapping.PortalAccountID) == "" {
+				compensationErr := s.recordCompensationForOperation(ctx, principal, contact, identity, CompensationMapping, "PORTAL_MAPPING_FAILED", operationRemoteKey(operation, "portal-mapping"))
+				return nil, s.failProvision(ctx, operation, "PORTAL_MAPPING_FAILED", errors.Join(mappingErr, compensationErr))
+			}
 		}
 		if err = s.repo.AdvanceProvisionOperation(ctx, operation, OperationStageRoleAssigned, map[string]any{
 			"stage": OperationStageMappingReady, "status": OperationStatusProcessing,

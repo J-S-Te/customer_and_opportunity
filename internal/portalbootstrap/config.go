@@ -61,6 +61,9 @@ type Config struct {
 	CatalogApplicationID      string
 	CatalogClientID           string
 	CatalogClientSecret       string
+	// UsePlatformBinding 打开后，非邀请登录以平台 authorization-context 的 customer_ref
+	// 作为客户边界（Phase 4），本地 portal_identity_links 仅作邀请链路与回退。
+	UsePlatformBinding bool
 }
 
 func LoadConfig() (Config, error) {
@@ -105,6 +108,10 @@ func LoadConfig() (Config, error) {
 	if err != nil {
 		return Config{}, fmt.Errorf("PORTAL_AUTHORIZATION_CATALOG_SYNC_ENABLED: %w", err)
 	}
+	usePlatformBinding, err := strconv.ParseBool(valueOrDefault("PORTAL_USE_PLATFORM_BINDING", "false"))
+	if err != nil {
+		return Config{}, fmt.Errorf("PORTAL_USE_PLATFORM_BINDING: %w", err)
+	}
 	config := Config{
 		Address: valueOrDefault("PORTAL_HTTP_ADDRESS", ":8091"), MySQLDSN: os.Getenv("PORTAL_MYSQL_DSN"),
 		PathPrefix: valueOrDefault("PORTAL_PATH_PREFIX", "/customer-portal"), PublicOrigin: os.Getenv("PORTAL_PUBLIC_ORIGIN"),
@@ -132,6 +139,7 @@ func LoadConfig() (Config, error) {
 		PlatformAuditPollInterval: platformAuditPollInterval,
 		PlatformAuditBatchSize:    platformAuditBatchSize,
 		CatalogSyncEnabled:        catalogSyncEnabled,
+		UsePlatformBinding:        usePlatformBinding,
 		CatalogApplicationID:      os.Getenv("PORTAL_AUTHORIZATION_CATALOG_APPLICATION_ID"), CatalogClientID: os.Getenv("PORTAL_AUTHORIZATION_CATALOG_CLIENT_ID"),
 		CatalogClientSecret: os.Getenv("PORTAL_AUTHORIZATION_CATALOG_CLIENT_SECRET"),
 	}

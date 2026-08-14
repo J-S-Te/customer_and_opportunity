@@ -39,6 +39,7 @@ type Response struct {
 	Permissions           []string               `json:"permissions"`
 	DataScopes            []sharedauth.DataScope `json:"data_scopes"`
 	AuthorizationRevision uint64                 `json:"authorization_revision"`
+	CustomerRef           string                 `json:"customer_ref,omitempty"`
 }
 
 type Expectation struct {

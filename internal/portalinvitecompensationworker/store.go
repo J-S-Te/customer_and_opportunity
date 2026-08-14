@@ -147,6 +147,14 @@ func (s *store) completeMapping(ctx context.Context, task portalinvite.Compensat
 	})
 }
 
+// completeBinding 完成平台客户绑定补偿（BIND / DISABLE_BIND 共用）：绑定是纯派生状态，
+// 远端幂等收敛成功后无需本地副作用。
+func (s *store) completeBinding(ctx context.Context, task portalinvite.CompensationTask, workerID string, now time.Time) error {
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		return newStore(tx).complete(ctx, task, workerID, now, nil)
+	})
+}
+
 func (s *store) complete(ctx context.Context, task portalinvite.CompensationTask, workerID string, now time.Time, extra map[string]any) error {
 	updates := map[string]any{
 		"status": portalinvite.CompensationSucceeded, "completed_at": now,

@@ -16,6 +16,7 @@ type taskStore interface {
 	claim(context.Context, string, time.Time, time.Duration, int) ([]portalinvite.CompensationTask, error)
 	completeRole(context.Context, portalinvite.CompensationTask, string, time.Time) error
 	completeMapping(context.Context, portalinvite.CompensationTask, string, portalinvite.PortalMapping, time.Time) error
+	completeBinding(context.Context, portalinvite.CompensationTask, string, time.Time) error
 	failed(context.Context, portalinvite.CompensationTask, string, time.Time, failure) error
 	stats(context.Context) (queueStats, error)
 }
@@ -28,6 +29,11 @@ type mappingProvisioner interface {
 	ProvisionMapping(context.Context, portalinvite.CompensationTask) (portalinvite.PortalMapping, error)
 }
 
+// bindingRepair 按补偿任务修复平台客户绑定（BIND / DISABLE_BIND 共用同一任务表）。
+type bindingRepair interface {
+	RepairBinding(context.Context, portalinvite.CompensationTask) error
+}
+
 type identityReconciler interface {
 	RunOnce(context.Context) (reconciliationMetrics, error)
 }
@@ -36,6 +42,7 @@ type Worker struct {
 	store          taskStore
 	roles          roleAssigner
 	mappings       mappingProvisioner
+	bindings       bindingRepair
 	workerID       string
 	pollInterval   time.Duration
 	leaseDuration  time.Duration
@@ -49,6 +56,12 @@ type Worker struct {
 func (w *Worker) withReconciler(reconciler identityReconciler, every time.Duration) *Worker {
 	w.reconciler = reconciler
 	w.reconcileEvery = every
+	return w
+}
+
+// withBindingRepair 注入平台客户绑定修复适配器（Phase 2 起）；未注入时绑定补偿任务按未配置失败。
+func (w *Worker) withBindingRepair(repair bindingRepair) *Worker {
+	w.bindings = repair
 	return w
 }
 
@@ -132,6 +145,14 @@ func (w *Worker) dispatch(ctx context.Context, task portalinvite.CompensationTas
 			return w.fail(ctx, task, failure{code: "PORTAL_MAPPING_INVALID_RESPONSE", summary: "Portal mapping response is invalid"})
 		}
 		return w.store.completeMapping(ctx, task, w.workerID, mapping, w.now())
+	case portalinvite.CompensationBinding, portalinvite.CompensationBindingDisable:
+		if w.bindings == nil {
+			return w.fail(ctx, task, failure{code: "BINDING_REPAIR_NOT_CONFIGURED", summary: "platform customer binding repair is not configured"})
+		}
+		if err := w.bindings.RepairBinding(ctx, task); err != nil {
+			return w.fail(ctx, task, failure{code: "PLATFORM_BINDING_RETRY_FAILED", summary: "platform customer binding retry failed"})
+		}
+		return w.store.completeBinding(ctx, task, w.workerID, w.now())
 	default:
 		return w.fail(ctx, task, failure{code: "UNKNOWN_TASK_TYPE", summary: "compensation task type is unsupported"})
 	}

@@ -24,6 +24,24 @@ type Config struct {
 	ReconciliationBatchSize int
 	Portal                  PortalConfig
 	Platform                PlatformConfig
+	Binding                 BindingConfig
+}
+
+// BindingConfig 是平台客户绑定补偿的可选装配（Phase 2 起）。Enabled=false 时绑定补偿
+// 任务按未配置失败并进入死信，不影响角色/映射补偿。
+type BindingConfig struct {
+	Enabled         bool
+	BaseURL         string
+	TokenURL        string
+	ClientID        string
+	ClientSecret    string
+	Scope           string
+	ApplicationCode string
+	TLS             integrationhttp.TLSOptions
+	// 禁用补偿使用独立的 portal_mapping_disable 凭据；未配置时禁用任务按未配置失败。
+	DisableClientID     string
+	DisableClientSecret string
+	DisableScope        string
 }
 
 type PlatformConfig struct {
@@ -66,6 +84,22 @@ func LoadConfig() (Config, error) {
 			TLS: integrationhttp.TLSOptions{
 				RootCAFile: os.Getenv("PORTAL_INVITE_COMPENSATION_PORTAL_TLS_ROOT_CA_FILE"), ClientCertFile: os.Getenv("PORTAL_INVITE_COMPENSATION_PORTAL_TLS_CLIENT_CERT_FILE"),
 				ClientKeyFile: os.Getenv("PORTAL_INVITE_COMPENSATION_PORTAL_TLS_CLIENT_KEY_FILE"), ServerName: os.Getenv("PORTAL_INVITE_COMPENSATION_PORTAL_TLS_SERVER_NAME"), RequireMTLS: portalRequireMTLS,
+			},
+		},
+		Binding: BindingConfig{
+			Enabled:         boolEnvDefault("PORTAL_INVITE_COMPENSATION_BINDING_ENABLED", false),
+			BaseURL:         os.Getenv("PORTAL_INVITE_COMPENSATION_BINDING_BASE_URL"),
+			TokenURL:        os.Getenv("PORTAL_INVITE_COMPENSATION_BINDING_TOKEN_URL"),
+			ClientID:        os.Getenv("PORTAL_INVITE_COMPENSATION_BINDING_CLIENT_ID"),
+			ClientSecret:    os.Getenv("PORTAL_INVITE_COMPENSATION_BINDING_CLIENT_SECRET"),
+			Scope:           env("PORTAL_INVITE_COMPENSATION_BINDING_SCOPE", "portal_mapping_provision"),
+			ApplicationCode: os.Getenv("PORTAL_INVITE_COMPENSATION_BINDING_APPLICATION_CODE"),
+			DisableClientID:     os.Getenv("PORTAL_INVITE_COMPENSATION_BINDING_DISABLE_CLIENT_ID"),
+			DisableClientSecret: os.Getenv("PORTAL_INVITE_COMPENSATION_BINDING_DISABLE_CLIENT_SECRET"),
+			DisableScope:        env("PORTAL_INVITE_COMPENSATION_BINDING_DISABLE_SCOPE", "portal_mapping_disable"),
+			TLS: integrationhttp.TLSOptions{
+				RootCAFile: os.Getenv("PORTAL_INVITE_COMPENSATION_BINDING_TLS_ROOT_CA_FILE"), ClientCertFile: os.Getenv("PORTAL_INVITE_COMPENSATION_BINDING_TLS_CLIENT_CERT_FILE"),
+				ClientKeyFile: os.Getenv("PORTAL_INVITE_COMPENSATION_BINDING_TLS_CLIENT_KEY_FILE"), ServerName: os.Getenv("PORTAL_INVITE_COMPENSATION_BINDING_TLS_SERVER_NAME"),
 			},
 		},
 		Platform: PlatformConfig{
@@ -131,7 +165,55 @@ func (c Config) validate() error {
 	if err := c.Platform.TLS.ValidateEndpoints(c.Platform.TokenURL, c.Platform.RoleAssignURL); err != nil {
 		return fmt.Errorf("Portal invite compensation platform TLS: %w", err)
 	}
+	if c.Binding.Enabled {
+		for key, value := range map[string]string{
+			"PORTAL_INVITE_COMPENSATION_BINDING_BASE_URL":         c.Binding.BaseURL,
+			"PORTAL_INVITE_COMPENSATION_BINDING_TOKEN_URL":        c.Binding.TokenURL,
+			"PORTAL_INVITE_COMPENSATION_BINDING_CLIENT_ID":        c.Binding.ClientID,
+			"PORTAL_INVITE_COMPENSATION_BINDING_CLIENT_SECRET":    c.Binding.ClientSecret,
+			"PORTAL_INVITE_COMPENSATION_BINDING_APPLICATION_CODE": c.Binding.ApplicationCode,
+		} {
+			if strings.TrimSpace(value) == "" {
+				return fmt.Errorf("%s is required when PORTAL_INVITE_COMPENSATION_BINDING_ENABLED=true", key)
+			}
+		}
+		if strings.TrimSpace(c.Binding.Scope) != "portal_mapping_provision" {
+			return fmt.Errorf("PORTAL_INVITE_COMPENSATION_BINDING_SCOPE must be portal_mapping_provision")
+		}
+		if c.Binding.DisableClientID != "" || c.Binding.DisableClientSecret != "" {
+			if c.Binding.DisableClientID == "" || c.Binding.DisableClientSecret == "" {
+				return fmt.Errorf("PORTAL_INVITE_COMPENSATION_BINDING_DISABLE_CLIENT_ID/SECRET must be set together")
+			}
+			if strings.TrimSpace(c.Binding.DisableScope) != "portal_mapping_disable" {
+				return fmt.Errorf("PORTAL_INVITE_COMPENSATION_BINDING_DISABLE_SCOPE must be portal_mapping_disable")
+			}
+		}
+		for key, raw := range map[string]string{
+			"PORTAL_INVITE_COMPENSATION_BINDING_BASE_URL":  c.Binding.BaseURL,
+			"PORTAL_INVITE_COMPENSATION_BINDING_TOKEN_URL": c.Binding.TokenURL,
+		} {
+			parsed, err := url.ParseRequestURI(raw)
+			if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+				return fmt.Errorf("%s must be a valid HTTP(S) URL without credentials, query or fragment", key)
+			}
+		}
+		if err := c.Binding.TLS.ValidateEndpoints(c.Binding.TokenURL, c.Binding.BaseURL); err != nil {
+			return fmt.Errorf("Portal invite compensation binding TLS: %w", err)
+		}
+	}
 	return nil
+}
+
+func boolEnvDefault(key string, fallback bool) bool {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.ParseBool(value)
+	if err != nil {
+		return false
+	}
+	return parsed
 }
 
 func env(key, fallback string) string {
