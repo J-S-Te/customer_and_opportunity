@@ -17,6 +17,7 @@ type taskStore interface {
 	completeRole(context.Context, portalinvite.CompensationTask, string, time.Time) error
 	completeMapping(context.Context, portalinvite.CompensationTask, string, portalinvite.PortalMapping, time.Time) error
 	completeBinding(context.Context, portalinvite.CompensationTask, string, time.Time) error
+	bindingFenced(context.Context, portalinvite.CompensationTask) (bool, error)
 	failed(context.Context, portalinvite.CompensationTask, string, time.Time, failure) error
 	stats(context.Context) (queueStats, error)
 }
@@ -148,6 +149,14 @@ func (w *Worker) dispatch(ctx context.Context, task portalinvite.CompensationTas
 	case portalinvite.CompensationBinding, portalinvite.CompensationBindingDisable:
 		if w.bindings == nil {
 			return w.fail(ctx, task, failure{code: "BINDING_REPAIR_NOT_CONFIGURED", summary: "platform customer binding repair is not configured"})
+		}
+		// P1-4：CRM 侧映射已被管理端禁用时，BIND 补偿不得复活平台绑定。
+		fenced, fenceErr := w.store.bindingFenced(ctx, task)
+		if fenceErr != nil {
+			return w.fail(ctx, task, failure{code: "BINDING_FENCE_UNAVAILABLE", summary: "platform customer binding fence is unavailable"})
+		}
+		if fenced {
+			return w.fail(ctx, task, failure{code: "BINDING_FENCED_LINK_DISABLED", summary: "CRM identity link is disabled; platform binding repair refused"})
 		}
 		if err := w.bindings.RepairBinding(ctx, task); err != nil {
 			return w.fail(ctx, task, failure{code: "PLATFORM_BINDING_RETRY_FAILED", summary: "platform customer binding retry failed"})

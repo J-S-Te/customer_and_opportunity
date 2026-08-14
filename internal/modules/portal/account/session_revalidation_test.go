@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	sharedauthorization "github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/authorizationcontext"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/database"
 )
 
@@ -127,7 +128,7 @@ func revalidationFixture(now time.Time) (*Service, *revalidationRepository, *rev
 func TestAuthenticateSessionRevalidatesCurrentAuthorization(t *testing.T) {
 	now := time.Date(2026, 8, 1, 1, 2, 3, 0, time.UTC)
 	service, repo, oidc := revalidationFixture(now)
-	value, err := service.AuthenticateSession(context.Background(), "tenant-a", "session-token")
+	value, err := service.AuthenticateSession(context.Background(), "tenant-a", "session-token", true)
 	if err != nil || value.PlatformUserID != "subject-a" {
 		t.Fatalf("AuthenticateSession() value=%#v err=%v", value, err)
 	}
@@ -140,7 +141,7 @@ func TestAuthenticateSessionRevokesAllSubjectSessionsWhenAuthorizationChanges(t 
 	now := time.Date(2026, 8, 1, 1, 2, 3, 0, time.UTC)
 	service, repo, oidc := revalidationFixture(now)
 	oidc.claims.AuthzRevision = 4
-	if _, err := service.AuthenticateSession(context.Background(), "tenant-a", "session-token"); !errors.Is(err, ErrInvalidLoginState) {
+	if _, err := service.AuthenticateSession(context.Background(), "tenant-a", "session-token", true); !errors.Is(err, ErrInvalidLoginState) {
 		t.Fatalf("changed authorization error=%v", err)
 	}
 	if !repo.revoked || repo.touched || repo.linkVerified {
@@ -155,7 +156,7 @@ func TestAuthenticateSessionRevokesAllSubjectSessionsWhenDataScopesChange(t *tes
 	scopes := []DataScope{{RoleCode: "portal_customer", ScopeType: "ENVIRONMENT", ScopeID: "env-prod", EnvironmentCode: "prod"}}
 	repo.session.DataScopes = append([]DataScope(nil), scopes...)
 	oidc.claims.DataScopes = append([]DataScope(nil), scopes...)
-	if _, err := service.AuthenticateSession(context.Background(), "tenant-a", "session-token"); err != nil {
+	if _, err := service.AuthenticateSession(context.Background(), "tenant-a", "session-token", true); err != nil {
 		t.Fatalf("unchanged data scopes error=%v", err)
 	}
 
@@ -164,7 +165,7 @@ func TestAuthenticateSessionRevokesAllSubjectSessionsWhenDataScopesChange(t *tes
 	// scope must not be silently retained by an already-issued local session.
 	oidc.claims.DataScopes[0].ScopeID = "customer-8"
 	repo.session.AuthorizationCheckedAt = now.Add(-authorizationCheckInterval - time.Second)
-	if _, err := service.AuthenticateSession(context.Background(), "tenant-a", "session-token"); !errors.Is(err, ErrInvalidLoginState) {
+	if _, err := service.AuthenticateSession(context.Background(), "tenant-a", "session-token", true); !errors.Is(err, ErrInvalidLoginState) {
 		t.Fatalf("changed data scope error=%v", err)
 	}
 	if !repo.revoked {
@@ -172,11 +173,27 @@ func TestAuthenticateSessionRevokesAllSubjectSessionsWhenDataScopesChange(t *tes
 	}
 }
 
+// P1-3：授权服务不可用时的陈旧窗口只放行只读请求；写请求必须在线复核。
+func TestAuthenticateSessionStaleWindowIsReadOnly(t *testing.T) {
+	now := time.Date(2026, 8, 14, 1, 2, 3, 0, time.UTC)
+	service, repo, oidc := revalidationFixture(now)
+	repo.session.AuthorizationCheckedAt = now.Add(-20 * time.Second)
+	oidc.err = sharedauthorization.ErrUnavailable
+
+	if _, err := service.AuthenticateSession(context.Background(), "tenant-a", "session-token", true); err != nil {
+		t.Fatalf("read request inside stale window error=%v", err)
+	}
+	repo.session.AuthorizationCheckedAt = now.Add(-20 * time.Second)
+	if _, err := service.AuthenticateSession(context.Background(), "tenant-a", "session-token", false); !errors.Is(err, ErrAuthorizationUnavailable) {
+		t.Fatalf("write request error=%v, want ErrAuthorizationUnavailable", err)
+	}
+}
+
 func TestAuthenticateSessionSkipsUserInfoInsideCheckWindow(t *testing.T) {
 	now := time.Date(2026, 8, 1, 1, 2, 3, 0, time.UTC)
 	service, repo, oidc := revalidationFixture(now)
 	repo.session.AuthorizationCheckedAt = now.Add(-5 * time.Second)
-	if _, err := service.AuthenticateSession(context.Background(), "tenant-a", "session-token"); err != nil {
+	if _, err := service.AuthenticateSession(context.Background(), "tenant-a", "session-token", true); err != nil {
 		t.Fatal(err)
 	}
 	if oidc.calls != 0 || !repo.touched || !repo.authorizationAt.IsZero() {

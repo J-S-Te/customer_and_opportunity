@@ -343,6 +343,19 @@ func (s *Service) CompleteLogin(ctx context.Context, state, code string, metadat
 			return LoginResult{}, ErrNotProvisioned
 		}
 		customerID = parsed
+		// 双来源一致性：过渡期本地映射仍存在时：
+		//   - 映射已被管理端禁用 → 失败关闭（禁用 saga 未收敛到平台时不得放行新登录）；
+		//   - 客户与平台 customer_ref 不一致 → 记安全事件并失败关闭。
+		if local, localErr := s.repo.FindLink(ctx, claims.TenantID, claims.IdentityID); localErr == nil {
+			if local.Status == IdentityDisabled {
+				s.writeLoginSecurityEvent(ctx, activation, "LOGIN_FAILED", "HIGH", "OIDC_LINK_DISABLED", metadata, now)
+				return LoginResult{}, ErrNotProvisioned
+			}
+			if local.CustomerID != customerID {
+				s.writeLoginSecurityEvent(ctx, activation, "LOGIN_FAILED", "HIGH", "OIDC_CUSTOMER_REF_LINK_MISMATCH", metadata, now)
+				return LoginResult{}, ErrSubjectMismatch
+			}
+		}
 		if activation.ExpectedPlatformUserID != "" {
 			// Phase 5：邀请路径的客户边界 = 平台 customer_ref 与邀请 CustomerID 双匹配；
 			// 不再依赖本地映射，邀请消费仍由 CRM 侧收敛。
@@ -446,7 +459,9 @@ func validPortalAuthorization(claims Claims, environmentCode string) bool {
 	return err == nil && (decision.AllowAll || len(decision.SelfIDs) > 0)
 }
 
-func (s *Service) AuthenticateSession(ctx context.Context, tenantID, rawToken string) (*Session, error) {
+// AuthenticateSession 校验本地会话并在线复核授权。allowStale 仅对只读请求为 true：
+// 授权服务不可用时可放行受控陈旧窗口；写请求必须在线复核（P1-3）。
+func (s *Service) AuthenticateSession(ctx context.Context, tenantID, rawToken string, allowStale bool) (*Session, error) {
 	// Cookie 仅携带高熵令牌，数据库按摘要检索；租户、撤销和到期边界均由服务端重新验证。
 	now := s.clock.Now().UTC()
 	sessionHash := hash(rawToken)
@@ -476,7 +491,8 @@ func (s *Service) AuthenticateSession(ctx context.Context, tenantID, rawToken st
 		}
 		current, currentErr := s.oidc.UserInfo(ctx, string(accessToken))
 		if errors.Is(currentErr, sharedauthorization.ErrUnavailable) {
-			if now.Sub(session.AuthorizationCheckedAt) > authorizationMaxStale {
+			// P1-3：陈旧授权只放行只读方法；写请求与超窗请求必须在线复核。
+			if !allowStale || now.Sub(session.AuthorizationCheckedAt) > authorizationMaxStale {
 				return nil, ErrAuthorizationUnavailable
 			}
 			if err = s.repo.TouchSession(ctx, tenantID, sessionHash, now, time.Time{}); err != nil {

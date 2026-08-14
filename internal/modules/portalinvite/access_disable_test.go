@@ -253,6 +253,75 @@ func TestAccessDisablePermissionFailsBeforeCustomerOrRemoteReads(t *testing.T) {
 	}
 }
 
+type bindingDisablerFake struct {
+	keys []string
+	err  error
+}
+
+func (f *bindingDisablerFake) DisableCustomerBindingIdempotent(_ context.Context, _ string, _ string, key string) error {
+	f.keys = append(f.keys, key)
+	return f.err
+}
+
+func newDisablePlatformOnlyFixture(now time.Time) (*AccessDisableService, *disableRepoFake, *roleRevokerFake, *bindingDisablerFake, *disableAuditFake) {
+	repo := &disableRepoFake{link: &IdentityLink{
+		Model: database.Model{ID: 11, TenantID: "tenant-a", Version: 3}, CustomerID: 7, ContactID: 9,
+		PlatformUserID: "subject-a", PortalAccountID: "portal-a", Status: "ACTIVE",
+	}}
+	platform, binding, writer := &roleRevokerFake{}, &bindingDisablerFake{}, &disableAuditFake{}
+	service := NewAccessDisableService(repo, &disableCustomerFake{allowed: true}, platform, nil, writer, &mutableClock{now: now}, &deterministicRandom{},
+		WithPlatformBindingDisabler(binding), WithPlatformOnlyDisable())
+	return service, repo, platform, binding, writer
+}
+
+// Phase 5 单写：禁用 saga 跳过门户禁用，平台绑定禁用成为唯一远程收敛点。
+func TestAccessDisablePlatformOnlySkipsPortalAndDisablesBinding(t *testing.T) {
+	now := time.Date(2026, 8, 14, 8, 0, 0, 0, time.UTC)
+	service, repo, platform, binding, writer := newDisablePlatformOnlyFixture(now)
+	result, err := service.Disable(disableContext(true), 7, DisableAccessRequest{Reason: "customer terminated access", IdempotencyKey: "disable-po-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "DISABLED" || repo.link.Status != "DISABLED" || repo.revoked != 1 {
+		t.Fatalf("result=%#v link=%s revoked=%d", result, repo.link.Status, repo.revoked)
+	}
+	if len(platform.keys) != 1 || len(binding.keys) != 1 || binding.keys[0] != result.OperationNo+"B" || platform.keys[0] != result.OperationNo+"R" {
+		t.Fatalf("remote keys: platform=%v binding=%v", platform.keys, binding.keys)
+	}
+	var disableAudited, bindingAudited bool
+	for _, event := range writer.events {
+		if event.Operation == "DISABLE_ACCESS" {
+			disableAudited = true
+		}
+		if event.Operation == "PLATFORM_BINDING_DISABLE" && event.Result == "SUCCESS" {
+			bindingAudited = true
+		}
+	}
+	if !disableAudited || !bindingAudited {
+		t.Fatalf("audit events = %#v", writer.events)
+	}
+}
+
+// 单写模式下绑定禁用失败：进入重试等待并入队绑定禁用补偿任务，门户侧无调用。
+func TestAccessDisablePlatformOnlyBindingFailureRetriesWithCompensation(t *testing.T) {
+	now := time.Date(2026, 8, 14, 8, 0, 0, 0, time.UTC)
+	service, repo, platform, binding, _ := newDisablePlatformOnlyFixture(now)
+	binding.err = errors.New("platform binding endpoint down")
+	if _, err := service.Disable(disableContext(true), 7, DisableAccessRequest{Reason: "security response", IdempotencyKey: "disable-po-2"}); err == nil {
+		t.Fatal("expected dependency failure")
+	}
+	operation := repo.operations[0]
+	if operation.Status != DisableStatusRetryWait || operation.LastErrorCode != "PLATFORM_BINDING_DISABLE_FAILED" || operation.NextRetryAt == nil {
+		t.Fatalf("retry operation=%#v", operation)
+	}
+	if len(platform.keys) != 1 {
+		t.Fatalf("platform role revoke calls = %d, want 1", len(platform.keys))
+	}
+	if len(repo.compensations) != 1 || repo.compensations[0].TaskType != CompensationBindingDisable || repo.compensations[0].TaskNo != operation.OperationNo+"B" {
+		t.Fatalf("compensations = %#v", repo.compensations)
+	}
+}
+
 func TestAccessDisableRejectsSecondBusinessCommandBeforeRemoteDispatch(t *testing.T) {
 	now := time.Date(2026, 8, 2, 8, 0, 0, 0, time.UTC)
 	service, repo, portal, platform, _, _ := newDisableFixture(now)

@@ -427,7 +427,9 @@ func authenticate(deps RouterDependencies) gin.HandlerFunc {
 			c.Abort()
 			return
 		}
-		session, err := deps.Account.AuthenticateSession(c.Request.Context(), deps.Config.TenantID, cookie.Value)
+		// P1-3：陈旧授权窗口只放行只读方法；写请求必须在线复核授权。
+		allowStale := c.Request.Method == http.MethodGet || c.Request.Method == http.MethodHead || c.Request.Method == http.MethodOptions
+		session, err := deps.Account.AuthenticateSession(c.Request.Context(), deps.Config.TenantID, cookie.Value, allowStale)
 		if err != nil {
 			response.Error(c, apperror.ErrUnauthenticated)
 			c.Abort()

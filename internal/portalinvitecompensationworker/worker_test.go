@@ -24,6 +24,8 @@ type fakeStore struct {
 	queue            queueStats
 	statsErr         error
 	completedBinding int
+	fenced           bool
+	fenceErr         error
 }
 
 func (s *fakeStore) claim(_ context.Context, worker string, _ time.Time, lease time.Duration, batch int) ([]portalinvite.CompensationTask, error) {
@@ -46,6 +48,9 @@ func (s *fakeStore) failed(_ context.Context, _ portalinvite.CompensationTask, _
 func (s *fakeStore) completeBinding(context.Context, portalinvite.CompensationTask, string, time.Time) error {
 	s.completedBinding++
 	return nil
+}
+func (s *fakeStore) bindingFenced(context.Context, portalinvite.CompensationTask) (bool, error) {
+	return s.fenced, s.fenceErr
 }
 func (s *fakeStore) stats(context.Context) (queueStats, error) { return s.queue, s.statsErr }
 
@@ -160,6 +165,18 @@ func TestRunOnceDispatchesBindingRepairByType(t *testing.T) {
 	}
 	if repair.calls != 2 || store.completedBinding != 2 {
 		t.Fatalf("repair calls = %d, completed = %d; want 2/2", repair.calls, store.completedBinding)
+	}
+}
+
+func TestRunOnceRefusesBindingRepairWhenLinkDisabled(t *testing.T) {
+	store := &fakeStore{tasks: []portalinvite.CompensationTask{validTask(portalinvite.CompensationBinding)}, fenced: true}
+	worker := NewWorker(store, fakeRoles{}, fakeMappings{}, testConfig()).withBindingRepair(&fakeBindingRepair{})
+	worker.now = func() time.Time { return time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC) }
+	if _, err := worker.RunOnce(context.Background()); err == nil {
+		t.Fatal("RunOnce() succeeded despite disabled link fence")
+	}
+	if len(store.failedTasks) != 1 || store.failedTasks[0].code != "BINDING_FENCED_LINK_DISABLED" || store.completedBinding != 0 {
+		t.Fatalf("failures = %#v, completed = %d", store.failedTasks, store.completedBinding)
 	}
 }
 
