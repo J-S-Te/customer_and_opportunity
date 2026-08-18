@@ -132,6 +132,9 @@ func TestCreateAlwaysInheritsAuthenticatedOwner(t *testing.T) {
 	if repo.resource == nil || repo.resource.OwnerUserID != "sales-a" || repo.resource.OwnerOrgID != "sales-org-a" {
 		t.Fatalf("persisted owner=%#v", repo.resource)
 	}
+	if repo.resource.ContractLinkStatus != "PENDING" {
+		t.Fatalf("initial contract link status = %q, want PENDING", repo.resource.ContractLinkStatus)
+	}
 }
 
 func TestCreateExactReplayPreservesOriginalResponseWithoutDuplicateNumberOrAudit(t *testing.T) {
