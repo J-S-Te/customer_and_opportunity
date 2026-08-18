@@ -39,6 +39,33 @@ type Query struct {
 	PageSize int
 }
 
+// PrimaryOrganization returns the organization that the authoritative platform
+// directory marks as the user's primary organization. It deliberately only
+// considers the matching user entry returned by the directory.
+func PrimaryOrganization(page Page, userID string) string {
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return ""
+	}
+	for _, user := range page.Items {
+		if strings.TrimSpace(user.ID) != userID {
+			continue
+		}
+		for _, organization := range user.Organizations {
+			if organization.IsPrimary && strings.TrimSpace(organization.ID) != "" {
+				return strings.TrimSpace(organization.ID)
+			}
+		}
+		// Older directory responses may contain exactly one active organization
+		// without the primary marker. It is still safe to use because it is
+		// returned under this exact user entry by the authoritative directory.
+		if len(user.Organizations) == 1 {
+			return strings.TrimSpace(user.Organizations[0].ID)
+		}
+	}
+	return ""
+}
+
 type Catalog interface {
 	List(context.Context, Query) (Page, error)
 	Validate(context.Context, string, string) error

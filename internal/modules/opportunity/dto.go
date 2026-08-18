@@ -174,6 +174,17 @@ type ContractTransferResponse struct {
 	DeliveryStatus string `json:"delivery_status"`
 }
 
+// ContractLinkRequest 是合同系统在完成接入核对后回写 CRM 的最小权威投影。
+type ContractLinkRequest struct {
+	EventID        string     `json:"event_id" binding:"required,max=128"`
+	IntakeID       string     `json:"intake_id" binding:"required,max=64"`
+	ContractID     string     `json:"contract_id" binding:"omitempty,max=26"`
+	ContractNumber string     `json:"contract_number" binding:"required,max=64"`
+	Status         string     `json:"status" binding:"required,oneof=LINK_CONFIRMED LINK_EXCEPTION"`
+	LinkedAt       *time.Time `json:"linked_at"`
+	SyncVersion    uint64     `json:"sync_version" binding:"required"`
+}
+
 type TerminalTodoRequest struct {
 	ContractRef *string `json:"contract_ref" binding:"omitempty,max=64"`
 	LostReason  *string `json:"lost_reason" binding:"omitempty,max=64"`
@@ -236,6 +247,11 @@ type Response struct {
 	CurrentStage        string           `json:"current_stage"`
 	Status              string           `json:"opp_status"`
 	ContractRef         *string          `json:"contract_ref,omitempty"`
+	ContractID          *string          `json:"contract_id,omitempty"`
+	ContractIntakeID    *string          `json:"contract_intake_id,omitempty"`
+	ContractLinkStatus  string           `json:"contract_link_status"`
+	ContractLinkedAt    *time.Time       `json:"contract_linked_at,omitempty"`
+	ContractSyncVersion uint64           `json:"contract_sync_version"`
 	LostReason          *string          `json:"lost_reason,omitempty"`
 	TerminalPendingType string           `json:"terminal_pending_type"`
 	StageChangedAt      time.Time        `json:"stage_changed_at"`

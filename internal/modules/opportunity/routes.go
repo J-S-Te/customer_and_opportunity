@@ -41,5 +41,6 @@ func RegisterRoutes(router *gin.RouterGroup, handler *Handler) {
 
 func RegisterIntegrationRoutes(router *gin.RouterGroup, handler *Handler) {
 	router.POST("/integrations/qb/status-events", middleware.RequirePermission("opportunity.status.write"), handler.ApplyExternalStatus)
+	router.POST("/opportunities/:id/contract-link", middleware.RequirePermission("opportunity.signed.write"), handler.ContractLinkCallback)
 	router.POST("/integrations/opportunity-attachment/scan-events", middleware.RequirePermission("opportunity.attachment.scan.write"), handler.ApplyAttachmentScan)
 }

@@ -38,6 +38,7 @@ type Repository interface {
 	CreateFollowup(context.Context, *Followup) error
 	ListFollowups(context.Context, string, uint64, int, int) (pagination.Page[FollowupResponse], error)
 	UpdateTerminalTodo(context.Context, *Opportunity, uint64) error
+	UpdateContractLink(context.Context, *Opportunity, uint64) error
 	ListMembers(context.Context, string, uint64, bool) ([]Member, error)
 	ListMemberTerms(context.Context, string, uint64, MemberTermQuery) (pagination.Page[MemberTermResponse], error)
 	UpdateOwner(context.Context, *Opportunity, uint64) error
@@ -117,6 +118,20 @@ func (r *GORMRepository) UpdateTerminalTodo(ctx context.Context, model *Opportun
 		return ErrVersionConflict
 	}
 	model.Version = expectedVersion + 1
+	return nil
+}
+
+func (r *GORMRepository) UpdateContractLink(ctx context.Context, model *Opportunity, expectedVersion uint64) error {
+	result := database.FromContext(ctx, r.db).Model(&Opportunity{}).
+		Where("id = ? AND tenant_id = ? AND contract_sync_version = ? AND deleted_at IS NULL", model.ID, model.TenantID, expectedVersion).
+		Updates(map[string]any{"contract_id": model.ContractID, "contract_intake_id": model.ContractIntakeID, "contract_link_status": model.ContractLinkStatus, "contract_linked_at": model.ContractLinkedAt, "contract_sync_version": model.ContractSyncVersion, "contract_link_event_id": model.ContractLinkEventID, "updated_by": model.UpdatedBy, "version": gorm.Expr("version + 1")})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return ErrVersionConflict
+	}
+	model.Version++
 	return nil
 }
 
@@ -622,5 +637,5 @@ func toResponse(model *Opportunity) Response {
 		value := model.EndDate.Format("2006-01-02")
 		endDate = &value
 	}
-	return Response{ID: model.ID, OpportunityNo: model.OpportunityNo, Name: model.Name, CustomerID: model.CustomerID, Type: model.Type, Source: model.Source, ExpectedAmount: model.ExpectedAmount.StringFixed(2), ExpectedSignDate: model.ExpectedSignDate.Format("2006-01-02"), RequirementSummary: model.RequirementSummary, SystemCount: model.SystemCount, PainPoints: model.PainPoints, CompetitorInfo: model.CompetitorInfo, OwnerUserID: model.OwnerUserID, OwnerOrgID: model.OwnerOrgID, CurrentStage: model.CurrentStage, Status: model.Status, ContractRef: model.ContractRef, LostReason: model.LostReason, TerminalPendingType: model.TerminalPendingType, StageChangedAt: model.StageChangedAt, EndDate: endDate, StatusBeforeVoid: model.StatusBeforeVoid, Version: model.Version, CreatedAt: model.CreatedAt, UpdatedAt: model.UpdatedAt}
+	return Response{ID: model.ID, OpportunityNo: model.OpportunityNo, Name: model.Name, CustomerID: model.CustomerID, Type: model.Type, Source: model.Source, ExpectedAmount: model.ExpectedAmount.StringFixed(2), ExpectedSignDate: model.ExpectedSignDate.Format("2006-01-02"), RequirementSummary: model.RequirementSummary, SystemCount: model.SystemCount, PainPoints: model.PainPoints, CompetitorInfo: model.CompetitorInfo, OwnerUserID: model.OwnerUserID, OwnerOrgID: model.OwnerOrgID, CurrentStage: model.CurrentStage, Status: model.Status, ContractRef: model.ContractRef, ContractID: model.ContractID, ContractIntakeID: model.ContractIntakeID, ContractLinkStatus: model.ContractLinkStatus, ContractLinkedAt: model.ContractLinkedAt, ContractSyncVersion: model.ContractSyncVersion, LostReason: model.LostReason, TerminalPendingType: model.TerminalPendingType, StageChangedAt: model.StageChangedAt, EndDate: endDate, StatusBeforeVoid: model.StatusBeforeVoid, Version: model.Version, CreatedAt: model.CreatedAt, UpdatedAt: model.UpdatedAt}
 }

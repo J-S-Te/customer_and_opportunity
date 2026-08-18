@@ -47,6 +47,12 @@ type Opportunity struct {
 	CurrentStage            string          `gorm:"size:32;not null;index"`
 	Status                  string          `gorm:"column:opp_status;size:32;not null;index"`
 	ContractRef             *string         `gorm:"size:64"`
+	ContractID              *string         `gorm:"size:26"`
+	ContractIntakeID        *string         `gorm:"size:64"`
+	ContractLinkStatus      string          `gorm:"size:32;not null"`
+	ContractLinkedAt        *time.Time      `gorm:"precision:3"`
+	ContractSyncVersion     uint64          `gorm:"not null"`
+	ContractLinkEventID     *string         `gorm:"size:128"`
 	LostReason              *string         `gorm:"size:64"`
 	TerminalPendingType     string          `gorm:"size:32;not null"`
 	StageChangedAt          time.Time       `gorm:"precision:3;not null"`

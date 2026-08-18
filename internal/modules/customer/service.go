@@ -95,6 +95,13 @@ func (s *Service) Create(ctx context.Context, request CreateRequest) (*Response,
 	}
 	request = inheritCreateOwner(normalizeCreateRequest(request), principal)
 	if s.owners != nil {
+		if request.OwnerOrgID == "" {
+			page, listErr := s.owners.List(ctx, ownerdirectory.Query{UserID: request.OwnerUserID, Page: 1, PageSize: 1})
+			if listErr != nil {
+				return nil, listErr
+			}
+			request.OwnerOrgID = ownerdirectory.PrimaryOrganization(page, request.OwnerUserID)
+		}
 		if err = s.owners.Validate(ctx, request.OwnerUserID, request.OwnerOrgID); err != nil {
 			return nil, err
 		}
