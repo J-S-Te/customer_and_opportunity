@@ -5,8 +5,8 @@ import "time"
 type CreateRequest struct {
 	Name               string `json:"name" binding:"required,max=200"`
 	CustomerID         uint64 `json:"customer_id" binding:"required"`
-	Type               string `json:"type" binding:"required,max=64"`
-	Source             string `json:"source" binding:"required,max=64"`
+	Type               string `json:"type" binding:"required,max=2000"`
+	Source             string `json:"source" binding:"required,max=2000"`
 	ExpectedAmount     string `json:"expected_amount" binding:"required"`
 	ExpectedSignDate   string `json:"expected_sign_date" binding:"required"`
 	RequirementSummary string `json:"requirement_summary" binding:"required"`
@@ -23,8 +23,8 @@ type CreateRequest struct {
 // 以应用更严格的权限、状态机与并发校验。
 type UpdateRequest struct {
 	Name               string `json:"name" binding:"required,max=200"`
-	Type               string `json:"type" binding:"required,max=64"`
-	Source             string `json:"source" binding:"required,max=64"`
+	Type               string `json:"type" binding:"required,max=2000"`
+	Source             string `json:"source" binding:"required,max=2000"`
 	ExpectedAmount     string `json:"expected_amount" binding:"required"`
 	ExpectedSignDate   string `json:"expected_sign_date" binding:"required"`
 	RequirementSummary string `json:"requirement_summary" binding:"required,max=10000"`

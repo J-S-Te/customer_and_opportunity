@@ -1,0 +1,3 @@
+ALTER TABLE crm_opportunities
+  MODIFY COLUMN type TEXT NOT NULL,
+  MODIFY COLUMN source TEXT NOT NULL;

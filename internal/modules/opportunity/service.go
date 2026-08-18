@@ -263,7 +263,7 @@ func (s *Service) Create(ctx context.Context, input CreateRequest) (*Response, e
 	if err != nil {
 		return nil, err
 	}
-	model := &Opportunity{Name: input.Name, CustomerID: input.CustomerID, Type: input.Type, Source: input.Source, ExpectedAmount: amount, ExpectedSignDate: signDate, RequirementSummary: input.RequirementSummary, SystemCount: input.SystemCount, PainPoints: input.PainPoints, CompetitorInfo: input.CompetitorInfo, OwnerUserID: input.OwnerUserID, OwnerOrgID: input.OwnerOrgID, CurrentStage: StageInitial, Status: StatusFollowing, TerminalPendingType: PendingNone, StageChangedAt: s.now()}
+	model := &Opportunity{Name: input.Name, CustomerID: input.CustomerID, Type: input.Type, Source: input.Source, ExpectedAmount: amount, ExpectedSignDate: signDate, RequirementSummary: input.RequirementSummary, SystemCount: input.SystemCount, PainPoints: input.PainPoints, CompetitorInfo: input.CompetitorInfo, OwnerUserID: input.OwnerUserID, OwnerOrgID: input.OwnerOrgID, CurrentStage: StageInitial, Status: StatusFollowing, ContractLinkStatus: "PENDING", TerminalPendingType: PendingNone, StageChangedAt: s.now()}
 	model.TenantID, model.CreatedBy, model.UpdatedBy, model.Version = principal.TenantID, principal.UserID, principal.UserID, 1
 	err = s.runCreateTransaction(ctx, func(txCtx context.Context) error {
 		// 先证明客户授权范围，再查询重放记录，避免调用方通过猜测幂等键探测已停用或范围外客户。

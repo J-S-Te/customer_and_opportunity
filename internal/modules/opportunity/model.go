@@ -34,8 +34,8 @@ type Opportunity struct {
 	OpportunityNo           string          `gorm:"size:32;not null;uniqueIndex:uk_opportunity_no,priority:2"`
 	Name                    string          `gorm:"size:200;not null"`
 	CustomerID              uint64          `gorm:"not null;index"`
-	Type                    string          `gorm:"size:64;not null"`
-	Source                  string          `gorm:"size:64;not null"`
+	Type                    string          `gorm:"type:text;not null"`
+	Source                  string          `gorm:"type:text;not null"`
 	ExpectedAmount          decimal.Decimal `gorm:"type:decimal(18,2);not null"`
 	ExpectedSignDate        time.Time       `gorm:"type:date;not null"`
 	RequirementSummary      string          `gorm:"type:text;not null"`
