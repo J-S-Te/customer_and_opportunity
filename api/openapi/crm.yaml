@@ -132,6 +132,8 @@ paths:
     put: {$ref: '#/components/x-operations/completeOpportunityTerminalTodo'}
   /api/v1/opportunities/{id}/contract-transfer:
     post: {$ref: '#/components/x-operations/transferOpportunityContract'}
+  /api/v1/internal/opportunities/{id}/contract-link:
+    post: {$ref: '#/components/x-operations/receiveOpportunityContractLink'}
   /api/v1/opportunities/{id}/attachment-capabilities:
     get: {$ref: '#/components/x-operations/getOpportunityAttachmentCapabilities'}
   /api/v1/opportunities/{id}/attachments:
@@ -558,6 +560,7 @@ components:
     launchBid: {<<: *opportunityIDRead, operationId: launchBid, x-permission: opportunity.update, description: Returns 503 unless the signed short-lived launch adapter is configured.}
     completeOpportunityTerminalTodo: {<<: *opportunityIDRead, operationId: completeOpportunityTerminalTodo, x-permission: opportunity.stage.change}
     transferOpportunityContract: {<<: *opportunityIDRead, operationId: transferOpportunityContract, x-permission: opportunity.contract.transfer, parameters: [{$ref: '#/components/parameters/OpportunityID'}, {$ref: '#/components/parameters/IdempotencyKey'}]}
+    receiveOpportunityContractLink: {<<: *opportunityIDRead, operationId: receiveOpportunityContractLink, x-permission: opportunity.signed.write, parameters: [{$ref: '#/components/parameters/OpportunityID'}, {$ref: '#/components/parameters/IdempotencyKey'}]}
     getOpportunityAttachmentCapabilities: {<<: *opportunityIDRead, operationId: getOpportunityAttachmentCapabilities, x-permission: opportunity.attachment.read}
     listOpportunityAttachments: {<<: *opportunityIDRead, operationId: listOpportunityAttachments, x-permission: opportunity.attachment.read}
     createOpportunityAttachment: {<<: *opportunityIDRead, operationId: createOpportunityAttachment, x-permission: opportunity.attachment.upload, parameters: [{$ref: '#/components/parameters/OpportunityID'}, {$ref: '#/components/parameters/IdempotencyKey'}], description: Creates a bounded upload session backed by isolated local storage or a configured external object store.}

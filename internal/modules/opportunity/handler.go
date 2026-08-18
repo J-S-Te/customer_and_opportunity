@@ -6,6 +6,7 @@ import (
 	"mime"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -658,6 +659,32 @@ func (h *Handler) ContractTransfer(c *gin.Context) {
 		return
 	}
 	response.OK(c, result)
+}
+
+func (h *Handler) ContractLinkCallback(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil || id == 0 {
+		response.Error(c, apperror.New(400, "COMMON_INVALID_ARGUMENT", "invalid request"))
+		return
+	}
+	var input ContractLinkRequest
+	if err = requestbody.DecodeJSON(c, &input); err != nil {
+		response.Error(c, invalidJSON())
+		return
+	}
+	// The event ID is the durable business idempotency coordinate. Requiring
+	// the transport key to carry the same value prevents a proxy or caller from
+	// accidentally replaying a different payload under an unrelated key.
+	if key := strings.TrimSpace(c.GetHeader("Idempotency-Key")); key == "" || key != strings.TrimSpace(input.EventID) {
+		response.Error(c, apperror.New(422, "CRM_CONTRACT_LINK_INVALID", "Idempotency-Key must match event_id"))
+		return
+	}
+	value, err := h.service.ContractLinkCallback(c.Request.Context(), id, input)
+	if err != nil {
+		response.Error(c, err)
+		return
+	}
+	response.OK(c, value)
 }
 
 func parseIDPage(c *gin.Context) (uint64, int, int, error) {

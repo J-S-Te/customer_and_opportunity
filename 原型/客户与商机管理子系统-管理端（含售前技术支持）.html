@@ -449,6 +449,7 @@ let currentView = '全部';        // TS-01 视图（Q4）
 let listMode = 'kanban';        // TS-01 看板/列表
 let lastSync = '08:00';          // 人员池最近同步
 let createOppId = null;          // 从商机详情发起时预填商机
+let customerSearchQuery = '';
 
 const ROLE_USER = { '销售':'陈浩然', '实施工程师':'王建国', '销售总监':'刘明', '团队负责人':'李婷芳', '技术负责人':'孙志强' };
 const MANAGER_ROLES = ['销售总监','团队负责人','技术负责人'];
@@ -457,6 +458,7 @@ function statusCls(s){ return ({'待审批':'badge-info','已审批待指派':'b
 
 // ==================== NAVIGATION ====================
 function navigate(page, opts){
+  hideToast();
   currentPage = page;
   if(opts){
     if(opts.taskId) currentTaskId = opts.taskId;
@@ -532,7 +534,10 @@ function renderAdminPage() {
     'opp-detail': ['风险评估与渗透测试','← 返回商机看板',null]
   };
 
-  const t = titles[currentPage] || ['','',''];
+  const currentOpp = currentPage === 'opp-detail' ? (getCurrentOpp() || {}) : null;
+  const t = currentPage === 'opp-detail'
+    ? [currentOpp.name || '商机详情','← 返回商机看板',null]
+    : (titles[currentPage] || ['','','']);
 
   const isDetail = currentPage.endsWith('-detail');
   let backTarget = currentPage === 'customer-detail' ? 'customers'
@@ -545,7 +550,7 @@ function renderAdminPage() {
 
   let statusBadges = '';
   if (currentPage === 'customer-detail') statusBadges = '<span class="badge badge-success">成交</span>';
-  else if (currentPage === 'opp-detail') statusBadges = '<span class="badge badge-info">需求沟通</span>';
+  else if (currentPage === 'opp-detail' && currentOpp) { statusBadges = `<span class="badge badge-info">${currentOpp.stage}</span>`; }
 
   if (isDetail) {
     header.innerHTML = `
@@ -560,7 +565,7 @@ function renderAdminPage() {
       <span class="header-title">${t[0]}</span>
       <span class="header-breadcrumb">${t[1]}</span>
       <div class="header-spacer"></div>
-      ${t[2] ? `<button class="btn btn-primary">${t[2]}</button>` : ''}
+      ${t[2] ? `<button class="btn btn-primary" ${currentPage==='customers' ? 'onclick="openCustomerModal()"' : ''}>${t[2]}</button>` : ''}
     `;
   }
 
@@ -611,7 +616,24 @@ function renderPresaleArea(header, content){
 // ==================== HELPERS ====================
 function getTask(id){ return store.tasks.find(t=>t.taskId===id); }
 function getOpp(id){ return store.opportunities.find(o=>o.id===id); }
-function showToast(msg){ const t=document.getElementById('toast'); t.textContent=msg; t.classList.add('show'); setTimeout(()=>t.classList.remove('show'),2200); }
+function getCurrentOpp(){ return getOpp(currentOppId) || store.opportunities[0] || null; }
+let toastTimer = null;
+function hideToast(){
+  const t = document.getElementById('toast');
+  if(!t) return;
+  clearTimeout(toastTimer);
+  t.textContent = '';
+  t.classList.remove('show');
+  toastTimer = null;
+}
+function showToast(msg){
+  const t=document.getElementById('toast');
+  if(!t) return;
+  clearTimeout(toastTimer);
+  t.textContent=msg;
+  t.classList.add('show');
+  toastTimer=setTimeout(()=>{ t.classList.remove('show'); t.textContent=''; toastTimer=null; },2200);
+}
 
 // Q4 视图收敛：按角色确定可见的视图标签
 function availableTabs(){
@@ -919,6 +941,8 @@ function assignTask(taskId, personId){
 
 // ==================== 宿主页面：客户列表 ====================
 function renderCustomerList() {
+  const query = customerSearchQuery.trim().toLowerCase();
+  const customers = query ? store.customers.filter(c => [c.id,c.name,c.type,c.industry,c.status].some(v => String(v || '').toLowerCase().includes(query))) : store.customers;
   return `
     <div class="stat-cards">
       <div class="stat-card"><div class="stat-label">全部客户</div><div class="stat-value">248</div><span class="stat-trend up">↑ +12%</span></div>
@@ -927,12 +951,12 @@ function renderCustomerList() {
       <div class="stat-card"><div class="stat-label">待跟进</div><div class="stat-value">23</div></div>
     </div>
     <div class="filter-bar">
-      <div class="filter-input"><div style="width:16px;height:16px;background:#94A3B8;border-radius:3px;"></div><input placeholder="搜索客户名称、编号..."></div>
+      <div class="filter-input"><div style="width:16px;height:16px;background:#94A3B8;border-radius:3px;"></div><input id="customerSearch" value="${customerSearchQuery}" placeholder="搜索客户名称、编号..." onkeydown="if(event.key==='Enter') applyCustomerSearch()"></div>
       <div class="filter-select">客户类型<span class="arrow"></span></div>
       <div class="filter-select">行业<span class="arrow"></span></div>
       <div class="filter-select">状态<span class="arrow"></span></div>
       <div style="flex:1"></div>
-      <button class="btn btn-primary btn-sm">搜索</button>
+      <button class="btn btn-primary btn-sm" onclick="applyCustomerSearch()">搜索</button>
     </div>
     <div class="table-wrap">
       <div class="table-header">
@@ -944,7 +968,7 @@ function renderCustomerList() {
         <div class="tc" style="width:120px">最近跟进</div>
         <div class="tc" style="width:110px">操作</div>
       </div>
-      ${store.customers.map((c,i) => {
+      ${customers.length ? customers.map((c,i) => {
         const cls = i%2 ? 'alt' : '';
         const statusBadge = { '成交':'badge-success','在跟':'badge-info','潜在':'badge-gray','流失':'badge-danger' };
         return `
@@ -960,10 +984,52 @@ function renderCustomerList() {
             <span style="color:var(--text-muted);cursor:pointer">编辑</span>
           </div>
         </div>`;
-      }).join('')}
-      <div class="pagination">共 248 条记录，第 1/25 页</div>
+      }).join('') : '<div class="empty">未找到匹配的客户</div>'}
+      <div class="pagination">共 ${customers.length} 条记录${query ? `，筛选条件：${customerSearchQuery}` : '，第 1/25 页'}</div>
     </div>
   `;
+}
+
+function applyCustomerSearch(){
+  customerSearchQuery = document.getElementById('customerSearch')?.value || '';
+  renderAdminPage();
+}
+
+function openCustomerModal(){
+  closeModal('customerModal');
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.id = 'customerModal';
+  overlay.innerHTML = `
+    <div class="modal-box">
+      <div class="modal-head"><span>新建客户</span><span style="cursor:pointer;color:var(--text-muted)" onclick="closeModal('customerModal')">✕</span></div>
+      <div class="modal-body">
+        <div class="form-group"><label>客户名称 <span class="req-star">*</span></label><input class="modal-input" id="newCustomerName" placeholder="请输入客户全称"></div>
+        <div class="form-row">
+          <div class="form-group"><label>客户类型 <span class="req-star">*</span></label><select class="modal-select" id="newCustomerType"><option>业主</option><option>三方</option><option>政府</option><option>事业单位</option></select></div>
+          <div class="form-group"><label>所属行业 <span class="req-star">*</span></label><input class="modal-input" id="newCustomerIndustry" placeholder="请输入所属行业"></div>
+        </div>
+        <div class="field-error" id="newCustomerErr"></div>
+      </div>
+      <div class="modal-foot"><button class="btn btn-secondary btn-sm" onclick="closeModal('customerModal')">取消</button><button class="btn btn-primary btn-sm" onclick="submitCustomer()">保存客户</button></div>
+    </div>`;
+  document.body.appendChild(overlay);
+  document.getElementById('newCustomerName').focus();
+}
+
+function submitCustomer(){
+  const name = document.getElementById('newCustomerName')?.value.trim() || '';
+  const industry = document.getElementById('newCustomerIndustry')?.value.trim() || '';
+  const err = document.getElementById('newCustomerErr');
+  if(!name || !industry){ err.textContent='请填写客户名称和所属行业'; err.classList.add('show'); return; }
+  if(store.customers.some(c => c.name === name)){ err.textContent='客户名称已存在，请先执行查重'; err.classList.add('show'); return; }
+  const d = new Date();
+  const date = `${d.getFullYear()}${String(d.getMonth()+1).padStart(2,'0')}${String(d.getDate()).padStart(2,'0')}`;
+  const id = `KH${date}${String(store.customers.length + 1).padStart(4,'0')}`;
+  store.customers.unshift({id, name, type:document.getElementById('newCustomerType').value, industry, scale:'未填写', status:'潜在', addr:'', uscc:'', biz:'', needs:'', followDate:'—'});
+  closeModal('customerModal');
+  renderAdminPage();
+  showToast(`客户已创建：${id}`);
 }
 
 // ==================== 宿主页面：商机看板 ====================
@@ -1276,7 +1342,8 @@ function fmtRemain(ms){
 
 // ==================== 宿主页面：商机详情（已增强 P-06 售前关联区） ====================
 function renderOppDetail() {
-  const o = store.opportunities.find(x => x.id === currentOppId) || store.opportunities[0];
+  const o = getCurrentOpp();
+  if(!o) return '<div class="empty">暂无商机数据</div>';
   const stages = ['初步接触','需求沟通','方案制定','报价','投标','已签约','失败'];
   const curStage = Math.max(0, stages.indexOf(o.stage));
   const termColor = { '已签约':'#059669', '失败':'#DC2626' };
@@ -1393,8 +1460,9 @@ function queryContractsMock(customerId){
 let stageModalState = { target:null, contractId:null };
 
 function openStageModal(){
-  const o = getOpp(currentOppId);
-  if(!o) return;
+  const o = getCurrentOpp();
+  if(!o){ toast('暂无可调整的商机'); return; }
+  currentOppId = o.id;
   stageModalState = { target:null, contractId:null };
   const cur = o.stage;
   const pills = ALL_STAGES.map(s=>{
@@ -1436,7 +1504,7 @@ function pickStage(s){
   const err = document.getElementById('stageErr');
   err.classList.remove('show');
   if(s==='已签约'){
-    const o = getOpp(currentOppId);
+    const o = getCurrentOpp();
     const cust = findCustomer(o);
     const list = queryContractsMock(cust?cust.id:'');
     const items = list.length ? list.map(c=>`
@@ -1469,9 +1537,10 @@ function pickContract(cid, cname){
 }
 
 function confirmStageAdvance(){
-  const o = getOpp(currentOppId);
-  const target = stageModalState.target;
   const err = document.getElementById('stageErr');
+  const o = getCurrentOpp();
+  if(!o){ err.textContent='暂无可调整的商机'; err.classList.add('show'); return; }
+  const target = stageModalState.target;
   if(!target){ err.textContent='请选择目标阶段'; err.classList.add('show'); return; }
   if(target===o.stage){ err.textContent='目标阶段不能与当前阶段相同'; err.classList.add('show'); return; }
   if(target==='已签约'){

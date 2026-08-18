@@ -240,6 +240,13 @@ func (s *Service) Create(ctx context.Context, input CreateRequest) (*Response, e
 	input = inheritCreateOwner(normalizeCreateRequest(input), principal)
 	input.IdempotencyKey = key
 	if s.owners != nil {
+		if input.OwnerOrgID == "" {
+			page, listErr := s.owners.List(ctx, ownerdirectory.Query{UserID: input.OwnerUserID, Page: 1, PageSize: 1})
+			if listErr != nil {
+				return nil, listErr
+			}
+			input.OwnerOrgID = ownerdirectory.PrimaryOrganization(page, input.OwnerUserID)
+		}
 		if err = s.owners.Validate(ctx, input.OwnerUserID, input.OwnerOrgID); err != nil {
 			return nil, err
 		}
@@ -1106,6 +1113,93 @@ func (s *Service) ContractTransfer(ctx context.Context, id uint64, input Contrac
 	}
 	return &responseValue, nil
 }
+
+// ContractLinkCallback 原子接收合同系统的最终关联投影。幂等记录和商机更新
+// 共用同一事务，合同系统重试不会重复推进商机版本。
+func (s *Service) ContractLinkCallback(ctx context.Context, id uint64, input ContractLinkRequest) (*Response, error) {
+	principal, err := requirePrincipal(ctx)
+	if err != nil {
+		return nil, err
+	}
+	// Normalize before hashing so harmless transport whitespace does not turn a
+	// retry into a false idempotency conflict.
+	input.EventID = strings.TrimSpace(input.EventID)
+	input.IntakeID = strings.TrimSpace(input.IntakeID)
+	input.ContractID = strings.TrimSpace(input.ContractID)
+	input.ContractNumber = strings.TrimSpace(input.ContractNumber)
+	input.Status = strings.TrimSpace(input.Status)
+	if input.EventID == "" || input.IntakeID == "" || input.ContractNumber == "" || input.SyncVersion == 0 {
+		return nil, apperror.New(422, "CRM_CONTRACT_LINK_INVALID", "contract link callback is invalid")
+	}
+	if input.Status != "LINK_CONFIRMED" && input.Status != "LINK_EXCEPTION" {
+		return nil, apperror.New(422, "CRM_CONTRACT_LINK_INVALID", "contract link status is invalid")
+	}
+	if input.Status == "LINK_CONFIRMED" && !validCanonicalULID(input.ContractID) {
+		return nil, apperror.New(422, "CRM_CONTRACT_LINK_INVALID", "confirmed contract id is invalid")
+	}
+	if input.Status == "LINK_CONFIRMED" && input.LinkedAt == nil {
+		return nil, apperror.New(422, "CRM_CONTRACT_LINK_INVALID", "confirmed linked_at is required")
+	}
+	hashBytes := sha256.Sum256(mustJSON(input))
+	requestHash := hex.EncodeToString(hashBytes[:])
+	var result Response
+	err = database.WithTransaction(ctx, s.db, func(txCtx context.Context) error {
+		// Lock the aggregate before reading the replay ledger. This matters under
+		// MySQL REPEATABLE READ: two identical callbacks must not both observe an
+		// empty snapshot and race into a duplicate-key error on the ledger insert.
+		model, findErr := s.repo.FindByIDForUpdate(txCtx, principal, id)
+		if findErr != nil {
+			return findErr
+		}
+		prior, findErr := s.repo.FindChangeIdempotencyForUpdate(txCtx, principal.TenantID, id, "CONTRACT_LINK_CALLBACK", principal.UserID, input.EventID)
+		if findErr != nil {
+			return findErr
+		}
+		if prior != nil {
+			if prior.RequestHash != requestHash {
+				return ErrIdempotencyConflict
+			}
+			if err := json.Unmarshal(prior.ResponseJSON, &result); err != nil {
+				return ErrIdempotencyConflict
+			}
+			return nil
+		}
+		if model.ContractRef == nil || strings.TrimSpace(*model.ContractRef) != strings.TrimSpace(input.ContractNumber) {
+			return apperror.New(409, "CRM_CONTRACT_LINK_REFERENCE_MISMATCH", "contract number does not match opportunity contract reference")
+		}
+		if input.SyncVersion <= model.ContractSyncVersion {
+			return apperror.New(409, "CRM_CONTRACT_LINK_STALE", "contract link callback is stale")
+		}
+		model.ContractIntakeID = stringPtr(strings.TrimSpace(input.IntakeID))
+		model.ContractLinkStatus = input.Status
+		model.ContractSyncVersion = input.SyncVersion
+		model.ContractLinkEventID = stringPtr(strings.TrimSpace(input.EventID))
+		if input.Status == "LINK_CONFIRMED" {
+			model.ContractID = stringPtr(strings.TrimSpace(input.ContractID))
+			model.ContractLinkedAt = input.LinkedAt
+		} else {
+			model.ContractID = nil
+			model.ContractLinkedAt = nil
+		}
+		model.UpdatedBy = principal.UserID
+		if err = s.repo.UpdateContractLink(txCtx, model, model.ContractSyncVersion-1); err != nil {
+			return err
+		}
+		result = toResponse(model)
+		encoded, encodeErr := json.Marshal(result)
+		if encodeErr != nil {
+			return encodeErr
+		}
+		return s.repo.CreateChangeIdempotency(txCtx, &ChangeIdempotency{TenantID: principal.TenantID, OpportunityID: id, Operation: "CONTRACT_LINK_CALLBACK", ActorID: principal.UserID, Key: input.EventID, RequestHash: requestHash, ResponseJSON: encoded, CreatedAt: s.now()})
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+func mustJSON(value any) []byte      { encoded, _ := json.Marshal(value); return encoded }
+func stringPtr(value string) *string { return &value }
 
 func contractTransferEventID(tenantID string, opportunityID, eventVersion uint64) string {
 	sum := sha256.Sum256([]byte(tenantID + "\x00" + uintString(opportunityID) + "\x00" + uintString(eventVersion) + "\x00OPPORTUNITY_SIGNED"))
