@@ -62,7 +62,7 @@ func NewService(repo repository, oidc oidcClient, encryptionKey []byte, options 
 
 type LoginStart struct{ AuthorizationURL string }
 
-func (s *Service) BeginLogin(ctx context.Context, returnPath string) (LoginStart, error) {
+func (s *Service) BeginLogin(ctx context.Context, returnPath string, forceLogin ...bool) (LoginStart, error) {
 	// return_to 最终会进入重定向响应，只允许站内绝对路径，阻断开放重定向和响应头注入。
 	if !safeReturnPath(returnPath) {
 		returnPath = "/"
@@ -88,6 +88,9 @@ func (s *Service) BeginLogin(ctx context.Context, returnPath string) (LoginStart
 	// state 原文仅返回浏览器；服务端保存摘要并加密其余秘密，回调消费后立即删除。
 	if err := s.repo.SaveLogin(ctx, &LoginTransaction{StateHash: tokenHash(state), TenantID: s.options.TenantID, NonceCipher: nonceCipher, CodeVerifierCipher: verifierCipher, ReturnPath: returnPath, ExpiresAt: now.Add(loginTTL), CreatedAt: now}); err != nil {
 		return LoginStart{}, err
+	}
+	if forced, ok := s.oidc.(forcedLoginOIDCClient); ok && len(forceLogin) > 0 && forceLogin[0] {
+		return LoginStart{AuthorizationURL: forced.AuthorizationURLWithPrompt(state, nonce, verifier, true)}, nil
 	}
 	return LoginStart{AuthorizationURL: s.oidc.AuthorizationURL(state, nonce, verifier)}, nil
 }

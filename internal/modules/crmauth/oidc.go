@@ -43,6 +43,10 @@ type oidcClient interface {
 	UserInfo(context.Context, string) (verifiedClaims, error)
 }
 
+type forcedLoginOIDCClient interface {
+	AuthorizationURLWithPrompt(state, nonce, verifier string, forceLogin bool) string
+}
+
 type platformClaims struct {
 	Subject           string `json:"sub"`
 	IdentityID        string `json:"identity_id"`
@@ -131,7 +135,14 @@ func discoverEndSessionEndpoint(provider *oidc.Provider, issuer string) (string,
 }
 
 func (c *platformOIDCClient) AuthorizationURL(state, nonce, verifier string) string {
+	return c.AuthorizationURLWithPrompt(state, nonce, verifier, false)
+}
+
+func (c *platformOIDCClient) AuthorizationURLWithPrompt(state, nonce, verifier string, forceLogin bool) string {
 	options := []oauth2.AuthCodeOption{oidc.Nonce(nonce), oauth2.S256ChallengeOption(verifier)}
+	if forceLogin {
+		options = append(options, oauth2.SetAuthURLParam("prompt", "login"))
+	}
 	if c.identityProviderHint != "" {
 		// Keycloak 的 kc_idp_hint 会直接把认证请求交给基础平台 Broker。
 		// 门户已有基础平台会话时，整个往返无需展示 Keycloak 登录或账号补充页面。

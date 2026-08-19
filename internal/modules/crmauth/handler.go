@@ -30,7 +30,7 @@ func NewHandler(service *Service, options HTTPOptions) *Handler {
 }
 
 func (h *Handler) Login(c *gin.Context) {
-	result, err := h.service.BeginLogin(c.Request.Context(), c.Query("return_to"))
+	result, err := h.service.BeginLogin(c.Request.Context(), c.Query("return_to"), strings.EqualFold(strings.TrimSpace(c.Query("prompt")), "login"))
 	if err != nil {
 		response.Error(c, err)
 		return
@@ -102,6 +102,15 @@ func (h *Handler) Logout(c *gin.Context) {
 	c.Redirect(http.StatusFound, strings.TrimRight(h.options.PathPrefix, "/")+"/")
 }
 
+func (h *Handler) LocalLogout(c *gin.Context) {
+	if cookie, err := c.Request.Cookie(h.options.CookieName); err == nil {
+		h.service.Logout(c.Request.Context(), cookie.Value)
+	}
+	h.setExpiredCookie(c)
+	c.Header("Cache-Control", "no-store")
+	c.Status(http.StatusNoContent)
+}
+
 func validSameOriginRedirect(candidate, publicOrigin string) bool {
 	redirect, err := url.ParseRequestURI(strings.TrimSpace(candidate))
 	origin, originErr := url.ParseRequestURI(strings.TrimSpace(publicOrigin))
@@ -127,6 +136,10 @@ func (h *Handler) RequireSameOrigin(c *gin.Context) {
 
 func (h *Handler) setCookie(c *gin.Context, value string, expires time.Time) {
 	http.SetCookie(c.Writer, &http.Cookie{Name: h.options.CookieName, Value: value, Path: h.cookiePath(), Expires: expires, HttpOnly: true, Secure: h.options.CookieSecure, SameSite: http.SameSiteLaxMode})
+}
+
+func (h *Handler) setExpiredCookie(c *gin.Context) {
+	http.SetCookie(c.Writer, &http.Cookie{Name: h.options.CookieName, Value: "", Path: h.cookiePath(), Expires: timeUnixOne, MaxAge: -1, HttpOnly: true, Secure: h.options.CookieSecure, SameSite: http.SameSiteLaxMode})
 }
 
 func (h *Handler) cookiePath() string {
