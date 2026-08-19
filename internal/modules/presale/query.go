@@ -2,6 +2,8 @@ package presale
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"strings"
 	"time"
 )
@@ -253,14 +255,41 @@ func (s *Service) RequestDetail(ctx context.Context, actor Actor, id uint64) (Re
 	if err != nil {
 		return RequestDetailView{}, err
 	}
+	instance, err := s.repo.FindApprovalInstance(ctx, actor.TenantID, id)
+	if err != nil && !errors.Is(err, ErrNotFound) {
+		return RequestDetailView{}, err
+	}
+	view := requestView(requestValue)
+	view.AssignmentAction, view.AssignmentRoleCode = assignmentActionForInstance(instance, actor)
 	return RequestDetailView{
-		Request: requestView(requestValue), CurrentAssignees: assignees,
+		Request: view, CurrentAssignees: assignees,
 		TotalWorkHours: aggregate.TotalWorkHours, PushExceptionCount: aggregate.PushExceptionCount,
 		Overdue:    isOverdue(requestValue.Status, requestValue.ExpectedEnd, s.clock.Now()),
 		AlertLevel: alertAggregate.Level, AlertDueAt: alertAggregate.DueAt, AlertBasisAt: alertAggregate.BasisAt,
 		AvailableActions:    localAvailableActions(actor, requestValue.Status, requestValue.ApplicantID, assignees),
 		CanViewContactPhone: canViewContactPhone,
 	}, nil
+}
+
+func assignmentActionForInstance(instance *ApprovalInstance, actor Actor) (ApprovalNodeType, string) {
+	if instance == nil || len(instance.NodesJSON) == 0 {
+		return "", ""
+	}
+	var nodes []ApprovalNode
+	if json.Unmarshal(instance.NodesJSON, &nodes) != nil {
+		return "", ""
+	}
+	for roleCode := range actor.Roles {
+		if action, ok := AssignmentActionForRole(nodes, roleCode); ok {
+			return action, strings.TrimSpace(roleCode)
+		}
+	}
+	for _, node := range nodes {
+		if node.Type == ApprovalNodeDepartment || node.Type == ApprovalNodePerson {
+			return node.Type, strings.TrimSpace(node.RoleCode)
+		}
+	}
+	return "", ""
 }
 
 // 工时列表先校验父申请，再返回显式 DTO，避免子资源接口成为绕过申请范围的入口。

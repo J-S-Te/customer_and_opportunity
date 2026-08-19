@@ -161,27 +161,29 @@ type OpportunitySnapshot struct {
 // RequestView 是面向接口的显式投影，避免直接序列化 GORM 模型而泄露联系人密文、
 // 幂等键或请求摘要等内部字段。
 type RequestView struct {
-	ID                    uint64        `json:"id"`
-	RequestNo             string        `json:"request_no"`
-	OpportunityID         uint64        `json:"opportunity_id"`
-	OpportunityNo         string        `json:"opportunity_no"`
-	ApplicantID           string        `json:"applicant_id"`
-	ApplicantName         string        `json:"applicant_name"`
-	Venue                 Venue         `json:"venue"`
-	ServiceAddress        string        `json:"service_address,omitempty"`
-	ContactName           string        `json:"contact_name"`
-	ContactPhoneMasked    string        `json:"contact_phone"`
-	Description           string        `json:"description"`
-	ExpectedStart         time.Time     `json:"expected_start"`
-	ExpectedEnd           time.Time     `json:"expected_end"`
-	Urgency               Urgency       `json:"urgency"`
-	Status                RequestStatus `json:"status"`
-	CurrentApprovalNode   uint8         `json:"current_approval_node"`
-	ExecutionDepartmentID string        `json:"execution_department_id,omitempty"`
-	ExecutionDepartment   string        `json:"execution_department,omitempty"`
-	Version               uint64        `json:"version"`
-	CreatedAt             time.Time     `json:"created_at"`
-	UpdatedAt             time.Time     `json:"updated_at"`
+	ID                    uint64           `json:"id"`
+	RequestNo             string           `json:"request_no"`
+	OpportunityID         uint64           `json:"opportunity_id"`
+	OpportunityNo         string           `json:"opportunity_no"`
+	ApplicantID           string           `json:"applicant_id"`
+	ApplicantName         string           `json:"applicant_name"`
+	Venue                 Venue            `json:"venue"`
+	ServiceAddress        string           `json:"service_address,omitempty"`
+	ContactName           string           `json:"contact_name"`
+	ContactPhoneMasked    string           `json:"contact_phone"`
+	Description           string           `json:"description"`
+	ExpectedStart         time.Time        `json:"expected_start"`
+	ExpectedEnd           time.Time        `json:"expected_end"`
+	Urgency               Urgency          `json:"urgency"`
+	Status                RequestStatus    `json:"status"`
+	CurrentApprovalNode   uint8            `json:"current_approval_node"`
+	AssignmentAction      ApprovalNodeType `json:"assignment_action,omitempty"`
+	AssignmentRoleCode    string           `json:"assignment_role_code,omitempty"`
+	ExecutionDepartmentID string           `json:"execution_department_id,omitempty"`
+	ExecutionDepartment   string           `json:"execution_department,omitempty"`
+	Version               uint64           `json:"version"`
+	CreatedAt             time.Time        `json:"created_at"`
+	UpdatedAt             time.Time        `json:"updated_at"`
 }
 
 func requestView(value *PresaleRequest) RequestView {
