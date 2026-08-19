@@ -13,9 +13,7 @@ func RegisterRoutes(api *gin.RouterGroup, handler *Handler) {
 	presale := api.Group("/presale")
 	presale.POST("/requests", middleware.RequirePermission("presale.create"), handler.CreateRequest)
 	presale.POST("/requests/:id/reopen", middleware.RequirePermission("presale.create"), handler.ReopenRequest)
-	presale.GET("/engineers", middleware.RequirePermission("presale.read"), handler.Engineers)
 	presale.GET("/execution-departments", middleware.RequirePermission("presale.read"), handler.ExecutionDepartments)
-	presale.POST("/engineers/sync", middleware.RequirePermission("presale.engineer.sync"), handler.SyncEngineers)
 	presale.GET("/requests", middleware.RequirePermission("presale.read"), handler.ListRequests)
 	presale.GET("/board", middleware.RequirePermission("presale.read"), handler.Board)
 	presale.GET("/filter-options", middleware.RequirePermission("presale.read"), handler.FilterOptions)
@@ -31,10 +29,7 @@ func RegisterRoutes(api *gin.RouterGroup, handler *Handler) {
 	presale.POST("/requests/:id/progress", middleware.RequirePermission("presale.progress"), handler.AddProgress)
 	presale.POST("/requests/:id/cancel", handler.Cancel)
 	presale.POST("/requests/:id/worklogs", middleware.RequirePermission("presale.worklog"), handler.AddWorklog)
-	presale.POST("/requests/:id/complete", middleware.RequirePermission("presale.complete"), handler.Complete)
 	presale.GET("/requests/:id/worklogs", middleware.RequirePermission("presale.read"), handler.Worklogs)
-	presale.POST("/worklogs/:id/retry", middleware.RequirePermission("presale.worklog.retry"), handler.RetryDelivery)
-	presale.GET("/worklogs/:id/delivery", middleware.RequirePermission("presale.read"), handler.Delivery)
 	presale.GET("/alert-rules", middleware.RequirePermission("presale.alert.config"), handler.AlertRules)
 	presale.PUT("/alert-rules/:type", middleware.RequirePermission("presale.alert.config"), handler.UpdateAlertRule)
 	presale.GET("/approval-rules", middleware.RequirePermission("presale.read"), handler.ApprovalRules)
@@ -46,6 +41,7 @@ func RegisterRoutes(api *gin.RouterGroup, handler *Handler) {
 	presale.GET("/reports/summary", middleware.RequirePermission("presale.report"), handler.ReportSummary)
 	presale.GET("/reports/trend", middleware.RequirePermission("presale.report"), handler.ReportTrend)
 	presale.GET("/reports/distribution", middleware.RequirePermission("presale.report"), handler.ReportDistribution)
+	presale.GET("/reports/filter-options", middleware.RequirePermission("presale.report"), handler.ReportFilterOptions)
 	presale.POST("/reports/exports", middleware.RequirePermission("presale.report"), handler.RequestReportExport)
 }
 

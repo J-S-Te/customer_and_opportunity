@@ -61,6 +61,7 @@ type ReportRepository interface {
 	ReportSummary(context.Context, ReportScope, ReportQuery) (ReportSummary, error)
 	ReportTrend(context.Context, ReportScope, ReportQuery) ([]ReportTrendPoint, error)
 	ReportDistribution(context.Context, ReportScope, ReportQuery, string) ([]ReportDistributionRow, error)
+	ReportFilterOptions(context.Context, ReportScope, ReportQuery) (RequestFilterOptions, error)
 }
 
 type ReportService struct {
@@ -121,6 +122,14 @@ func (s *ReportService) Distribution(ctx context.Context, actor Actor, query Rep
 		return nil, ErrInvalidInput
 	}
 	return s.repo.ReportDistribution(ctx, scope, query, dimension)
+}
+
+func (s *ReportService) FilterOptions(ctx context.Context, actor Actor, query ReportQuery) (RequestFilterOptions, error) {
+	scope, query, err := validateReportAccess(actor, query)
+	if err != nil {
+		return RequestFilterOptions{}, err
+	}
+	return s.repo.ReportFilterOptions(ctx, scope, query)
 }
 
 // 在对象存储、导出 worker 和下载生命周期尚未配置前，导出明确失败关闭，

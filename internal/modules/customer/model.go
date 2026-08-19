@@ -39,7 +39,7 @@ type Contact struct {
 	PhoneCipher    []byte `gorm:"type:varbinary(512);not null"`
 	PhoneMasked    string `gorm:"size:32;not null"`
 	EmailCipher    []byte `gorm:"type:varbinary(512)"`
-	EmailMasked    string `gorm:"size:200"`
+	EmailMasked    string `gorm:"size:200;not null;default:''"`
 	IsRegistration bool   `gorm:"not null;index"`
 	SortOrder      int    `gorm:"not null"`
 }

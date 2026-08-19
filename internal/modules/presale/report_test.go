@@ -23,6 +23,9 @@ func (r *reportRepositoryStub) ReportTrend(context.Context, ReportScope, ReportQ
 func (r *reportRepositoryStub) ReportDistribution(context.Context, ReportScope, ReportQuery, string) ([]ReportDistributionRow, error) {
 	return []ReportDistributionRow{}, nil
 }
+func (r *reportRepositoryStub) ReportFilterOptions(context.Context, ReportScope, ReportQuery) (RequestFilterOptions, error) {
+	return RequestFilterOptions{}, nil
+}
 
 func reportActor(scope string) Actor {
 	return Actor{TenantID: "tenant-1", UserID: "user-1", PersonID: "person-1", ScopeMode: scope,

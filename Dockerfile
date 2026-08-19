@@ -48,6 +48,12 @@ COPY --from=builder /out/presale-worker ./presale-worker
 
 CMD ["./presale-worker"]
 
+FROM runtime-base AS presale-alert-worker-runtime
+
+COPY --from=builder /out/presale-alert-worker ./presale-alert-worker
+
+CMD ["./presale-alert-worker"]
+
 FROM runtime-base AS presale-integration-mock-runtime
 
 COPY --from=builder /out/presale-integration-mock ./presale-integration-mock

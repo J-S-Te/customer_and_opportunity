@@ -185,7 +185,7 @@ CRM 与 Portal 的浏览器角色/权限目录现由 `internal/platformcatalog` 
 
 ### PMS 技术人员池
 
-CRM 以 `GET /api/v1/presale/engineers` 查询当前租户有效人员缓存，浏览器只接收姓名、personId、部门、角色、技能、有效状态、源更新时间和同步时间，不接收联系方式密文。`POST /api/v1/presale/engineers/sync` 需要 `presale.engineer.sync` 且只持久化异步任务；actor + `Idempotency-Key` + 请求摘要持久防重，手动任务会与同租户尚未结束的自动/手动任务合并，每个调用者的重放映射仍独立保留。
+售前人员选择统一使用 `GET /api/v1/owner-directory` 的基础平台授权目录。历史 `GET /api/v1/presale/engineers` 与 `POST /api/v1/presale/engineers/sync` HTTP 接口已废弃并移除；底层人员快照和同步 Worker 仍作为内部投递/指派校验数据源保留。
 
 `presale-engineer-sync-worker` 每 6 小时按租户调度，使用 OAuth Client Credentials 的单一 `technician.read` scope、强制 HTTPS、可选私有 CA/mTLS、禁止重定向、时间戳与随机 nonce、`FOR UPDATE SKIP LOCKED` 和有限租约。PMS 数据流 J 是共享权威技术人员池；本地 job tenant 只用于 CRM 缓存分区，不发送给 PMS，也不接受下游 tenant 覆盖。只有 HTTP 200、JSON Content-Type、完整非空、字段全部有效且角色枚举已知的快照才在单一事务内按 personId upsert，并在成功后停用快照缺席人员；HTTP、JSON、尾随内容、未知角色、重复 personId 或空快照均整批失败并保留旧缓存。联系方式只以独立 AEAD 密钥加密落库，API 不返回该字段。
 
@@ -198,6 +198,19 @@ Worker 使用 `FOR UPDATE SKIP LOCKED` 和有限租约领取 outbox，多实例�
 失败策略是首次投递后最多重试 6 次，退避窗口依次为 1 分钟、5 分钟、15 分钟、1 小时、3 小时、6 小时；第 7 次发送仍失败进入 `DEAD_LETTER`。PMS 投递失败只更新工时投递投影，不回滚已登记工时或任务自动完成状态。
 
 `presale-alert-worker` 默认每 10 分钟扫描，使用数据库租约保证多实例只有一个扫描者，采用主键游标处理全部活跃任务。审批/指派时限从状态日志进入时间计算，执行提醒从 `expected_end` 计算，全部使用 UTC。收件人具有显式命名空间：当前执行人使用 PMS `PERSON/person_id`，申请销售使用 CRM `USER/user_id`；团队负责人和节点 1 销售总监只从本地持久化、未撤销且未过期的 CRM OIDC 会话中按基础平台签名角色解析为 `USER`，不再把 `sales_director` 当作 PMS 人员角色。列表和已读仅精确合并当前 actor 的 `USER/user_id` 与非空 `PERSON/person_id`，忽略 SELF/ORG/ALL 数据范围且绝不推断两种 ID 相等。预警先与 `PRESALE_ALERT_SITE_MESSAGE` outbox 同事务落库，再由 Worker 把 outbox 投影为本系统未读站内消息；本期不调用 IM、短信或邮件。任务状态、规则版本或当前接收人集合不再适用时会取消仍未投递或未读的旧预警。`000071` 不猜测存量 `recipient_id` 的来源：旧行标记为不可查询的 `LEGACY_UNKNOWN`，仅取消尚未投影的旧 PENDING 记录和 outbox。审批引擎当前未提供实际任务审批人目录，因此无法验证实际当前审批人时仍失败关闭；本地角色提醒不等同于已通知当前审批人。
+
+本地 Docker 已将该进程作为独立服务 `customer-presale-alert-worker` 集成到 `platform/compose.local.yaml`，默认随客户与商机服务启动；生产 Compose 也使用同名独立服务。需要单独重建或拉起时，在 `platform` 目录执行：
+
+```bash
+bash scripts/docker-local.sh start-presale-alert-worker
+```
+
+查看状态和日志：
+
+```bash
+bash scripts/docker-local.sh ps
+bash scripts/docker-local.sh logs --tail 100 --no-follow customer-presale-alert-worker
+```
 
 `opportunity-alert-worker` 默认每 10 分钟按主键游标扫描，仅计算 `初步接触/需求沟通/方案制定/报价/投标` 五个推进阶段，UTC 起算点固定为商机的 `stage_changed_at`。租户管理员以 `opportunity.alert.config` 维护每阶段小时阈值；每次修改生成新的配置版本，预警唯一键为租户、商机、阶段、阈值版本和收件人。Worker 使用全局数据库租约，并在每个商机处理前、每页结束和每批站内投影前后按 owner/expiry 续租校验，失去租约即停止本轮；若单个商机事务本身运行超过租期，第二实例仍可能接管，但商机行锁、数据库唯一键和 outbox 唯一键会阻止重复业务结果。当前可验证的权威收件人仅为商机当前负责人；团队成员、组织负责人和管理层目录契约尚未交付，因此 Worker 对这些对象失败关闭，不推测人员。阶段变化、进入终态、作废或负责人变化会在业务事务内取消仍在排队或未读的旧预警。预警和 `OPPORTUNITY_STAGE_ALERT_SITE_MESSAGE` outbox 同事务写入，Worker 使用 `FOR UPDATE SKIP LOCKED` 把它投影为 CRM 未读站内消息；本期不声称已送达短信、邮件或 IM。扫描错误会令进程退出，由部署 supervisor 重启并触发租约过期接管。
 

@@ -333,7 +333,6 @@ func New(config Config) (*App, error) {
 	).UseTimelineCursorKey(config.HMACKey).UseAuditWriter(auditWriter).UseOwnerDirectory(ownerCatalog).UseApprovalRuleStore(presale.NewApprovalRuleStore(db)).UseWorkflowNotifications(presaleNotificationWriter{db: db})
 	presaleHandler := presale.NewHandler(presaleService, presale.NewAlertService(db, presale.SystemClock{}), presaleActorResolver{}).
 		UseReports(presale.NewReportService(presaleRepo)).
-		UseEngineers(presale.NewEngineerService(presale.NewGORMEngineerDirectoryRepository(db, requestIDGenerator{}), presale.SystemClock{}, requestIDGenerator{})).
 		UseApprovalRules(presale.NewApprovalRuleStore(db))
 	presale.RegisterRoutes(api, presaleHandler)
 	opportunityPresales := opportunityPresaleHandler{opportunities: opportunityService, presales: presaleService}

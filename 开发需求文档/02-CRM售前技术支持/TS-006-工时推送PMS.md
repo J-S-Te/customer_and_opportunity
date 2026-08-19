@@ -43,7 +43,7 @@ Topic：`crm.presale.worklog.created`；投递语义至少一次；幂等键必�
 
 Outbox Worker 发布 MQ；若采用 HTTP，则机器 Client 仅具 `pms.worklog.write` scope，连接超时 2s、总超时 5s。更新 `crm_presale_worklogs.push_status` 和 `crm_integration_attempts`。
 
-API：`POST /presale/worklogs/{id}/retry`（权限 `presale.worklog.retry`）、`GET /presale/worklogs/{id}/delivery`。
+投递状态和补偿由内部 Worker、审计记录及受控运维流程处理；历史 `POST /presale/worklogs/{id}/retry` 与 `GET /presale/worklogs/{id}/delivery` HTTP 接口已废弃并移除，前端不再暴露手动重试或投递详情入口。
 
 ## 5. 前端与运维
 
@@ -56,4 +56,3 @@ API：`POST /presale/worklogs/{id}/retry`（权限 `presale.worklog.retry`）、
 - 任何推送失败都不回滚 worklog 或 COMPLETED 任务。
 - 日志不含 Token/Secret/完整敏感联系人信息。
 - 99% 工时在正常依赖下于约定 SLA 内成功送达。
-

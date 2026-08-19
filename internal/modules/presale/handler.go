@@ -14,12 +14,11 @@ import (
 )
 
 type Handler struct {
-	service   *Service
-	alerts    *AlertService
-	reports   *ReportService
-	engineers *EngineerService
-	actors    ActorResolver
-	rules     *ApprovalRuleStore
+	service *Service
+	alerts  *AlertService
+	reports *ReportService
+	actors  ActorResolver
+	rules   *ApprovalRuleStore
 }
 
 // UseApprovalRules 后装配规则中心，保持旧版宿主构造方式兼容。
@@ -117,36 +116,6 @@ func (h *Handler) UseReports(reports *ReportService) *Handler {
 	return h
 }
 
-// 工程师目录来自 PMS 同步投影；HTTP 层只传递筛选条件，人员有效性和租户边界仍由服务层确认。
-func (h *Handler) UseEngineers(engineers *EngineerService) *Handler {
-	h.engineers = engineers
-	return h
-}
-
-func (h *Handler) Engineers(c *gin.Context) {
-	actor, ok := h.actor(c)
-	if !ok {
-		return
-	}
-	page, pageSize, ok := bindPagination(c)
-	if !ok {
-		return
-	}
-	if h.engineers == nil {
-		response.Error(c, apiError(ErrDependencyUnavailable))
-		return
-	}
-	value, err := h.engineers.List(c.Request.Context(), actor, EngineerListQuery{
-		Keyword: c.Query("keyword"), Department: c.Query("department"), Role: c.Query("role"),
-		Skill: c.Query("skill"), Page: page, PageSize: pageSize,
-	})
-	if err != nil {
-		response.Error(c, apiError(err))
-		return
-	}
-	response.OK(c, value)
-}
-
 func (h *Handler) ExecutionDepartments(c *gin.Context) {
 	actor, ok := h.actor(c)
 	if !ok {
@@ -177,23 +146,6 @@ func (h *Handler) ExecutionDepartments(c *gin.Context) {
 	}
 	_ = actor
 	response.OK(c, result)
-}
-
-func (h *Handler) SyncEngineers(c *gin.Context) {
-	actor, ok := h.actor(c)
-	if !ok {
-		return
-	}
-	if h.engineers == nil {
-		response.Error(c, apiError(ErrDependencyUnavailable))
-		return
-	}
-	value, err := h.engineers.EnqueueSync(c.Request.Context(), actor, c.GetHeader("Idempotency-Key"))
-	if err != nil {
-		response.Error(c, apiError(err))
-		return
-	}
-	c.JSON(http.StatusAccepted, response.Envelope{Code: "OK", Message: "accepted", RequestID: actor.RequestID, Data: value})
 }
 
 func (h *Handler) ReportSummary(c *gin.Context) {
@@ -228,6 +180,19 @@ func (h *Handler) ReportDistribution(c *gin.Context) {
 		return
 	}
 	value, err := h.reports.Distribution(c.Request.Context(), actor, query, c.DefaultQuery("dimension", "PERSON"))
+	if err != nil {
+		response.Error(c, apiError(err))
+		return
+	}
+	response.OK(c, value)
+}
+
+func (h *Handler) ReportFilterOptions(c *gin.Context) {
+	actor, query, ok := h.reportRequest(c)
+	if !ok {
+		return
+	}
+	value, err := h.reports.FilterOptions(c.Request.Context(), actor, query)
 	if err != nil {
 		response.Error(c, apiError(err))
 		return

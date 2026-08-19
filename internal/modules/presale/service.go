@@ -318,8 +318,7 @@ func validateCreate(in CreateRequestInput) error {
 	if strings.TrimSpace(in.ContactName) == "" || strings.TrimSpace(in.ContactPhone) == "" {
 		return ErrInvalidInput
 	}
-	n := len([]rune(strings.TrimSpace(in.Description)))
-	if n < 10 || n > 2000 || in.ExpectedEnd.Before(in.ExpectedStart) {
+	if strings.TrimSpace(in.Description) == "" || in.ExpectedEnd.Before(in.ExpectedStart) {
 		return ErrInvalidInput
 	}
 	return nil
@@ -755,11 +754,7 @@ func (s *Service) ReplaceAssignments(ctx context.Context, actor Actor, id uint64
 			if e = s.recordAssignmentNotification(tx, actor, r, a, AssignmentEventAdded, in.ChangeReason, now); e != nil {
 				return e
 			}
-			if s.notifications != nil {
-				if e = s.notifications.Write(tx, WorkflowNotification{TenantID: actor.TenantID, RecipientID: a.AssigneeID, Type: "PRESALE_ASSIGNEE_ADDED", Title: "你被指派售前支持任务", Body: "你已被加入售前支持执行人员，请进入详情处理", RequestID: r.ID, RequestNo: r.RequestNo}); e != nil {
-					return e
-				}
-			}
+			s.notifyWorkflow(tx, WorkflowNotification{TenantID: actor.TenantID, RecipientID: a.AssigneeID, Type: "PRESALE_ASSIGNEE_ADDED", Title: "你被指派售前支持任务", Body: "你已被加入售前支持执行人员，请进入详情处理", RequestID: r.ID, RequestNo: r.RequestNo})
 		}
 		from := r.Status
 		if from == StatusApprovedPendingAssignment {
@@ -845,15 +840,18 @@ func (s *Service) SelectExecutionDepartment(ctx context.Context, actor Actor, id
 			return e
 		}
 		r.ExecutionDepartmentID, r.ExecutionDepartment = in.DepartmentID, name
-		if s.notifications != nil {
-			if e = s.notifications.Write(tx, WorkflowNotification{TenantID: actor.TenantID, RecipientID: r.ApplicantID, Type: "PRESALE_DEPARTMENT_SELECTED", Title: "售前执行部门已确定", Body: "技术总监已选择执行部门：" + name, RequestID: r.ID, RequestNo: r.RequestNo}); e != nil {
-				return e
-			}
-		}
+		s.notifyWorkflow(tx, WorkflowNotification{TenantID: actor.TenantID, RecipientID: r.ApplicantID, Type: "PRESALE_DEPARTMENT_SELECTED", Title: "售前执行部门已确定", Body: "技术总监已选择执行部门：" + name, RequestID: r.ID, RequestNo: r.RequestNo})
 		out = r
 		return nil
 	})
 	return out, err
+}
+
+func (s *Service) notifyWorkflow(ctx context.Context, n WorkflowNotification) {
+	if s.notifications == nil {
+		return
+	}
+	_ = s.notifications.Write(ctx, n)
 }
 
 const assignmentNotificationEventType = "PRESALE_ASSIGNMENT_SITE_NOTIFICATION"
@@ -1280,11 +1278,7 @@ func (s *Service) Complete(ctx context.Context, actor Actor, id uint64, in Compl
 		if e = s.statusLog(tx, r, StatusExecuting, StatusCompleted, "MANUAL_COMPLETION", strings.TrimSpace(in.Reason), actor.UserID, actor.RequestID); e != nil {
 			return e
 		}
-		if s.notifications != nil {
-			if e = s.notifications.Write(tx, WorkflowNotification{TenantID: actor.TenantID, RecipientID: r.ApplicantID, Type: "PRESALE_COMPLETED", Title: "售前支持已完成", Body: "技术人员已人工结束售前支持流程", RequestID: r.ID, RequestNo: r.RequestNo}); e != nil {
-				return e
-			}
-		}
+		s.notifyWorkflow(tx, WorkflowNotification{TenantID: actor.TenantID, RecipientID: r.ApplicantID, Type: "PRESALE_COMPLETED", Title: "售前支持已完成", Body: "技术人员已人工结束售前支持流程", RequestID: r.ID, RequestNo: r.RequestNo})
 		r.Status, r.CompletedAt = StatusCompleted, &now
 		out = r
 		return nil

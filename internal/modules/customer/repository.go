@@ -488,9 +488,15 @@ func buildCustomerListQuery(db *gorm.DB, principal auth.Principal, query ListQue
 			SELECT tenant_id, customer_id, SUM(expected_amount) AS opportunity_amount_sum
 			FROM crm_opportunities WHERE tenant_id = ? AND deleted_at IS NULL AND opp_status <> 'VOID' GROUP BY tenant_id, customer_id
 		) AS customer_opportunity_summary ON customer_opportunity_summary.tenant_id = crm_customers.tenant_id AND customer_opportunity_summary.customer_id = crm_customers.id`, principal.TenantID)
-	if query.Keyword != "" {
-		normalized := normalizeName(query.Keyword)
-		db = db.Where("customer_no LIKE ? OR normalized_name LIKE ?", "%"+query.Keyword+"%", "%"+normalized+"%")
+	if keyword := strings.TrimSpace(query.Keyword); keyword != "" {
+		normalized := normalizeName(keyword)
+		pattern := "%" + keyword + "%"
+		normalizedPattern := "%" + normalized + "%"
+		// Search the display value as well as its canonical form.  The display
+		// column keeps the result intuitive for existing rows whose normalized
+		// value was created by an older migration, while the canonical expression
+		// makes names with spaces/case differences searchable.
+		db = db.Where(`crm_customers.customer_no LIKE ? OR crm_customers.name LIKE ? OR crm_customers.normalized_name LIKE ? OR LOWER(REPLACE(crm_customers.name, ' ', '')) LIKE ?`, pattern, pattern, normalizedPattern, normalizedPattern)
 	}
 	if query.CustomerType != "" {
 		db = db.Where("customer_type = ?", query.CustomerType)
