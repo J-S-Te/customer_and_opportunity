@@ -33,6 +33,8 @@ paths:
     get: {$ref: '#/components/x-operations/crmCallback'}
   /auth/logout:
     post: {$ref: '#/components/x-operations/crmLogout'}
+  /auth/local-logout:
+    post: {$ref: '#/components/x-operations/crmLocalLogout'}
   /api/v1/auth/me:
     get: {$ref: '#/components/x-operations/crmMe'}
   /api/v1/capabilities:
@@ -478,6 +480,7 @@ components:
     crmLogin: {operationId: crmLogin, tags: [Authentication], security: [], parameters: [{name: return_to, in: query, schema: {type: string}}], responses: {'302': {description: Redirect to the platform authorization endpoint}, '400': {$ref: '#/components/responses/Error'}}}
     crmCallback: {operationId: crmCallback, tags: [Authentication], security: [], parameters: [{name: code, in: query, schema: {type: string}}, {name: state, in: query, schema: {type: string}}], responses: {'302': {description: Establish session and redirect}, '401': {$ref: '#/components/responses/Error'}}}
     crmLogout: {operationId: crmLogout, tags: [Authentication], security: [{crmSession: []}], responses: {'200': {$ref: '#/components/responses/OK'}, '401': {$ref: '#/components/responses/Error'}}}
+    crmLocalLogout: {operationId: crmLocalLogout, tags: [Authentication], security: [], responses: {'204': {description: Session cookie cleared locally}}}
     crmMe: &crmRead {operationId: crmMe, tags: [Authentication], security: [{crmSession: []}], responses: {'200': {$ref: '#/components/responses/OK'}, '401': {$ref: '#/components/responses/Error'}, '403': {$ref: '#/components/responses/Error'}}}
     getRuntimeCapabilities: {<<: *crmRead, operationId: getRuntimeCapabilities, tags: [Authentication], description: Returns non-secret process configuration readiness for optional integrations and persisted freshness evidence for the independent presale delivery worker. This is not authorization or a remote health probe.}
     listOwnerDirectory:

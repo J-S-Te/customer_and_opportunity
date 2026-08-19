@@ -127,9 +127,20 @@ func validateApprovalRule(rule ApprovalRule) error {
 		return ErrInvalidInput
 	}
 	seen := map[string]bool{}
+	assignmentRoles := map[string]ApprovalNodeType{}
 	for _, node := range rule.Nodes {
 		if strings.TrimSpace(node.ID) == "" || strings.TrimSpace(node.Name) == "" || seen[node.ID] || (node.Type != ApprovalNodeApproval && node.Type != ApprovalNodeDepartment && node.Type != ApprovalNodePerson) {
 			return ErrInvalidInput
+		}
+		if node.Type == ApprovalNodeDepartment || node.Type == ApprovalNodePerson {
+			roleCode := strings.TrimSpace(node.RoleCode)
+			if roleCode == "" {
+				return ErrInvalidInput
+			}
+			if _, exists := assignmentRoles[roleCode]; exists {
+				return ErrInvalidInput
+			}
+			assignmentRoles[roleCode] = node.Type
 		}
 		seen[node.ID] = true
 	}

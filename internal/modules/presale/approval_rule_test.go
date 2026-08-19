@@ -46,3 +46,32 @@ func TestNextApprovalNodeSkipsAssignmentNodes(t *testing.T) {
 		t.Fatalf("assignment nodes must not keep approval pending: next=%d ok=%v", next, ok)
 	}
 }
+
+func TestAssignmentActionForRoleUsesAssignmentNode(t *testing.T) {
+	nodes := []ApprovalNode{
+		{Type: ApprovalNodeApproval, RoleCode: "technical_director"},
+		{Type: ApprovalNodePerson, RoleCode: "technical_director"},
+		{Type: ApprovalNodeDepartment, RoleCode: "team_lead"},
+	}
+	if action, ok := AssignmentActionForRole(nodes, "technical_director"); !ok || action != ApprovalNodePerson {
+		t.Fatalf("technical director action = %q, %v; want PERSON_ASSIGNMENT", action, ok)
+	}
+	if action, ok := AssignmentActionForRole(nodes, "sales_director"); ok || action != "" {
+		t.Fatalf("unexpected action for unconfigured role: %q, %v", action, ok)
+	}
+}
+
+func TestAssignmentActionAllowedFollowsRuleSnapshot(t *testing.T) {
+	nodes, err := json.Marshal([]ApprovalNode{{Type: ApprovalNodePerson, RoleCode: "technical_director"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	instance := &ApprovalInstance{NodesJSON: nodes}
+	actor := Actor{Roles: map[string]bool{"technical_director": true}}
+	if !assignmentActionAllowed(actor, instance, ApprovalNodePerson) {
+		t.Fatal("technical director should be allowed to select people")
+	}
+	if assignmentActionAllowed(actor, instance, ApprovalNodeDepartment) {
+		t.Fatal("technical director should not be allowed to select a department")
+	}
+}

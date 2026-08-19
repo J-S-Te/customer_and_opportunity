@@ -36,6 +36,25 @@ type ApprovalNode struct {
 	Countersign string           `json:"countersign"`
 }
 
+// AssignmentActionForRole returns the configured execution action for a role.
+// Approval nodes decide who approves; assignment nodes decide which execution
+// control the role receives after approval.
+func AssignmentActionForRole(nodes []ApprovalNode, roleCode string) (ApprovalNodeType, bool) {
+	roleCode = strings.TrimSpace(roleCode)
+	if roleCode == "" {
+		return "", false
+	}
+	for _, node := range nodes {
+		if strings.TrimSpace(node.RoleCode) != roleCode {
+			continue
+		}
+		if node.Type == ApprovalNodeDepartment || node.Type == ApprovalNodePerson {
+			return node.Type, true
+		}
+	}
+	return "", false
+}
+
 type ApprovalExpression struct {
 	Logical    string              `json:"logical,omitempty"`
 	Conditions []ApprovalCondition `json:"conditions,omitempty"`

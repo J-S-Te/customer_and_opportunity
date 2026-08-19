@@ -119,6 +119,7 @@ func New(config Config) (*App, error) {
 	base.GET("/auth/login", authHandler.Login)
 	base.GET("/auth/callback", authHandler.Callback)
 	base.POST("/auth/logout", authMiddleware, authHandler.RequireSameOrigin, authHandler.Logout)
+	base.POST("/auth/local-logout", authHandler.LocalLogout)
 	machineAuth, machineErr := crmauth.NewMachineAuthenticator(context.Background(), db, crmauth.MachineOptions{Issuer: config.MachineTokenIssuer, Audience: config.MachineTokenAudience, PublicKeyPath: config.MachineTokenPublicKeyPath, TenantID: config.OIDCTenantID})
 	if machineErr != nil {
 		return nil, machineErr

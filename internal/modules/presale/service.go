@@ -603,7 +603,7 @@ func (s *Service) HandleApprovalCallback(ctx context.Context, tenant string, in 
 // 基础平台授权人员选择器。首次有效分派会把申请推进到 EXECUTING；执行中
 // 调整人员后还会重新判断所有当前执行人是否已有有效工时，从而可能立即完成任务。
 func (s *Service) ReplaceAssignments(ctx context.Context, actor Actor, id uint64, key string, in ReplaceAssignmentsInput) (*PresaleRequest, error) {
-	if !actor.Can("presale.assign") || (!actor.HasRole("team_lead") && !actor.HasRole("crm_super_admin")) {
+	if !actor.Can("presale.assign") {
 		return nil, ErrForbidden
 	}
 	key = strings.TrimSpace(key)
@@ -700,6 +700,13 @@ func (s *Service) ReplaceAssignments(ctx context.Context, actor Actor, id uint64
 		r, e := s.repo.FindRequestForUpdate(tx, actor.TenantID, id)
 		if e != nil {
 			return e
+		}
+		instance, instanceErr := s.repo.FindApprovalInstanceForUpdate(tx, actor.TenantID, id)
+		if instanceErr != nil && !errors.Is(instanceErr, ErrNotFound) {
+			return instanceErr
+		}
+		if !assignmentActionAllowed(actor, instance, ApprovalNodePerson) {
+			return ErrForbidden
 		}
 		if oldReplay, findErr := s.repo.FindMutationReplay(tx, actor.TenantID, id, actor.UserID, key); findErr == nil {
 			if findErr = validateMutationReplay(oldReplay, actor, id, "REPLACE_ASSIGNMENTS", "REPLACE", hash); findErr != nil {
@@ -798,7 +805,7 @@ func (s *Service) ReplaceAssignments(ctx context.Context, actor Actor, id uint64
 }
 
 func (s *Service) SelectExecutionDepartment(ctx context.Context, actor Actor, id uint64, in SelectDepartmentInput) (*PresaleRequest, error) {
-	if !actor.Can("presale.assign") || !actor.HasRole("technical_director") {
+	if !actor.Can("presale.assign") {
 		return nil, ErrForbidden
 	}
 	in.DepartmentID = strings.TrimSpace(in.DepartmentID)
@@ -832,6 +839,13 @@ func (s *Service) SelectExecutionDepartment(ctx context.Context, actor Actor, id
 		r, e := s.repo.FindRequestForUpdate(tx, actor.TenantID, id)
 		if e != nil {
 			return e
+		}
+		instance, instanceErr := s.repo.FindApprovalInstanceForUpdate(tx, actor.TenantID, id)
+		if instanceErr != nil && !errors.Is(instanceErr, ErrNotFound) {
+			return instanceErr
+		}
+		if !assignmentActionAllowed(actor, instance, ApprovalNodeDepartment) {
+			return ErrForbidden
 		}
 		if r.Status != StatusApprovedPendingAssignment || r.Version != in.Version {
 			return ErrInvalidTransition
@@ -1411,6 +1425,32 @@ func nextApprovalNode(instance *ApprovalInstance, node uint8) (uint8, bool) {
 		}
 	}
 	return 0, false
+}
+
+// assignmentActionAllowed is the single runtime gate for post-approval
+// assignment actions. The approval rule is snapshotted on the instance, so a
+// rule change only affects newly-created requests and cannot alter an active
+// workflow halfway through.
+func assignmentActionAllowed(actor Actor, instance *ApprovalInstance, action ApprovalNodeType) bool {
+	if actor.HasRole("crm_super_admin") {
+		return true
+	}
+	// Preserve the legacy behavior for requests created before rule snapshots
+	// were available.
+	if instance == nil || len(instance.NodesJSON) == 0 {
+		return (action == ApprovalNodeDepartment && actor.HasRole("technical_director")) ||
+			(action == ApprovalNodePerson && actor.HasRole("team_lead"))
+	}
+	var nodes []ApprovalNode
+	if json.Unmarshal(instance.NodesJSON, &nodes) != nil {
+		return false
+	}
+	for roleCode := range actor.Roles {
+		if configured, ok := AssignmentActionForRole(nodes, roleCode); ok && configured == action {
+			return true
+		}
+	}
+	return false
 }
 
 func approvalNodeRoleAllowedForInstance(actor Actor, node uint8, instance *ApprovalInstance) bool {
