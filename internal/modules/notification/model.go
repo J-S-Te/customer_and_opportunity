@@ -27,7 +27,7 @@ const (
 // 不代表邮件、短信或即时通信等外部渠道已经投递成功。
 type Notification struct {
 	database.Model
-	SourceEventID      string     `gorm:"size:64;not null;uniqueIndex:uq_crm_notification_source,priority:2"`
+	SourceEventID      string     `gorm:"size:191;not null;uniqueIndex:uq_crm_notification_source,priority:2"`
 	Type               string     `gorm:"size:64;not null;index"`
 	OpportunityID      uint64     `gorm:"not null;index"`
 	OpportunityVersion uint64     `gorm:"not null"`

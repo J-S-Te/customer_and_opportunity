@@ -2,6 +2,7 @@ package presalealertworker
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -188,7 +189,7 @@ func (a *App) scanRequest(ctx context.Context, request scanRequest, now time.Tim
 }
 
 func loadStatusEnteredAt(tx *gorm.DB, request *scanRequest) error {
-	var entered *time.Time
+	var entered sql.NullTime
 	if request.Status == presale.StatusPendingApproval && request.CurrentApprovalNode == 2 {
 		if err := tx.Table("crm_presale_approval_logs").Select("MAX(approved_at)").Where("tenant_id=? AND request_id=? AND node=1 AND result='PASS'", request.TenantID, request.ID).Scan(&entered).Error; err != nil {
 			return err
@@ -198,10 +199,10 @@ func loadStatusEnteredAt(tx *gorm.DB, request *scanRequest) error {
 			return err
 		}
 	}
-	if entered == nil {
+	if !entered.Valid {
 		request.StatusEnteredAt = request.UpdatedAt
 	} else {
-		request.StatusEnteredAt = entered.UTC()
+		request.StatusEnteredAt = entered.Time.UTC()
 	}
 	return nil
 }

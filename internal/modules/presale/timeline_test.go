@@ -230,7 +230,7 @@ func TestPresaleRoutesProtectTimelineWithReadPermission(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(raw)
-	for _, route := range []string{"/requests/:id/timeline", "/requests/:id/available-actions", "/board", "/filter-options"} {
+	for _, route := range []string{"/requests/:id/timeline", "/requests/:id/available-actions", "/board", `presale.GET("/filter-options"`} {
 		lineFound := false
 		for _, line := range strings.Split(text, "\n") {
 			if strings.Contains(line, route) {

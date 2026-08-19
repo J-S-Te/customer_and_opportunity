@@ -512,8 +512,14 @@ func (r *GORMRepository) List(ctx context.Context, principal auth.Principal, que
 	query.Page, query.PageSize = pagination.Normalize(query.Page, query.PageSize)
 	db := scoped(database.FromContext(ctx, r.db).Model(&Opportunity{}), principal)
 	db = db.Joins("LEFT JOIN crm_customers ON crm_customers.tenant_id = crm_opportunities.tenant_id AND crm_customers.id = crm_opportunities.customer_id AND crm_customers.deleted_at IS NULL")
-	if query.Keyword != "" {
-		db = db.Where("crm_opportunities.opportunity_no LIKE ? OR crm_opportunities.name LIKE ? OR crm_customers.name LIKE ?", "%"+query.Keyword+"%", "%"+query.Keyword+"%", "%"+query.Keyword+"%")
+	if keyword := strings.TrimSpace(query.Keyword); keyword != "" {
+		// Keep lookup usable for both the list and the create/presale pickers.  The
+		// normalized expression also makes searches tolerant of accidental spaces
+		// in Chinese/Latin names and opportunity numbers.
+		normalized := strings.ToLower(strings.Join(strings.Fields(keyword), ""))
+		pattern := "%" + keyword + "%"
+		normalizedPattern := "%" + normalized + "%"
+		db = db.Where(`crm_opportunities.opportunity_no LIKE ? OR crm_opportunities.name LIKE ? OR crm_customers.customer_no LIKE ? OR crm_customers.name LIKE ? OR LOWER(REPLACE(crm_opportunities.name, ' ', '')) LIKE ? OR LOWER(REPLACE(crm_customers.name, ' ', '')) LIKE ?`, pattern, pattern, pattern, pattern, normalizedPattern, normalizedPattern)
 	}
 	if query.Stage != "" {
 		db = db.Where("crm_opportunities.current_stage=?", query.Stage)

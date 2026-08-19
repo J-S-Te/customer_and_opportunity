@@ -135,6 +135,46 @@ func (r *GORMRepository) ReportDistribution(ctx context.Context, scope ReportSco
 	return values, err
 }
 
+// ReportFilterOptions uses the same worklog/time/person scope as the report
+// itself. This is deliberately separate from the request-list filter options:
+// “参与人员” means a person who recorded valid work, not merely an assignee.
+func (r *GORMRepository) ReportFilterOptions(ctx context.Context, scope ReportScope, query ReportQuery) (RequestFilterOptions, error) {
+	where, args := reportWorklogWhere(scope, query, "w", "r", "o")
+	result := RequestFilterOptions{}
+	var opportunities []struct {
+		Value uint64
+		Label string
+	}
+	if err := database.FromContext(ctx, r.db).Raw(`SELECT o.id AS value, MAX(o.name) AS label
+		FROM crm_presale_worklogs w
+		JOIN crm_presale_requests r ON r.tenant_id=w.tenant_id AND r.id=w.request_id
+		JOIN crm_opportunities o ON o.tenant_id=r.tenant_id AND o.id=r.opportunity_id
+		WHERE `+where+` GROUP BY o.id ORDER BY label,o.id LIMIT 101`, args...).Scan(&opportunities).Error; err != nil {
+		return RequestFilterOptions{}, err
+	}
+	for _, row := range opportunities {
+		result.Opportunities = append(result.Opportunities, OpportunityFilterOption{Value: row.Value, Label: row.Label})
+	}
+	if len(result.Opportunities) > 100 {
+		result.Truncated = true
+		result.Opportunities = result.Opportunities[:100]
+	}
+	var assignees []FilterOption
+	if err := database.FromContext(ctx, r.db).Raw(`SELECT w.person_id AS value, MAX(w.person_name_snapshot) AS label
+		FROM crm_presale_worklogs w
+		JOIN crm_presale_requests r ON r.tenant_id=w.tenant_id AND r.id=w.request_id
+		JOIN crm_opportunities o ON o.tenant_id=r.tenant_id AND o.id=r.opportunity_id
+		WHERE `+where+` GROUP BY w.person_id ORDER BY label,w.person_id LIMIT 101`, args...).Scan(&assignees).Error; err != nil {
+		return RequestFilterOptions{}, err
+	}
+	if len(assignees) > 100 {
+		result.Truncated = true
+		assignees = assignees[:100]
+	}
+	result.Assignees = assignees
+	return result, nil
+}
+
 func reportWorklogWhere(scope ReportScope, query ReportQuery, worklog, request, opportunity string) (string, []any) {
 	// 表别名仅由本文件中的固定调用点传入；所有业务筛选值仍通过参数绑定，避免把组织、
 	// 人员或商机标识直接拼入 SQL。

@@ -340,4 +340,13 @@ func TestValidateCreate(t *testing.T) {
 	if err := validateCreate(valid); !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("onsite without address error=%v", err)
 	}
+	valid.ServiceAddress = "Shanghai"
+	valid.Description = " "
+	if err := validateCreate(valid); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("empty description error=%v", err)
+	}
+	valid.Description = strings.Repeat("需求说明 ", 5000)
+	if err := validateCreate(valid); err != nil {
+		t.Fatalf("long description rejected: %v", err)
+	}
 }
