@@ -264,11 +264,11 @@ func TestReplaceAssignmentsCanonicalReplayAndCancelReplay(t *testing.T) {
 	actor := Actor{TenantID: "tenant-a", UserID: "lead", Roles: map[string]bool{"team_lead": true}, Permissions: map[string]bool{"presale.assign": true}}
 	repo := &mutationRepository{
 		request:   &PresaleRequest{BaseModel: BaseModel{ID: 9, TenantID: actor.TenantID, Version: 3}, Status: StatusApprovedPendingAssignment},
-		engineers: []Engineer{{PersonID: "p1", PersonName: "P1", Role: "implementation_engineer", ValidFlag: true}, {PersonID: "p2", PersonName: "P2", Role: "project_manager", ValidFlag: true}},
+		engineers: []Engineer{{PersonID: "p1", PersonName: "P1", Role: "technician", ValidFlag: true}, {PersonID: "p2", PersonName: "P2", Role: "project_manager", ValidFlag: true}},
 		replays:   map[string]*MutationReplay{},
 	}
 	service := NewService(repo, nil, nil, fixedClock{at: time.Date(2026, 8, 1, 8, 0, 0, 0, time.UTC)}, fixedIDs{})
-	input := ReplaceAssignmentsInput{Assignees: []AssignmentTarget{{PersonID: "p2", Role: "project_manager"}, {PersonID: "p1", Role: "implementation_engineer"}}, ChangeReason: " initial ", Version: 3}
+	input := ReplaceAssignmentsInput{Assignees: []AssignmentTarget{{PersonID: "p2", Role: "project_manager"}, {PersonID: "p1", Role: "technician"}}, ChangeReason: " initial ", Version: 3}
 	if _, err := service.ReplaceAssignments(context.Background(), actor, 9, "assign-key", input); err != nil {
 		t.Fatal(err)
 	}

@@ -187,14 +187,16 @@ func safeTransportError(err error) error {
 
 func normalizedRole(value string) (string, bool) {
 	switch strings.TrimSpace(value) {
+	case "技术人员", "实施工程师":
+		return "technician", true
 	case "技术总监":
+		return "technical_director", true
+	case "技术负责人":
 		return "technical_director", true
 	case "团队负责人":
 		return "team_lead", true
 	case "项目经理":
 		return "project_manager", true
-	case "实施工程师":
-		return "implementation_engineer", true
 	default:
 		return "", false
 	}

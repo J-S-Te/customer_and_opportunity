@@ -78,10 +78,10 @@ func TestManualMutationHandlersForwardIdempotencyKey(t *testing.T) {
 		{
 			name: "replace assignments", actor: Actor{TenantID: "tenant-a", UserID: "lead", Roles: map[string]bool{"team_lead": true}, Permissions: map[string]bool{"presale.assign": true}},
 			request: &PresaleRequest{BaseModel: BaseModel{ID: 9, TenantID: "tenant-a", Version: 3}, Status: StatusApprovedPendingAssignment},
-			body:    `{"assignees":[{"person_id":"p1","role":"implementation_engineer"}],"change_reason":"assign","version":3}`,
+			body:    `{"assignees":[{"person_id":"p1","role":"technician"}],"change_reason":"assign","version":3}`,
 			invoke:  func(handler *Handler, ctx *gin.Context) { handler.ReplaceAssignments(ctx) },
 			setup: func(repo *mutationRepository) {
-				repo.engineers = []Engineer{{PersonID: "p1", PersonName: "P1", Role: "implementation_engineer", ValidFlag: true}}
+				repo.engineers = []Engineer{{PersonID: "p1", PersonName: "P1", Role: "technician", ValidFlag: true}}
 			},
 		},
 		{

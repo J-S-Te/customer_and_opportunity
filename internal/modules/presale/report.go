@@ -172,7 +172,7 @@ func validateReportAccess(actor Actor, query ReportQuery) (ReportScope, ReportQu
 			return ReportScope{}, ReportQuery{}, ErrForbidden
 		}
 		// 仅旧会话完全缺少 scope_mode 时才使用角色兼容逻辑；显式 SELF 范围不会被角色扩大。
-		if actor.ScopeMode == "" && (actor.HasRole("technical_lead") || actor.HasRole("technical_director") || actor.HasRole("sales_director") || actor.HasRole("team_lead")) {
+		if actor.ScopeMode == "" && (actor.HasRole("technical_director") || actor.HasRole("sales_director") || actor.HasRole("team_lead")) {
 			scope.All = true
 		}
 	}

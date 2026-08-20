@@ -614,7 +614,7 @@ func (s *Service) ReplaceAssignments(ctx context.Context, actor Actor, id uint64
 	targets := map[string]AssignmentTarget{}
 	// 执行岗位明确区分项目经理与技术人员。implementation_engineer 仅保留给历史指派记录，
 	// 新指派统一使用 technician，不能再把负责人或总监作为执行人员写入。
-	allowedRoles := map[string]bool{"team_lead": true, "project_manager": true, "technician": true, "implementation_engineer": true}
+	allowedRoles := map[string]bool{"team_lead": true, "project_manager": true, "technician": true}
 	for _, v := range in.Assignees {
 		if strings.TrimSpace(v.PersonID) == "" || !allowedRoles[v.Role] || len([]rune(v.PersonName)) > 128 || len([]rune(v.Department)) > 128 || len([]rune(v.DepartmentID)) > 64 {
 			return nil, ErrInvalidInput
@@ -1255,7 +1255,7 @@ func (s *Service) AddWorklog(ctx context.Context, actor Actor, id uint64, key st
 }
 
 func (s *Service) Complete(ctx context.Context, actor Actor, id uint64, in CompletePresaleInput) (*PresaleRequest, error) {
-	if !actor.Can("presale.complete") || actor.PersonID == "" || (!actor.HasRole("technician") && !actor.HasRole("implementation_engineer") && !actor.HasRole("project_manager") && !actor.HasRole("team_lead")) {
+	if !actor.Can("presale.complete") || actor.PersonID == "" || (!actor.HasRole("technician") && !actor.HasRole("project_manager") && !actor.HasRole("team_lead")) {
 		return nil, ErrForbidden
 	}
 	if in.Version == 0 || len([]rune(in.Reason)) > 1000 {
@@ -1649,7 +1649,7 @@ func (s *Service) Assignments(ctx context.Context, actor Actor, id uint64) ([]As
 // 被分派的基础平台用户可读其当前或历史分派。分派角色不从 OIDC 角色猜测，
 // 因而猜中租户内申请 ID 也不能绕过真实业务关系。
 func (s *Service) requireReadable(ctx context.Context, actor Actor, value *PresaleRequest) error {
-	if actor.HasRole("sales_director") || actor.HasRole("technical_director") || actor.HasRole("team_lead") || actor.HasRole("technical_lead") || actor.HasRole("crm_super_admin") || actor.HasRole("auditor") {
+	if actor.HasRole("sales_director") || actor.HasRole("technical_director") || actor.HasRole("team_lead") || actor.HasRole("crm_super_admin") || actor.HasRole("auditor") {
 		return nil
 	}
 	if actor.HasRole("sales") && value.ApplicantID == actor.UserID {

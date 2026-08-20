@@ -126,7 +126,7 @@ func TestListRequestsDerivesRoleScope(t *testing.T) {
 		{name: "authoritative person identity sees assignments without CRM role inference", actor: readableActor("other-1", "person-1"), wantAssignee: true},
 		{name: "missing person identity fails closed", actor: readableActor("other-1", "")},
 		{name: "team lead gets tenant scope", actor: managerActor("team_lead"), all: true},
-		{name: "technical lead gets tenant scope", actor: managerActor("technical_lead"), all: true},
+		{name: "technical director gets tenant scope", actor: managerActor("technical_director"), all: true},
 		{name: "crm super admin gets tenant scope", actor: managerActor("crm_super_admin"), all: true},
 	}
 	for _, test := range tests {
@@ -364,7 +364,7 @@ func TestOpportunitySummaryUsesTheSameRoleScopeAsPresaleDetails(t *testing.T) {
 
 func TestEveryPMSAssignmentRoleCanReadWithoutMatchingCRMOIDCRole(t *testing.T) {
 	t.Parallel()
-	for _, assignmentRole := range []string{"technical_director", "team_lead", "project_manager", "implementation_engineer"} {
+	for _, assignmentRole := range []string{"technical_director", "team_lead", "project_manager", "technician"} {
 		assignmentRole := assignmentRole
 		t.Run(assignmentRole, func(t *testing.T) {
 			t.Parallel()
@@ -395,6 +395,30 @@ func TestUnassignedPersonCannotReadTaskWithoutAnotherAuthorizedRelation(t *testi
 	service := NewService(repo, nil, nil, fixedClock{}, fixedIDs{})
 	if _, err := service.RequestDetail(context.Background(), readableActor("other-user", "person-1"), repo.request.ID); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("RequestDetail() error=%v, want ErrForbidden", err)
+	}
+}
+
+func TestRequestDetailExposesConfiguredPersonAssignment(t *testing.T) {
+	t.Parallel()
+	nodes, err := json.Marshal([]ApprovalNode{
+		{ID: "people", Type: ApprovalNodePerson, RoleCode: "technical_director"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := &queryRepository{
+		request:  requestFixture(),
+		approval: &ApprovalInstance{NodesJSON: nodes},
+	}
+	actor := managerActor("technical_director")
+	actor.Permissions["presale.assign"] = true
+	service := NewService(repo, nil, nil, fixedClock{}, fixedIDs{})
+	value, err := service.RequestDetail(context.Background(), actor, repo.request.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !timelineContains(value.AvailableActions, "ASSIGN") {
+		t.Fatalf("available actions=%v, want configured technical-director assignment", value.AvailableActions)
 	}
 }
 

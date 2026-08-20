@@ -328,13 +328,21 @@ func normalizeAuthorization(claims verifiedClaims, expectedTenantID, expectedRol
 	platformSuperAdmin := false
 	roleInputs := make([]string, 0, len(claims.Roles))
 	for _, role := range claims.Roles {
-		if role == "platform-super-admin" {
+		role = canonicalCRMRole(role)
+		if role == "crm_super_admin" && slicesContains(claims.Roles, "platform-super-admin") {
 			platformSuperAdmin = true
-			role = "crm_super_admin"
 		}
 		roleInputs = append(roleInputs, role)
 	}
-	canonicalScopes, scopeDecision, err := sharedauthorization.ValidateScopes(claims.DataScopes, claims.Roles, expectedEnvironmentCode, claims.IdentityID, claims.PersonID)
+	canonicalInputScopes := append([]sharedauth.DataScope(nil), claims.DataScopes...)
+	for index := range canonicalInputScopes {
+		canonicalInputScopes[index].RoleCode = canonicalCRMRole(canonicalInputScopes[index].RoleCode)
+	}
+	canonicalInputRoles, err := normalizedSet(roleInputs, nil)
+	if err != nil {
+		return verifiedClaims{}, fmt.Errorf("CRM OIDC roles: %w", err)
+	}
+	canonicalScopes, scopeDecision, err := sharedauthorization.ValidateScopes(canonicalInputScopes, canonicalInputRoles, expectedEnvironmentCode, claims.IdentityID, claims.PersonID)
 	if err != nil {
 		return verifiedClaims{}, fmt.Errorf("CRM OIDC data scopes: %w", err)
 	}
@@ -343,7 +351,7 @@ func normalizeAuthorization(claims verifiedClaims, expectedTenantID, expectedRol
 	for _, role := range manifest.Roles {
 		knownRoles[role.Code] = struct{}{}
 	}
-	roles, err := normalizedSet(roleInputs, knownRoles)
+	roles, err := normalizedSet(canonicalInputRoles, knownRoles)
 	if err != nil {
 		return verifiedClaims{}, fmt.Errorf("CRM OIDC roles: %w", err)
 	}
@@ -374,6 +382,32 @@ func normalizeAuthorization(claims verifiedClaims, expectedTenantID, expectedRol
 	_ = platformSuperAdmin // the controlled role alias does not expand permissions
 	claims.Roles, claims.Permissions, claims.OrganizationIDs, claims.DataScopes = roles, permissions, organizationIDs, canonicalScopes
 	return claims, nil
+}
+
+// canonicalCRMRole collapses retired CRM role codes at the authentication
+// boundary. The authorization catalog exposes only the canonical roles, while
+// existing sessions and historical platform bindings can continue to use the
+// old codes until administrators reassign them.
+func canonicalCRMRole(role string) string {
+	switch strings.TrimSpace(role) {
+	case "platform-super-admin":
+		return "crm_super_admin"
+	case "implementation_engineer":
+		return "technician"
+	case "technical_lead":
+		return "technical_director"
+	default:
+		return strings.TrimSpace(role)
+	}
+}
+
+func slicesContains(values []string, wanted string) bool {
+	for _, value := range values {
+		if value == wanted {
+			return true
+		}
+	}
+	return false
 }
 
 func validPMSPersonID(value string) bool {
