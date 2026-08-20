@@ -155,6 +155,26 @@ func TestBrokerReceiptFailureDoesNotBypassOrBlockValidatedCRMSession(t *testing.
 	}
 }
 
+func TestCRMSessionPersistsAndRestoresTrustedLoginIP(t *testing.T) {
+	now := time.Date(2026, 8, 20, 1, 2, 3, 0, time.UTC)
+	repo := newMemoryRepo()
+	claims := validClaims(now)
+	claims.LoginIP = "203.0.113.9"
+	service := newTestService(t, repo, &fakeOIDC{exchanged: claims}, now)
+	start, err := service.BeginLogin(context.Background(), "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := service.CompleteLogin(context.Background(), strings.Split(start.AuthorizationURL, "state=")[1], "code")
+	if err != nil {
+		t.Fatal(err)
+	}
+	principal, err := service.Authenticate(context.Background(), result.SessionToken)
+	if err != nil || principal.LoginIP != "203.0.113.9" {
+		t.Fatalf("principal=%#v err=%v", principal, err)
+	}
+}
+
 func TestAuthorizationMetadataFromTokenIsNotTrustedAsRoleDirectoryVersion(t *testing.T) {
 	now := time.Date(2026, 8, 11, 1, 2, 3, 0, time.UTC)
 	claims := validClaims(now)

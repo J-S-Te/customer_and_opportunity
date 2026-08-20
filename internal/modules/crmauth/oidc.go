@@ -16,6 +16,7 @@ import (
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/platformcatalog"
 	sharedauth "github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/auth"
 	sharedauthorization "github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/authorizationcontext"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/loginip"
 	"golang.org/x/oauth2"
 )
 
@@ -35,6 +36,7 @@ type verifiedClaims struct {
 	AuthzRevision                                                        uint64
 	ExpiresAt                                                            time.Time
 	AccessToken                                                          string
+	LoginIP                                                              string
 }
 
 type oidcClient interface {
@@ -265,7 +267,7 @@ func (c *platformOIDCClient) AuthorizationContext(ctx context.Context, accessTok
 	if len(decision.OrganizationIDs) > 0 {
 		primaryOrgID = decision.OrganizationIDs[0]
 	}
-	return verifiedClaims{Subject: raw.Subject, IdentityID: raw.IdentityID, TenantID: raw.TenantID, PersonID: raw.PersonID, PrimaryOrgID: primaryOrgID, Roles: raw.Roles, Permissions: raw.Permissions, OrganizationIDs: decision.OrganizationIDs, DataScopes: scopes, AuthzRevision: raw.AuthorizationRevision}, nil
+	return verifiedClaims{Subject: raw.Subject, IdentityID: raw.IdentityID, TenantID: raw.TenantID, PersonID: raw.PersonID, PrimaryOrgID: primaryOrgID, Roles: raw.Roles, Permissions: raw.Permissions, OrganizationIDs: decision.OrganizationIDs, DataScopes: scopes, AuthzRevision: raw.AuthorizationRevision, LoginIP: loginip.Normalize(raw.UserLoginIP)}, nil
 }
 
 func (c *platformOIDCClient) authorizationContextWithRefresh(ctx context.Context, token *oauth2.Token) (verifiedClaims, *oauth2.Token, error) {

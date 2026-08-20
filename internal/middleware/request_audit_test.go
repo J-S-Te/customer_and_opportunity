@@ -35,7 +35,7 @@ func TestRequestAuditCapturesPlatformPrincipalAndNormalizedRoute(t *testing.T) {
 	router := gin.New()
 	router.Use(RequestID(), RequestAudit(store, RequestAuditOptions{TenantID: "tenant-a", ApplicationCode: "customer_and_opportunity", EnvironmentCode: "test"}))
 	router.POST("/customers/:id", func(c *gin.Context) {
-		principal := auth.Principal{UserID: "user-a", DisplayName: "User A", TenantID: "tenant-a"}
+		principal := auth.Principal{UserID: "user-a", DisplayName: "User A", TenantID: "tenant-a", LoginIP: "203.0.113.9"}
 		c.Request = c.Request.WithContext(auth.WithPrincipal(c.Request.Context(), principal))
 		c.Status(http.StatusNoContent)
 	})
@@ -53,8 +53,30 @@ func TestRequestAuditCapturesPlatformPrincipalAndNormalizedRoute(t *testing.T) {
 	if store.completion.ActorType != "USER" || store.completion.ActorID != "user-a" || store.completion.Route != "/customers/:id" {
 		t.Fatalf("completion=%+v", store.completion)
 	}
+	if store.completion.UserLoginIP != "203.0.113.9" {
+		t.Fatalf("user login IP=%q", store.completion.UserLoginIP)
+	}
 	if store.completion.Action != "HTTP_POST /customers/:id" || store.completion.Result != "SUCCESS" || store.completion.RiskLevel != "HIGH" {
 		t.Fatalf("completion=%+v", store.completion)
+	}
+}
+
+func TestRequestAuditOmitsInvalidOrUnavailableUserLoginIP(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, loginIP := range []string{"", "172.18.0.2", "not-an-ip"} {
+		t.Run(loginIP, func(t *testing.T) {
+			store := &requestAuditCapture{}
+			router := gin.New()
+			router.Use(RequestID(), RequestAudit(store, RequestAuditOptions{TenantID: "tenant-a", ApplicationCode: "customer_and_opportunity", EnvironmentCode: "test"}))
+			router.GET("/customers", func(c *gin.Context) {
+				c.Request = c.Request.WithContext(auth.WithPrincipal(c.Request.Context(), auth.Principal{UserID: "user-a", LoginIP: loginIP}))
+				c.Status(http.StatusNoContent)
+			})
+			router.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/customers", nil))
+			if store.completion.UserLoginIP != "" {
+				t.Fatalf("login IP=%q completion=%+v", loginIP, store.completion)
+			}
+		})
 	}
 }
 

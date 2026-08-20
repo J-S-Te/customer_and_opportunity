@@ -9,6 +9,7 @@ import (
 
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/portalinvite"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/database"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/requestaudit"
 )
 
 type fakeStore struct {
@@ -16,6 +17,16 @@ type fakeStore struct {
 	invalid    int
 	worker     string
 	lease      time.Duration
+}
+
+func TestNewAuditDispatcherUsesDedicatedAuditBinding(t *testing.T) {
+	dispatcher, err := newAuditDispatcher(requestaudit.NewStore(nil), Config{Audit: AuditConfig{
+		BaseURL: "https://platform.example", ClientID: "crm-audit", ClientSecret: "secret", ApplicationCode: "customer_and_opportunity",
+		EnvironmentCode: "dev", WorkerID: "portal-access-disable-audit", PollInterval: time.Second, BatchSize: 10,
+	}})
+	if err != nil || dispatcher == nil {
+		t.Fatalf("dispatcher=%v err=%v", dispatcher, err)
+	}
 }
 
 func (s *fakeStore) claim(_ context.Context, worker string, _ time.Time, lease time.Duration, _ int) ([]portalinvite.AccessDisableOperation, error) {

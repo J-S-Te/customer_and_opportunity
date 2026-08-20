@@ -452,7 +452,7 @@ func authenticate(deps RouterDependencies) gin.HandlerFunc {
 		// 请求审计和业务处理共享同一个基础平台主体；Portal 本地会话只缓存平台已签名且
 		// 周期性重验的声明，不创建第二套身份或权限来源。
 		principal := sharedauth.Principal{
-			UserID: session.PlatformUserID, TenantID: session.TenantID,
+			UserID: session.PlatformUserID, TenantID: session.TenantID, LoginIP: session.LoginIP,
 			Roles: append([]string(nil), session.Roles...), Permissions: permissions,
 			DataScopes: portalDataScopes(session.DataScopes),
 			ScopeMode:  sharedauth.ScopeSelf, RoleConfigHash: session.RoleConfigHash, AuthzRevision: session.AuthzRevision,

@@ -188,6 +188,9 @@ func (d *Dispatcher) deliver(ctx context.Context, values []Record) error {
 		if value.ActorName != "" {
 			event["actor_name"] = value.ActorName
 		}
+		if value.UserLoginIP != "" {
+			event["user_login_ip"] = value.UserLoginIP
+		}
 		events = append(events, event)
 	}
 	body, err := json.Marshal(map[string]any{"events": events})

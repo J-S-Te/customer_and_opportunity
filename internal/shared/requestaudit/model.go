@@ -24,6 +24,7 @@ type Record struct {
 	ActorType       string     `gorm:"size:16;not null"`
 	ActorID         string     `gorm:"size:128;not null"`
 	ActorName       string     `gorm:"size:200;not null"`
+	UserLoginIP     string     `gorm:"size:45;not null"`
 	Action          string     `gorm:"size:128;not null"`
 	ResourceType    string     `gorm:"size:64;not null"`
 	ResourceID      string     `gorm:"size:128;not null"`
@@ -56,6 +57,7 @@ type Start struct {
 
 type Completion struct {
 	ActorType, ActorID, ActorName, Action, Route string
+	UserLoginIP                                  string
 	HTTPStatus                                   int
 	Result, ReasonCode, RiskLevel                string
 	CompletedAt                                  time.Time
@@ -66,6 +68,7 @@ type Completion struct {
 type BusinessEvent struct {
 	EventID, TenantID, ApplicationCode, EnvironmentCode string
 	ActorType, ActorID, ActorName                       string
+	UserLoginIP                                         string
 	Action, ResourceType, ResourceID, RequestID         string
 	Result, ReasonCode, RiskLevel                       string
 	OccurredAt                                          time.Time

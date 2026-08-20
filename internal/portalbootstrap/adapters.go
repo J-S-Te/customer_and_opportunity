@@ -20,6 +20,7 @@ import (
 	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/portal/account"
 	sharedauthorization "github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/authorizationcontext"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/loginip"
 	requestctx "github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/request"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/clientcredentials"
@@ -200,7 +201,7 @@ func (a *OIDCAdapter) authorizationContext(ctx context.Context, accessToken stri
 	if err != nil {
 		return account.Claims{}, fmt.Errorf("validate portal authorization context: %w", err)
 	}
-	return account.Claims{Subject: raw.Subject, IdentityID: raw.IdentityID, PersonID: raw.PersonID, TenantID: raw.TenantID, Roles: raw.Roles, Permissions: raw.Permissions, DataScopes: scopes, AuthzRevision: raw.AuthorizationRevision, CustomerRef: raw.CustomerRef}, nil
+	return account.Claims{Subject: raw.Subject, IdentityID: raw.IdentityID, PersonID: raw.PersonID, TenantID: raw.TenantID, Roles: raw.Roles, Permissions: raw.Permissions, DataScopes: scopes, AuthzRevision: raw.AuthorizationRevision, CustomerRef: raw.CustomerRef, LoginIP: loginip.Normalize(raw.UserLoginIP)}, nil
 }
 
 func (a *OIDCAdapter) authorizationContextWithRefresh(ctx context.Context, token *oauth2.Token) (account.Claims, *oauth2.Token, error) {

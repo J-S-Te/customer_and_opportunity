@@ -2,17 +2,23 @@ package portalaccessdisableworker
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/portalinvite"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/audit"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/requestaudit"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
 )
 
 type App struct {
-	db     *gorm.DB
-	worker *Worker
+	db          *gorm.DB
+	worker      *Worker
+	auditCancel context.CancelFunc
+	auditDone   chan struct{}
 }
 
 func New(ctx context.Context, cfg Config) (*App, error) {
@@ -64,16 +70,58 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 		}
 		options = append(options, portalinvite.WithPlatformBindingDisabler(bindingDisabler), portalinvite.WithPlatformOnlyDisable())
 	}
-	service := portalinvite.NewAccessDisableService(repo, nil, platformClient, portalClient, audit.NewGORMWriter(db), portalinvite.SystemClock{}, portalinvite.CryptoRandom{}, options...)
-	return &App{db: db, worker: NewWorker(newStore(db), service, cfg)}, nil
+	auditStore := requestaudit.NewStore(db)
+	auditDispatcher, err := newAuditDispatcher(auditStore, cfg)
+	if err != nil {
+		_ = sqlDB.Close()
+		return nil, fmt.Errorf("initialize Portal access disable audit: %w", err)
+	}
+	// Write keeps the existing local crm_audit_events fact and, in the same
+	// database transaction when one exists, appends a durable platform-delivery
+	// record. A platform outage therefore cannot undo access disabling.
+	auditWriter := audit.NewGORMWriter(db).UsePlatformOutbox(auditStore, cfg.Audit.EnvironmentCode)
+	service := portalinvite.NewAccessDisableService(repo, nil, platformClient, portalClient, auditWriter, portalinvite.SystemClock{}, portalinvite.CryptoRandom{}, options...)
+	auditContext, auditCancel := context.WithCancel(context.Background())
+	auditDone := make(chan struct{})
+	go func() {
+		defer close(auditDone)
+		auditDispatcher.Run(auditContext)
+	}()
+	go func() {
+		preflightCtx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		defer cancel()
+		if err := auditDispatcher.ValidateConfiguration(preflightCtx); err != nil {
+			slog.Default().Warn("Portal access disable audit publisher preflight failed", "error_code", requestaudit.DeliveryErrorCode(err))
+		}
+	}()
+	return &App{db: db, worker: NewWorker(newStore(db), service, cfg), auditCancel: auditCancel, auditDone: auditDone}, nil
+}
+
+func newAuditDispatcher(store *requestaudit.Store, cfg Config) (*requestaudit.Dispatcher, error) {
+	return requestaudit.NewDispatcher(store, requestaudit.DispatcherOptions{
+		PlatformBaseURL: cfg.Audit.BaseURL, ClientID: cfg.Audit.ClientID, ClientSecret: cfg.Audit.ClientSecret,
+		ApplicationCode: cfg.Audit.ApplicationCode, EnvironmentCode: cfg.Audit.EnvironmentCode, WorkerID: cfg.Audit.WorkerID,
+		PollInterval: cfg.Audit.PollInterval, BatchSize: cfg.Audit.BatchSize,
+	})
 }
 
 func (a *App) Run(ctx context.Context) error { return a.worker.Run(ctx) }
 
 func (a *App) Close() error {
+	if a.auditCancel != nil {
+		a.auditCancel()
+	}
+	var shutdownErr error
+	if a.auditDone != nil {
+		select {
+		case <-a.auditDone:
+		case <-time.After(5 * time.Second):
+			shutdownErr = errors.New("Portal access disable audit dispatcher did not stop within 5s")
+		}
+	}
 	sqlDB, err := a.db.DB()
 	if err != nil {
-		return err
+		return errors.Join(shutdownErr, err)
 	}
-	return sqlDB.Close()
+	return errors.Join(shutdownErr, sqlDB.Close())
 }

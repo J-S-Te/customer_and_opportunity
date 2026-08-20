@@ -11,11 +11,11 @@ import (
 
 type completeLoginRepository struct {
 	revalidationRepository
-	activation       *ActivationContext
-	findLinkCalls    int
-	createdSession   *Session
-	securityEvents   []*SecurityEvent
-	link             *IdentityLink
+	activation     *ActivationContext
+	findLinkCalls  int
+	createdSession *Session
+	securityEvents []*SecurityEvent
+	link           *IdentityLink
 }
 
 func (r *completeLoginRepository) ConsumeActivation(context.Context, string, time.Time) (*ActivationContext, error) {
@@ -110,7 +110,9 @@ func TestCompleteLoginPlatformBindingSkipsLocalLink(t *testing.T) {
 	now := time.Date(2026, 8, 14, 1, 0, 0, 0, time.UTC)
 	activation := &ActivationContext{Model: database.Model{TenantID: "tenant-a", CreatedBy: "portal-login"}, NonceHash: hash("nonce"), NonceCipher: []byte("nonce"), PKCEVerifierCipher: []byte("verifier"), InviteTokenHash: hash(""), ReturnPath: "/"}
 	repository := &completeLoginRepository{activation: activation}
-	oidc := &completeLoginOIDC{claims: validPortalClaims("7")}
+	claims := validPortalClaims("7")
+	claims.LoginIP = "203.0.113.9"
+	oidc := &completeLoginOIDC{claims: claims}
 	service := NewServiceWithOptions(repository, oidc, portalInviteNoop{}, passthroughProtector{}, fixedClock{now: now}, &sequenceRandom{}, "catalog-v1", 15*time.Minute, "dev", WithPlatformBinding())
 
 	result, err := service.CompleteLogin(context.Background(), "state", "code", LoginMetadata{})
@@ -125,6 +127,9 @@ func TestCompleteLoginPlatformBindingSkipsLocalLink(t *testing.T) {
 	}
 	if repository.createdSession == nil || repository.createdSession.CustomerID != 7 {
 		t.Fatalf("created session = %#v", repository.createdSession)
+	}
+	if repository.createdSession.LoginIP != "203.0.113.9" {
+		t.Fatalf("session login IP=%q", repository.createdSession.LoginIP)
 	}
 }
 
@@ -254,7 +259,7 @@ func TestInvitationLoginPlatformBinding(t *testing.T) {
 	})
 	t.Run("complete matches customer ref and consumes invite", func(t *testing.T) {
 		activation := &ActivationContext{
-			Model: database.Model{TenantID: "tenant-a", CreatedBy: "portal-login"},
+			Model:                  database.Model{TenantID: "tenant-a", CreatedBy: "portal-login"},
 			ExpectedPlatformUserID: "subject-a", CustomerID: 7,
 			NonceHash: hash("nonce"), NonceCipher: []byte("nonce"), PKCEVerifierCipher: []byte("verifier"),
 			InviteTokenHash: hash("invite-token"), InviteTokenCipher: []byte("invite-token"), ReturnPath: "/home",
@@ -278,7 +283,7 @@ func TestInvitationLoginPlatformBinding(t *testing.T) {
 	})
 	t.Run("customer ref mismatch rejects invite login", func(t *testing.T) {
 		activation := &ActivationContext{
-			Model: database.Model{TenantID: "tenant-a", CreatedBy: "portal-login"},
+			Model:                  database.Model{TenantID: "tenant-a", CreatedBy: "portal-login"},
 			ExpectedPlatformUserID: "subject-a", CustomerID: 7,
 			NonceHash: hash("nonce"), NonceCipher: []byte("nonce"), PKCEVerifierCipher: []byte("verifier"),
 			InviteTokenHash: hash("invite-token"), InviteTokenCipher: []byte("invite-token"), ReturnPath: "/home",

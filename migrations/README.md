@@ -56,6 +56,8 @@
 48. `000078_presale_approval_rules.up.sql`
 49. `000080_crm_session_data_scopes.up.sql`
 50. `000081_portal_identity_reconciliation.up.sql`
+51. `000094_add_user_login_ip_to_request_audit_outbox.up.sql`
+52. `000096_add_login_ip_to_crm_oidc_sessions.up.sql`
 
 ## customer_portal schema
 
@@ -92,6 +94,8 @@
 29. `000076_portal_request_audit_outbox.up.sql`
 30. `000077_portal_customer_service_options.up.sql`
 31. `000079_portal_session_data_scopes.up.sql`
+32. `000095_add_user_login_ip_to_portal_request_audit_outbox.up.sql`
+33. `000097_add_login_ip_to_portal_sessions.up.sql`
 
 ## 规则
 

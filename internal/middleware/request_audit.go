@@ -10,6 +10,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/apperror"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/auth"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/loginip"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/observability"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/request"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/requestaudit"
@@ -44,9 +45,10 @@ func RequestAudit(store requestAuditStore, options RequestAuditOptions) gin.Hand
 
 		c.Next()
 		completedAt := time.Now().UTC()
-		actorType, actorID, actorName := "SYSTEM", "", ""
+		actorType, actorID, actorName, userLoginIP := "SYSTEM", "", "", ""
 		if principal, ok := auth.FromContext(c.Request.Context()); ok {
 			actorID, actorName = principal.UserID, principal.DisplayName
+			userLoginIP = loginip.Normalize(principal.LoginIP)
 			actorType = "USER"
 			if strings.HasPrefix(principal.UserID, "machine:") {
 				actorType = "MACHINE"
@@ -73,7 +75,7 @@ func RequestAudit(store requestAuditStore, options RequestAuditOptions) gin.Hand
 		finalizeCtx, cancel := context.WithTimeout(context.WithoutCancel(c.Request.Context()), 2*time.Second)
 		defer cancel()
 		if err := store.Complete(finalizeCtx, eventID, requestaudit.Completion{
-			ActorType: actorType, ActorID: actorID, ActorName: actorName,
+			ActorType: actorType, ActorID: actorID, ActorName: actorName, UserLoginIP: userLoginIP,
 			Action: "HTTP_" + safeHTTPMethod(c.Request.Method) + " " + route, Route: route,
 			HTTPStatus: status, Result: result, ReasonCode: reason, RiskLevel: risk, CompletedAt: completedAt,
 		}); err != nil {

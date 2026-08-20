@@ -49,7 +49,7 @@ var baseFiles = map[Schema][]string{
 		"000049_opportunity_attachments.up.sql", "000051_presale_progress_notifications.up.sql", "000053_opportunity_member_terms.up.sql",
 		"000055_crm_oidc_session_organizations.up.sql", "000058_crm_oidc_session_person_id.up.sql", "000060_presale_approval_pending_task_binding.up.sql", "000064_portal_invite_operation_idempotency.up.sql", "000065_presale_approval_callback_replay_binding.up.sql", "000067_presale_daily_metrics.up.sql", "000069_crm_portal_access_disable.up.sql", "000071_presale_alert_recipient_namespace.up.sql", "000072_presale_worker_heartbeats.up.sql", "000074_portal_invite_login_account.up.sql", "000075_crm_request_audit_outbox.up.sql", "000078_presale_approval_rules.up.sql",
 		"000080_crm_session_data_scopes.up.sql", "000081_portal_identity_reconciliation.up.sql", "000082_opportunity_contract_link.up.sql", "000083_opportunity_type_source_multiselect.up.sql",
-		"000084_presale_workflow_notifications.up.sql",
+		"000084_presale_workflow_notifications.up.sql", "000094_add_user_login_ip_to_request_audit_outbox.up.sql", "000096_add_login_ip_to_crm_oidc_sessions.up.sql",
 	},
 	Portal: {
 		"000008_create_portal_core.up.sql", "000011_portal_session_claims.up.sql", "000016_portal_project_sync.up.sql",
@@ -63,6 +63,7 @@ var baseFiles = map[Schema][]string{
 		"000070_portal_identity_disable_idempotency.up.sql",
 		"000073_portal_worker_heartbeats.up.sql", "000076_portal_request_audit_outbox.up.sql", "000077_portal_customer_service_options.up.sql",
 		"000079_portal_session_data_scopes.up.sql",
+		"000095_add_user_login_ip_to_portal_request_audit_outbox.up.sql", "000097_add_login_ip_to_portal_sessions.up.sql",
 	},
 }
 
