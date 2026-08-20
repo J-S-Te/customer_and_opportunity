@@ -114,7 +114,7 @@ type AssignmentTarget struct {
 
 type ReplaceAssignmentsInput struct {
 	Assignees    []AssignmentTarget `json:"assignees" binding:"required,min=1"`
-	ChangeReason string             `json:"change_reason" binding:"required"`
+	ChangeReason string             `json:"change_reason"`
 	Version      uint64             `json:"version" binding:"required"`
 }
 

@@ -413,6 +413,9 @@ func localAvailableActions(actor Actor, status RequestStatus, applicantID string
 		if actor.Can("presale.worklog") {
 			actions = append(actions, "ADD_WORKLOG")
 		}
+		if actor.Can("presale.complete") && (actor.HasRole("technician") || actor.HasRole("project_manager") || actor.HasRole("team_lead")) {
+			actions = append(actions, "COMPLETE")
+		}
 	}
 	if status == StatusPendingApproval && applicantID == actor.UserID {
 		actions = append(actions, "CANCEL")

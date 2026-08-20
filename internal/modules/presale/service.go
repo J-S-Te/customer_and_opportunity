@@ -608,7 +608,7 @@ func (s *Service) ReplaceAssignments(ctx context.Context, actor Actor, id uint64
 	}
 	key = strings.TrimSpace(key)
 	in.ChangeReason = strings.TrimSpace(in.ChangeReason)
-	if key == "" || len(key) > 128 || len(in.Assignees) == 0 || len(in.Assignees) > 100 || in.ChangeReason == "" || len([]rune(in.ChangeReason)) > 1000 {
+	if key == "" || len(key) > 128 || len(in.Assignees) == 0 || len(in.Assignees) > 100 || len([]rune(in.ChangeReason)) > 1000 {
 		return nil, ErrInvalidInput
 	}
 	targets := map[string]AssignmentTarget{}
