@@ -80,16 +80,33 @@ func TestRequestAuditOmitsInvalidOrUnavailableUserLoginIP(t *testing.T) {
 	}
 }
 
+func TestRequestAuditSkipsInfrastructureProbes(t *testing.T) {
+	store := &requestAuditCapture{}
+	router := gin.New()
+	router.Use(RequestID(), RequestAudit(store, RequestAuditOptions{TenantID: "tenant-a", ApplicationCode: "customer_and_opportunity", EnvironmentCode: "test"}))
+	router.GET("/healthz", func(c *gin.Context) { c.Status(http.StatusOK) })
+	router.GET("/customer-portal/readyz", func(c *gin.Context) { c.Status(http.StatusOK) })
+
+	for _, path := range []string{"/healthz", "/customer-portal/readyz"} {
+		store.start = requestaudit.Start{}
+		store.completion = requestaudit.Completion{}
+		router.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, path, nil))
+		if store.start.EventID != "" {
+			t.Fatalf("probe %s should not create an audit reservation", path)
+		}
+	}
+}
+
 func TestRequestAuditFailsClosedBeforeHandlerWhenReservationFails(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	store := &requestAuditCapture{startErr: errors.New("database unavailable")}
 	called := false
 	router := gin.New()
 	router.Use(RequestID(), RequestAudit(store, RequestAuditOptions{}))
-	router.GET("/healthz", func(c *gin.Context) { called = true })
+	router.GET("/customers", func(c *gin.Context) { called = true })
 
 	response := httptest.NewRecorder()
-	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/customers", nil))
 	if response.Code != http.StatusServiceUnavailable || called {
 		t.Fatalf("status=%d called=%v", response.Code, called)
 	}

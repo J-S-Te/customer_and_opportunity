@@ -31,6 +31,12 @@ type requestAuditStore interface {
 // summary after all inner middleware has established the platform principal.
 func RequestAudit(store requestAuditStore, options RequestAuditOptions) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		// 健康检查由容器编排周期性调用，来源必然是 Docker 网络地址，
+		// 不代表用户行为，也不应写入面向用户的业务审计列表。
+		if isProbePath(c.Request.URL.Path) {
+			c.Next()
+			return
+		}
 		now := time.Now().UTC()
 		eventID := request.NewID()
 		if err := store.Start(c.Request.Context(), requestaudit.Start{
@@ -84,4 +90,9 @@ func RequestAudit(store requestAuditStore, options RequestAuditOptions) gin.Hand
 			slog.Default().ErrorContext(finalizeCtx, "finalize request audit", "request_id", request.ID(c.Request.Context()), "error", err)
 		}
 	}
+}
+
+func isProbePath(path string) bool {
+	path = strings.TrimRight(strings.TrimSpace(path), "/")
+	return path == "/healthz" || path == "/livez" || path == "/readyz" || strings.HasSuffix(path, "/healthz") || strings.HasSuffix(path, "/livez") || strings.HasSuffix(path, "/readyz")
 }
