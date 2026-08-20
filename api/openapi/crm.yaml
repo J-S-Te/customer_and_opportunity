@@ -39,6 +39,8 @@ paths:
     get: {$ref: '#/components/x-operations/crmMe'}
   /api/v1/capabilities:
     get: {$ref: '#/components/x-operations/getRuntimeCapabilities'}
+  /api/v1/audit-outbox/status:
+    get: {$ref: '#/components/x-operations/getAuditOutboxStatus'}
   /api/v1/owner-directory:
     get: {$ref: '#/components/x-operations/listOwnerDirectory'}
   /api/v1/customers:
@@ -523,6 +525,7 @@ components:
     listCustomerOpportunities: {<<: *customerIDRead, operationId: listCustomerOpportunities}
     listCustomerProjects: {<<: *customerIDRead, operationId: listCustomerProjects, description: External project-history Provider remains pending; unavailable configuration fails closed.}
     listCustomerAuditLogs: {<<: *customerIDRead, operationId: listCustomerAuditLogs, x-permission: customer.audit.read}
+    getAuditOutboxStatus: {<<: *crmRead, operationId: getAuditOutboxStatus, tags: [Customer], x-permission: customer.audit.read, description: Returns tenant-scoped aggregate audit delivery backlog and error categories only. It never exposes audit payloads, access tokens, secrets, or request bodies.}
     voidCustomer: {<<: *customerIDRead, operationId: voidCustomer, x-permission: customer.void, requestBody: {$ref: '#/components/requestBodies/VersionedReason'}}
     restoreCustomer: {<<: *customerIDRead, operationId: restoreCustomer, x-permission: customer.restore, requestBody: {$ref: '#/components/requestBodies/VersionedReason'}}
     listCustomerFollowups: {<<: *customerIDRead, operationId: listCustomerFollowups}

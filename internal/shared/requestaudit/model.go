@@ -70,3 +70,18 @@ type BusinessEvent struct {
 	Result, ReasonCode, RiskLevel                       string
 	OccurredAt                                          time.Time
 }
+
+// OutboxStatus is a credential-free operational projection. It is intentionally
+// aggregate-only: the monitor can identify delivery backlog and failure classes
+// without exposing audited payloads or user request details.
+type OutboxStatus struct {
+	PendingCount        int64            `json:"pending_count"`
+	RetryCount          int64            `json:"retry_count"`
+	ProcessingCount     int64            `json:"processing_count"`
+	StartedCount        int64            `json:"started_count"`
+	DeliveredCount      int64            `json:"delivered_count"`
+	OldestUndeliveredAt *time.Time       `json:"oldest_undelivered_at,omitempty"`
+	MaxAttempts         uint32           `json:"max_attempts"`
+	LastDeliveredAt     *time.Time       `json:"last_delivered_at,omitempty"`
+	ErrorCounts         map[string]int64 `json:"error_counts"`
+}

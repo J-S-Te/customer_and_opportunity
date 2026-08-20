@@ -38,6 +38,15 @@ type Dispatcher struct {
 	tokenExpiresAt           time.Time
 }
 
+type platformHTTPError struct{ status int }
+
+func (e platformHTTPError) Error() string {
+	return fmt.Sprintf("platform audit returned status %d", e.status)
+}
+
+var errOutboxSourceMismatch = errors.New("audit outbox source does not match dispatcher configuration")
+var errAuditConfigurationMismatch = errors.New("platform audit publisher binding does not match dispatcher configuration")
+
 func NewDispatcher(store *Store, options DispatcherOptions) (*Dispatcher, error) {
 	if store == nil {
 		return nil, errors.New("request audit store is required")
@@ -90,6 +99,48 @@ func (d *Dispatcher) Run(ctx context.Context) {
 	}
 }
 
+// ValidateConfiguration performs a read-only, authenticated preflight against
+// the platform audit contract. Callers should report its error but must not use
+// it to block business startup: the durable Outbox remains the fallback while
+// the platform is temporarily unavailable.
+func (d *Dispatcher) ValidateConfiguration(ctx context.Context) error {
+	token, err := d.accessToken(ctx)
+	if err != nil {
+		return err
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, d.baseURL+"/api/v1/audit/ingest/validate", nil)
+	if err != nil {
+		return fmt.Errorf("create platform audit validation request: %w", err)
+	}
+	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set("Accept", "application/json")
+	response, err := d.client.Do(request)
+	if err != nil {
+		return fmt.Errorf("request platform audit validation: %w", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 1<<20))
+		return platformHTTPError{status: response.StatusCode}
+	}
+	var envelope struct {
+		Code string `json:"code"`
+		Data struct {
+			ApplicationCode string `json:"application_code"`
+			EnvironmentCode string `json:"environment_code"`
+			ClientID        string `json:"client_id"`
+			AuditIngest     bool   `json:"audit_ingest"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&envelope); err != nil || envelope.Code != "OK" {
+		return errors.New("platform audit validation returned an invalid response envelope")
+	}
+	if envelope.Data.ApplicationCode != d.application || envelope.Data.EnvironmentCode != d.environment || envelope.Data.ClientID != d.clientID || !envelope.Data.AuditIngest {
+		return errAuditConfigurationMismatch
+	}
+	return nil
+}
+
 func (d *Dispatcher) runOnce(ctx context.Context) error {
 	now := time.Now().UTC()
 	if err := d.store.RecoverInterrupted(ctx, now.Add(-5*time.Minute), now); err != nil {
@@ -110,6 +161,11 @@ func (d *Dispatcher) runOnce(ctx context.Context) error {
 }
 
 func (d *Dispatcher) deliver(ctx context.Context, values []Record) error {
+	for _, value := range values {
+		if value.ApplicationCode != d.application || value.EnvironmentCode != d.environment {
+			return errOutboxSourceMismatch
+		}
+	}
 	token, err := d.accessToken(ctx)
 	if err != nil {
 		return err
@@ -159,7 +215,7 @@ func (d *Dispatcher) deliver(ctx context.Context, values []Record) error {
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusAccepted {
 		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 1<<20))
-		return fmt.Errorf("platform audit batch returned status %d", response.StatusCode)
+		return platformHTTPError{status: response.StatusCode}
 	}
 	var envelope struct {
 		Code string `json:"code"`
@@ -214,7 +270,7 @@ func (d *Dispatcher) accessToken(ctx context.Context) (string, error) {
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
 		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 1<<20))
-		return "", fmt.Errorf("platform audit token returned status %d", response.StatusCode)
+		return "", platformHTTPError{status: response.StatusCode}
 	}
 	var token struct {
 		AccessToken string `json:"access_token"`
@@ -255,8 +311,36 @@ func retryDelay(values []Record) time.Duration {
 }
 
 func deliveryErrorCode(err error) string {
+	if errors.Is(err, errOutboxSourceMismatch) {
+		return "PLATFORM_AUDIT_OUTBOX_SOURCE_MISMATCH"
+	}
+	if errors.Is(err, errAuditConfigurationMismatch) {
+		return "PLATFORM_AUDIT_CONFIGURATION_MISMATCH"
+	}
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 		return "PLATFORM_AUDIT_TIMEOUT"
 	}
+	var response platformHTTPError
+	if errors.As(err, &response) {
+		switch response.status {
+		case http.StatusUnauthorized:
+			return "PLATFORM_AUDIT_UNAUTHORIZED"
+		case http.StatusForbidden:
+			return "PLATFORM_AUDIT_FORBIDDEN"
+		case http.StatusUnprocessableEntity:
+			return "PLATFORM_AUDIT_CLIENT_BINDING_REJECTED"
+		case http.StatusTooManyRequests:
+			return "PLATFORM_AUDIT_RATE_LIMITED"
+		default:
+			if response.status >= http.StatusInternalServerError {
+				return "PLATFORM_AUDIT_SERVER_ERROR"
+			}
+		}
+	}
 	return "PLATFORM_AUDIT_DELIVERY_FAILED"
 }
+
+// DeliveryErrorCode provides a stable, credential-free diagnostic category for
+// health endpoints and structured logs. It never returns remote response
+// bodies, which could contain sensitive implementation details.
+func DeliveryErrorCode(err error) string { return deliveryErrorCode(err) }
