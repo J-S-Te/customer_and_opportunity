@@ -3,6 +3,7 @@ package requestaudit
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -80,6 +81,92 @@ func TestDispatcherRejectsMissingReceipt(t *testing.T) {
 	err = dispatcher.deliver(context.Background(), []Record{{EventID: "event-1", ApplicationCode: "customer_portal", EnvironmentCode: "test", ActorType: "SYSTEM", Action: "HTTP_GET /healthz", ResourceType: "http_route", RequestID: "request-1", Method: "GET", Route: "/healthz", Result: "SUCCESS", RiskLevel: "LOW", OccurredAt: time.Now()}})
 	if err == nil || !strings.Contains(err.Error(), "omitted") {
 		t.Fatalf("error=%v", err)
+	}
+}
+
+func TestDispatcherRejectsOutboxSourceMismatchBeforeRequestingToken(t *testing.T) {
+	called := false
+	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		called = true
+		return nil, nil
+	})}
+	dispatcher, err := NewDispatcher(NewStore(nil), DispatcherOptions{PlatformBaseURL: "https://platform.example", ClientID: "audit-client", ClientSecret: "audit-secret", ApplicationCode: "customer_and_opportunity", EnvironmentCode: "dev", WorkerID: "worker-a", HTTPClient: client})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = dispatcher.deliver(context.Background(), []Record{{EventID: "event-1", ApplicationCode: "customer_and_opportunity", EnvironmentCode: "prod"}})
+	if !errors.Is(err, errOutboxSourceMismatch) {
+		t.Fatalf("error=%v", err)
+	}
+	if called {
+		t.Fatal("source mismatch must not request a token or send an event")
+	}
+}
+
+func TestDeliveryErrorCodeClassifiesPlatformResponses(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{name: "unauthorized", err: platformHTTPError{status: http.StatusUnauthorized}, want: "PLATFORM_AUDIT_UNAUTHORIZED"},
+		{name: "forbidden", err: platformHTTPError{status: http.StatusForbidden}, want: "PLATFORM_AUDIT_FORBIDDEN"},
+		{name: "binding rejected", err: platformHTTPError{status: http.StatusUnprocessableEntity}, want: "PLATFORM_AUDIT_CLIENT_BINDING_REJECTED"},
+		{name: "rate limited", err: platformHTTPError{status: http.StatusTooManyRequests}, want: "PLATFORM_AUDIT_RATE_LIMITED"},
+		{name: "server error", err: platformHTTPError{status: http.StatusBadGateway}, want: "PLATFORM_AUDIT_SERVER_ERROR"},
+		{name: "source mismatch", err: errOutboxSourceMismatch, want: "PLATFORM_AUDIT_OUTBOX_SOURCE_MISMATCH"},
+		{name: "configuration mismatch", err: errAuditConfigurationMismatch, want: "PLATFORM_AUDIT_CONFIGURATION_MISMATCH"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := deliveryErrorCode(test.err); got != test.want {
+				t.Fatalf("deliveryErrorCode(%v)=%s want %s", test.err, got, test.want)
+			}
+		})
+	}
+}
+
+func TestValidateConfigurationConfirmsTrustedPublisherBinding(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		switch request.URL.Path {
+		case "/oauth2/token":
+			return jsonResponse(http.StatusOK, `{"access_token":"token","token_type":"Bearer","scope":"audit.ingest","expires_in":300}`), nil
+		case "/api/v1/audit/ingest/validate":
+			if request.Method != http.MethodGet || request.Header.Get("Authorization") != "Bearer token" {
+				t.Fatalf("unexpected validation request: method=%s authorization=%q", request.Method, request.Header.Get("Authorization"))
+			}
+			return jsonResponse(http.StatusOK, `{"code":"OK","data":{"application_code":"customer_and_opportunity","environment_code":"dev","client_id":"customer_and_opportunity-dev-audit-publisher","audit_ingest":true}}`), nil
+		default:
+			t.Fatalf("unexpected request %s", request.URL.Path)
+			return nil, nil
+		}
+	})}
+	dispatcher, err := NewDispatcher(NewStore(nil), DispatcherOptions{PlatformBaseURL: "https://platform.example", ClientID: "customer_and_opportunity-dev-audit-publisher", ClientSecret: "audit-secret", ApplicationCode: "customer_and_opportunity", EnvironmentCode: "dev", WorkerID: "worker-a", HTTPClient: client})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := dispatcher.ValidateConfiguration(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestValidateConfigurationRejectsDifferentEnvironment(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.Path == "/oauth2/token" {
+			return jsonResponse(http.StatusOK, `{"access_token":"token","token_type":"Bearer","scope":"audit.ingest","expires_in":300}`), nil
+		}
+		return jsonResponse(http.StatusOK, `{"code":"OK","data":{"application_code":"customer_and_opportunity","environment_code":"prod","client_id":"customer_and_opportunity-prod-audit-publisher","audit_ingest":true}}`), nil
+	})}
+	dispatcher, err := NewDispatcher(NewStore(nil), DispatcherOptions{PlatformBaseURL: "https://platform.example", ClientID: "customer_and_opportunity-prod-audit-publisher", ClientSecret: "audit-secret", ApplicationCode: "customer_and_opportunity", EnvironmentCode: "dev", WorkerID: "worker-a", HTTPClient: client})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = dispatcher.ValidateConfiguration(context.Background())
+	if !errors.Is(err, errAuditConfigurationMismatch) {
+		t.Fatalf("error=%v", err)
+	}
+	if got := DeliveryErrorCode(err); got != "PLATFORM_AUDIT_CONFIGURATION_MISMATCH" {
+		t.Fatalf("error code=%s", got)
 	}
 }
 

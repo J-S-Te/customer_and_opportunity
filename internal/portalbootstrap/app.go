@@ -132,6 +132,16 @@ func New(ctx context.Context, config Config) (*App, error) {
 		defer close(auditDone)
 		auditDispatcher.Run(auditContext)
 	}()
+	// Keep Portal startup available during a temporary audit-platform outage.
+	// The preflight uses only the publisher's OAuth token and the read-only
+	// platform validation endpoint; it cannot affect user sessions or Keycloak.
+	go func() {
+		preflightCtx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		defer cancel()
+		if err := auditDispatcher.ValidateConfiguration(preflightCtx); err != nil {
+			slog.Default().Warn("Portal audit publisher preflight failed", "error_code", requestaudit.DeliveryErrorCode(err))
+		}
+	}()
 	return &App{Config: config, DB: db, Server: &http.Server{Addr: config.Address, Handler: router, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second}, auditCancel: auditCancel, auditDone: auditDone}, nil
 }
 

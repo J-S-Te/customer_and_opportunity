@@ -146,6 +146,10 @@ func New(config Config) (*App, error) {
 			"role_config_hash": principal.RoleConfigHash, "authz_revision": principal.AuthzRevision,
 		})
 	})
+	// This management endpoint uses an existing audit-read permission. It is
+	// intentionally separate from public liveness/readiness probes and exposes
+	// aggregate-only local Outbox state for the caller's tenant.
+	api.GET("/audit-outbox/status", middleware.RequirePermission("customer.audit.read"), auditOutboxStatusHandler(auditStore, config))
 	workerReadiness := presale.NewGORMWorkerReadinessRepository(db)
 	api.GET("/capabilities", runtimeCapabilitiesHandler(config, workerReadiness, config.PresaleWorkerHeartbeatMaxAge))
 	var ownerCatalog ownerdirectory.Catalog = ownerdirectory.UnavailableCatalog{}
@@ -351,6 +355,17 @@ func New(config Config) (*App, error) {
 	go func() {
 		defer close(auditDone)
 		auditDispatcher.Run(auditContext)
+	}()
+	// The preflight is deliberately asynchronous and read-only. A platform
+	// outage or a wrong audit publisher binding must surface clearly in logs,
+	// but must never prevent CRM from serving business traffic; the local Outbox
+	// retains events until delivery recovers.
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		defer cancel()
+		if err := auditDispatcher.ValidateConfiguration(ctx); err != nil {
+			slog.Default().Warn("platform audit publisher preflight failed", "error_code", requestaudit.DeliveryErrorCode(err))
+		}
 	}()
 	return &App{Config: config, DB: db, Router: router, Server: server, auditCancel: auditCancel, auditDone: auditDone}, nil
 }

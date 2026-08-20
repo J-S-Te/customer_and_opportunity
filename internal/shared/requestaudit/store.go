@@ -153,3 +153,61 @@ func (s *Store) Retry(ctx context.Context, workerID string, values []Record, cod
 			"locked_by": "", "locked_until": nil, "last_error_code": code, "updated_at": now.UTC(),
 		}).Error
 }
+
+// Status returns a tenant-scoped, aggregate-only view for operational
+// monitoring. It never returns audit payloads, tokens, or request content.
+func (s *Store) Status(ctx context.Context, tenantID string) (OutboxStatus, error) {
+	status := OutboxStatus{ErrorCounts: map[string]int64{}}
+	query := func() *gorm.DB {
+		return s.db.WithContext(ctx).Table(s.tableName).Where("tenant_id = ?", tenantID)
+	}
+
+	type countRow struct {
+		DeliveryStatus string
+		Count          int64
+	}
+	var counts []countRow
+	if err := query().Select("delivery_status, COUNT(*) AS count").Group("delivery_status").Scan(&counts).Error; err != nil {
+		return OutboxStatus{}, err
+	}
+	for _, row := range counts {
+		switch row.DeliveryStatus {
+		case StatusPending:
+			status.PendingCount = row.Count
+		case StatusRetry:
+			status.RetryCount = row.Count
+		case StatusProcessing:
+			status.ProcessingCount = row.Count
+		case StatusStarted:
+			status.StartedCount = row.Count
+		case StatusDelivered:
+			status.DeliveredCount = row.Count
+		}
+	}
+
+	type aggregateRow struct {
+		OldestUndeliveredAt *time.Time
+		MaxAttempts         uint32
+		LastDeliveredAt     *time.Time
+	}
+	var aggregate aggregateRow
+	if err := query().Select("MIN(CASE WHEN delivery_status IN (?, ?, ?, ?) THEN occurred_at END) AS oldest_undelivered_at, MAX(attempts) AS max_attempts, MAX(delivered_at) AS last_delivered_at", StatusStarted, StatusPending, StatusProcessing, StatusRetry).Scan(&aggregate).Error; err != nil {
+		return OutboxStatus{}, err
+	}
+	status.OldestUndeliveredAt = aggregate.OldestUndeliveredAt
+	status.MaxAttempts = aggregate.MaxAttempts
+	status.LastDeliveredAt = aggregate.LastDeliveredAt
+
+	type errorCountRow struct {
+		Code  string
+		Count int64
+	}
+	var errors []errorCountRow
+	if err := query().Select("last_error_code AS code, COUNT(*) AS count").Where("last_error_code <> ''").Group("last_error_code").Scan(&errors).Error; err != nil {
+		return OutboxStatus{}, err
+	}
+	for _, row := range errors {
+		status.ErrorCounts[row.Code] = row.Count
+	}
+	return status, nil
+}
