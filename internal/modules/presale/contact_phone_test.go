@@ -102,7 +102,7 @@ func TestContactPhoneAllowsCurrentAndHistoricalRealAssignees(t *testing.T) {
 
 func TestContactPhoneAllowsOnlyExplicitManagerRoles(t *testing.T) {
 	t.Parallel()
-	for _, role := range []string{"sales_director", "team_lead", "technical_lead"} {
+	for _, role := range []string{"sales_director", "team_lead", "technical_director"} {
 		role := role
 		t.Run(role, func(t *testing.T) {
 			t.Parallel()

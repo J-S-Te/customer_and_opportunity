@@ -27,7 +27,7 @@ var requestStatuses = []RequestStatus{
 func requestScope(actor Actor) RequestQueryScope {
 	scope := RequestQueryScope{TenantID: actor.TenantID}
 	scope.All = actor.HasRole("sales_director") || actor.HasRole("technical_director") || actor.HasRole("team_lead") ||
-		actor.HasRole("technical_lead") || actor.HasRole("crm_super_admin") || actor.HasRole("auditor")
+		actor.HasRole("crm_super_admin") || actor.HasRole("auditor")
 	if scope.All {
 		return scope
 	}
@@ -261,14 +261,37 @@ func (s *Service) RequestDetail(ctx context.Context, actor Actor, id uint64) (Re
 	}
 	view := requestView(requestValue)
 	view.AssignmentAction, view.AssignmentRoleCode = assignmentActionForInstance(instance, actor)
+	availableActions := localAvailableActions(actor, requestValue.Status, requestValue.ApplicantID, assignees)
+	// Assignment authority is defined by the approval-rule snapshot.  Keep the
+	// legacy list/board action calculation for requests without a snapshot, but
+	// expose the configured person-assignment action to the authoritative detail
+	// endpoint as well.  Otherwise a technical_director (or another configured
+	// role) sees the picker but the frontend rejects the mutation locally because
+	// the action list does not contain ASSIGN.
+	if requestValue.Status == StatusApprovedPendingAssignment || requestValue.Status == StatusExecuting {
+		if actor.Can("presale.assign") {
+			if action, _ := assignmentActionForInstance(instance, actor); action == ApprovalNodePerson {
+				availableActions = appendUniqueAction(availableActions, "ASSIGN")
+			}
+		}
+	}
 	return RequestDetailView{
 		Request: view, CurrentAssignees: assignees,
 		TotalWorkHours: aggregate.TotalWorkHours, PushExceptionCount: aggregate.PushExceptionCount,
 		Overdue:    isOverdue(requestValue.Status, requestValue.ExpectedEnd, s.clock.Now()),
 		AlertLevel: alertAggregate.Level, AlertDueAt: alertAggregate.DueAt, AlertBasisAt: alertAggregate.BasisAt,
-		AvailableActions:    localAvailableActions(actor, requestValue.Status, requestValue.ApplicantID, assignees),
+		AvailableActions:    availableActions,
 		CanViewContactPhone: canViewContactPhone,
 	}, nil
+}
+
+func appendUniqueAction(actions []string, action string) []string {
+	for _, existing := range actions {
+		if existing == action {
+			return actions
+		}
+	}
+	return append(actions, action)
 }
 
 func assignmentActionForInstance(instance *ApprovalInstance, actor Actor) (ApprovalNodeType, string) {
@@ -334,7 +357,7 @@ func (s *Service) ListForOpportunity(ctx context.Context, actor Actor, opportuni
 	if err != nil {
 		return OpportunityPresalePage{}, err
 	}
-	manager := actor.HasRole("sales_director") || actor.HasRole("technical_director") || actor.HasRole("team_lead") || actor.HasRole("technical_lead") || actor.HasRole("crm_super_admin") || actor.HasRole("auditor")
+	manager := actor.HasRole("sales_director") || actor.HasRole("technical_director") || actor.HasRole("team_lead") || actor.HasRole("crm_super_admin") || actor.HasRole("auditor")
 	sales := actor.HasRole("sales")
 	items := make([]OpportunityPresaleItem, 0, len(requests.Items))
 	for _, item := range requests.Items {

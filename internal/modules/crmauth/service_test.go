@@ -327,13 +327,14 @@ func TestManagementRolesKeepTenantScopeWhileCarryingOrganizations(t *testing.T) 
 	}
 }
 
-func TestNormalizeAuthorizationAcceptsImplementationEngineerRole(t *testing.T) {
+func TestNormalizeAuthorizationCanonicalizesRetiredEngineerRole(t *testing.T) {
 	claims := validClaims(time.Now())
 	claims.Roles = []string{"implementation_engineer"}
-	claims.Permissions = catalogRolePermissions("implementation_engineer")
+	claims.Permissions = catalogRolePermissions("technician")
 	claims.DataScopes = []sharedauth.DataScope{{RoleCode: "implementation_engineer", ScopeType: "ENVIRONMENT", ScopeID: "env-dev", EnvironmentCode: "dev"}}
-	if _, err := normalizeAuthorization(claims, "tenant-1", "hash-1", "dev", 3); err != nil {
-		t.Fatalf("implementation_engineer should be a recognized CRM role: %v", err)
+	normalized, err := normalizeAuthorization(claims, "tenant-1", "hash-1", "dev", 3)
+	if err != nil || len(normalized.Roles) != 1 || normalized.Roles[0] != "technician" {
+		t.Fatalf("retired implementation_engineer should canonicalize to technician: claims=%+v err=%v", normalized, err)
 	}
 }
 

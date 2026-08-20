@@ -67,7 +67,7 @@ func (s *Service) contactPhoneRelation(ctx context.Context, actor Actor, value *
 	if actor.HasRole("auditor") {
 		return "", nil
 	}
-	if actor.HasRole("sales_director") || actor.HasRole("technical_director") || actor.HasRole("team_lead") || actor.HasRole("technical_lead") {
+	if actor.HasRole("sales_director") || actor.HasRole("technical_director") || actor.HasRole("team_lead") {
 		return contactPhoneRelationManager, nil
 	}
 	if strings.TrimSpace(actor.PersonID) == "" {

@@ -38,9 +38,22 @@ func TestApplicationManifestsAreCompleteAndIndependent(t *testing.T) {
 	if !roleHasPermission(crm, "sales_director", "opportunity.contract.transfer") || roleHasPermission(crm, "sales", "opportunity.contract.transfer") {
 		t.Fatal("high-risk contract transfer permission is not limited to the sales director role")
 	}
-	for _, roleCode := range []string{"sales_director", "technical_director", "team_lead", "technical_lead", "technician", "implementation_engineer"} {
+	for _, roleCode := range []string{"sales_director", "technical_director", "team_lead"} {
 		if !roleHasPermission(crm, roleCode, "presale.contact_phone.read") {
 			t.Fatalf("CRM role %s cannot enter the separately authorized contact-phone workflow", roleCode)
+		}
+	}
+	for _, retired := range []string{"implementation_engineer", "technical_lead"} {
+		if HasRole(crm, retired) {
+			t.Fatalf("retired CRM role %s is still exposed", retired)
+		}
+	}
+	if roleHasPermission(crm, "technician", "presale.contact_phone.read") {
+		t.Fatal("technician received plaintext presale contact-phone permission")
+	}
+	for _, forbidden := range []string{"customer.read", "opportunity.read", "presale.create", "presale.approve", "presale.assign", "presale.report", "presale.alert.config"} {
+		if roleHasPermission(crm, "technician", forbidden) {
+			t.Fatalf("technician received non-execution permission %s", forbidden)
 		}
 	}
 	for _, permission := range []string{"presale.approve", "presale.assign"} {
