@@ -41,7 +41,7 @@ func TestDispatcherUsesExactAuditGrantAndValidatesEveryReceipt(t *testing.T) {
 			if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
 				t.Fatal(err)
 			}
-			if len(payload.Events) != 1 || payload.Events[0]["event_id"] != "event-1" || payload.Events[0]["resource_id"] != "customer-7" {
+			if len(payload.Events) != 1 || payload.Events[0]["event_id"] != "event-1" || payload.Events[0]["resource_id"] != "customer-7" || payload.Events[0]["user_login_ip"] != "203.0.113.9" {
 				t.Fatalf("payload=%+v", payload)
 			}
 			return jsonResponse(http.StatusAccepted, `{"code":"OK","data":[{"event_id":"event-1","status":"ACCEPTED"}]}`), nil
@@ -58,12 +58,37 @@ func TestDispatcherUsesExactAuditGrantAndValidatesEveryReceipt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	values := []Record{{EventID: "event-1", ApplicationCode: "customer_and_opportunity", EnvironmentCode: "test", ActorType: "USER", ActorID: "user-1", Action: "customer.UPDATE", ResourceType: "customer", ResourceID: "customer-7", RequestID: "request-1", Method: "BUSINESS", Route: "BUSINESS", Result: "SUCCESS", RiskLevel: "HIGH", OccurredAt: time.Now()}}
+	values := []Record{{EventID: "event-1", ApplicationCode: "customer_and_opportunity", EnvironmentCode: "test", ActorType: "USER", ActorID: "user-1", UserLoginIP: "203.0.113.9", Action: "customer.UPDATE", ResourceType: "customer", ResourceID: "customer-7", RequestID: "request-1", Method: "BUSINESS", Route: "BUSINESS", Result: "SUCCESS", RiskLevel: "HIGH", OccurredAt: time.Now()}}
 	if err := dispatcher.deliver(context.Background(), values); err != nil {
 		t.Fatal(err)
 	}
 	if tokenCalls != 1 || ingestCalls != 1 {
 		t.Fatalf("token calls=%d ingest calls=%d", tokenCalls, ingestCalls)
+	}
+}
+
+func TestDispatcherOmitsEmptyUserLoginIP(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.Path == "/oauth2/token" {
+			return jsonResponse(http.StatusOK, `{"access_token":"token","token_type":"Bearer","scope":"audit.ingest","expires_in":300}`), nil
+		}
+		var payload struct {
+			Events []map[string]any `json:"events"`
+		}
+		if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := payload.Events[0]["user_login_ip"]; ok {
+			t.Fatalf("payload unexpectedly includes user_login_ip: %#v", payload.Events[0])
+		}
+		return jsonResponse(http.StatusAccepted, `{"code":"OK","data":[{"event_id":"event-1","status":"ACCEPTED"}]}`), nil
+	})}
+	dispatcher, err := NewDispatcher(NewStore(nil), DispatcherOptions{PlatformBaseURL: "https://platform.example", ClientID: "audit-client", ClientSecret: "audit-secret", ApplicationCode: "customer_and_opportunity", EnvironmentCode: "test", WorkerID: "worker-a", HTTPClient: client})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := dispatcher.deliver(context.Background(), []Record{{EventID: "event-1", ApplicationCode: "customer_and_opportunity", EnvironmentCode: "test", ActorType: "SYSTEM", Action: "HTTP_GET /healthz", ResourceType: "http_route", RequestID: "request-1", Method: "GET", Route: "/healthz", Result: "SUCCESS", RiskLevel: "LOW", OccurredAt: time.Now()}}); err != nil {
+		t.Fatal(err)
 	}
 }
 

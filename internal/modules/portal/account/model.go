@@ -39,6 +39,7 @@ type Session struct {
 	PublicID               string      `gorm:"size:64;not null;uniqueIndex"`
 	SessionIDHash          string      `gorm:"size:64;not null;uniqueIndex"`
 	PlatformUserID         string      `gorm:"size:128;not null;index"`
+	LoginIP                string      `gorm:"size:45;not null"`
 	CustomerID             uint64      `gorm:"not null;index"`
 	AuthzRevision          uint64      `gorm:"not null"`
 	RoleConfigHash         string      `gorm:"size:128;not null"`

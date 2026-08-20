@@ -21,7 +21,7 @@ func TestPortalAuthorizationContextCarriesDataScopes(t *testing.T) {
 		if got := r.Header.Get("Authorization"); got != "Bearer access-token" {
 			t.Fatalf("authorization=%q", got)
 		}
-		_, _ = io.WriteString(w, `{"sub":"subject-a","identity_id":"subject-a","tenant_id":"tenant-a","client_id":"portal-prod-web","application_code":"customer_portal","environment_code":"prod","roles":["portal_customer"],"permissions":["project.read"],"data_scopes":[{"role_code":"portal_customer","scope_type":"ENVIRONMENT","scope_id":"01ENV","environment_code":"prod"}],"authorization_revision":7}`)
+		_, _ = io.WriteString(w, `{"sub":"subject-a","identity_id":"subject-a","tenant_id":"tenant-a","client_id":"portal-prod-web","application_code":"customer_portal","environment_code":"prod","roles":["portal_customer"],"permissions":["project.read"],"data_scopes":[{"role_code":"portal_customer","scope_type":"ENVIRONMENT","scope_id":"01ENV","environment_code":"prod"}],"authorization_revision":7,"user_login_ip":"203.0.113.9"}`)
 	}))
 	defer server.Close()
 
@@ -32,6 +32,21 @@ func TestPortalAuthorizationContextCarriesDataScopes(t *testing.T) {
 	}
 	if len(claims.DataScopes) != 1 || claims.DataScopes[0].ScopeID != "01ENV" || claims.DataScopes[0].EnvironmentCode != "prod" {
 		t.Fatalf("data scopes=%#v", claims.DataScopes)
+	}
+	if claims.LoginIP != "203.0.113.9" {
+		t.Fatalf("login IP=%q", claims.LoginIP)
+	}
+}
+
+func TestPortalAuthorizationContextOmitsInvalidLoginIP(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"sub":"subject-a","identity_id":"subject-a","tenant_id":"tenant-a","client_id":"portal-prod-web","application_code":"customer_portal","environment_code":"prod","roles":["portal_customer"],"permissions":["project.read"],"data_scopes":[{"role_code":"portal_customer","scope_type":"APPLICATION","scope_id":"","environment_code":""}],"authorization_revision":7,"user_login_ip":"172.18.0.2"}`)
+	}))
+	defer server.Close()
+	adapter := &OIDCAdapter{platformBaseURL: server.URL, httpClient: server.Client(), expectedContext: sharedauthorization.Expectation{ClientID: "portal-prod-web", ApplicationCode: "customer_portal", EnvironmentCode: "prod"}}
+	claims, err := adapter.authorizationContext(context.Background(), "access-token")
+	if err != nil || claims.LoginIP != "" {
+		t.Fatalf("claims=%#v err=%v", claims, err)
 	}
 }
 

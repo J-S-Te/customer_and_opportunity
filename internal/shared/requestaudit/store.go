@@ -33,7 +33,7 @@ func (s *Store) Publish(ctx context.Context, value BusinessEvent) error {
 	return database.FromContext(ctx, s.db).Table(s.tableName).Create(&Record{
 		EventID: value.EventID, TenantID: value.TenantID, ApplicationCode: value.ApplicationCode,
 		EnvironmentCode: value.EnvironmentCode, ActorType: value.ActorType, ActorID: value.ActorID,
-		ActorName: value.ActorName, Action: value.Action, ResourceType: value.ResourceType,
+		ActorName: value.ActorName, UserLoginIP: value.UserLoginIP, Action: value.Action, ResourceType: value.ResourceType,
 		ResourceID: value.ResourceID, RequestID: requestID, Method: "BUSINESS", Route: "BUSINESS",
 		Result: value.Result, ReasonCode: value.ReasonCode, RiskLevel: value.RiskLevel,
 		DeliveryStatus: StatusPending, NextAttemptAt: &now, OccurredAt: now, CompletedAt: &now,
@@ -57,7 +57,7 @@ func (s *Store) Complete(ctx context.Context, eventID string, value Completion) 
 	result := s.db.WithContext(ctx).Table(s.tableName).
 		Where("event_id=? AND delivery_status=?", eventID, StatusStarted).
 		Updates(map[string]any{
-			"actor_type": value.ActorType, "actor_id": value.ActorID, "actor_name": value.ActorName,
+			"actor_type": value.ActorType, "actor_id": value.ActorID, "actor_name": value.ActorName, "user_login_ip": value.UserLoginIP,
 			"action": value.Action, "route": value.Route, "http_status": value.HTTPStatus,
 			"result": value.Result, "reason_code": value.ReasonCode, "risk_level": value.RiskLevel,
 			"delivery_status": StatusPending, "next_attempt_at": now, "completed_at": now, "updated_at": now,

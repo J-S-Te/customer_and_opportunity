@@ -24,6 +24,7 @@ type Session struct {
 	PlatformUserID         string `gorm:"size:128;not null;index"`
 	PersonID               string `gorm:"size:64;not null"`
 	DisplayName            string `gorm:"size:200;not null"`
+	LoginIP                string `gorm:"size:45;not null"`
 	PrimaryOrgID           string `gorm:"size:64;not null"`
 	OrganizationIDsJSON    []byte `gorm:"type:json;not null"`
 	RolesJSON              []byte `gorm:"type:json;not null"`

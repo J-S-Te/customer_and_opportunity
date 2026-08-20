@@ -15,6 +15,10 @@ func setValidConfig(t *testing.T) {
 	t.Setenv("PORTAL_ACCESS_DISABLE_PLATFORM_CLIENT_ID", "crm-role-revoke")
 	t.Setenv("PORTAL_ACCESS_DISABLE_PLATFORM_CLIENT_SECRET", "secret-b")
 	t.Setenv("PORTAL_ACCESS_DISABLE_PLATFORM_APPLICATION_CODE", "customer_portal")
+	t.Setenv("PORTAL_ACCESS_DISABLE_PLATFORM_AUDIT_BASE_URL", "https://platform.example")
+	t.Setenv("PORTAL_ACCESS_DISABLE_PLATFORM_AUDIT_CLIENT_ID", "crm-audit")
+	t.Setenv("PORTAL_ACCESS_DISABLE_PLATFORM_AUDIT_CLIENT_SECRET", "secret-c")
+	t.Setenv("PORTAL_ACCESS_DISABLE_PLATFORM_AUDIT_ENVIRONMENT_CODE", "dev")
 }
 
 func TestLoadConfigRequiresExactLeastPrivilegeScopes(t *testing.T) {
@@ -23,12 +27,25 @@ func TestLoadConfigRequiresExactLeastPrivilegeScopes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Portal.Scope != requiredPortalScope || cfg.Platform.Scope != requiredPlatformScope || cfg.BatchSize != 20 {
+	if cfg.Portal.Scope != requiredPortalScope || cfg.Platform.Scope != requiredPlatformScope || cfg.Audit.ApplicationCode != "customer_and_opportunity" || cfg.BatchSize != 20 {
 		t.Fatalf("unexpected config: %#v", cfg)
 	}
 	t.Setenv("PORTAL_ACCESS_DISABLE_PLATFORM_SCOPE", "application_role.assign")
 	if _, err = LoadConfig(); err == nil {
 		t.Fatal("broader/wrong platform scope must fail closed")
+	}
+}
+
+func TestLoadConfigRequiresDedicatedPlatformAuditPublisher(t *testing.T) {
+	setValidConfig(t)
+	t.Setenv("PORTAL_ACCESS_DISABLE_PLATFORM_AUDIT_CLIENT_ID", "")
+	if _, err := LoadConfig(); err == nil {
+		t.Fatal("audit publisher client must be configured")
+	}
+	setValidConfig(t)
+	t.Setenv("PORTAL_ACCESS_DISABLE_PLATFORM_AUDIT_APPLICATION_CODE", "customer_portal")
+	if _, err := LoadConfig(); err == nil {
+		t.Fatal("worker audit must publish as customer_and_opportunity")
 	}
 }
 

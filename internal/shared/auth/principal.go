@@ -29,6 +29,10 @@ type Principal struct {
 	OrganizationIDs []string
 	RoleConfigHash  string
 	AuthzRevision   uint64
+	// LoginIP is the canonical user login address supplied by a trusted
+	// server-side session or platform authorization context. It is optional:
+	// authenticators must never populate it from an arbitrary request header.
+	LoginIP string
 }
 
 // DataScope keeps the authorization-context wire contract available to

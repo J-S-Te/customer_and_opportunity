@@ -13,6 +13,7 @@ import (
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/platformcatalog"
 	sharedauthorization "github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/authorizationcontext"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/database"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/loginip"
 	requestctx "github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/request"
 )
 
@@ -399,7 +400,7 @@ func (s *Service) CompleteLogin(ctx context.Context, state, code string, metadat
 	if err != nil {
 		return LoginResult{}, err
 	}
-	session := &Session{Model: newModel(claims.TenantID, claims.IdentityID, now), PublicID: publicSessionID, SessionIDHash: hash(rawSession), PlatformUserID: claims.IdentityID, CustomerID: customerID, AuthzRevision: claims.AuthzRevision, RoleConfigHash: claims.RoleConfigHash, Roles: append([]string(nil), claims.Roles...), Permissions: append([]string(nil), claims.Permissions...), DataScopes: cloneDataScopes(claims.DataScopes), AccessTokenCipher: accessTokenCipher, AuthorizationCheckedAt: now, ExpiresAt: expires, AbsoluteExpiry: expires, LastSeenAt: now, IPHash: metadata.IPHash, UserAgentHash: metadata.UserAgentHash, IPMasked: metadata.IPMasked, LocationSnapshot: metadata.Location, DeviceSnapshot: metadata.Device}
+	session := &Session{Model: newModel(claims.TenantID, claims.IdentityID, now), PublicID: publicSessionID, SessionIDHash: hash(rawSession), PlatformUserID: claims.IdentityID, LoginIP: loginip.Normalize(claims.LoginIP), CustomerID: customerID, AuthzRevision: claims.AuthzRevision, RoleConfigHash: claims.RoleConfigHash, Roles: append([]string(nil), claims.Roles...), Permissions: append([]string(nil), claims.Permissions...), DataScopes: cloneDataScopes(claims.DataScopes), AccessTokenCipher: accessTokenCipher, AuthorizationCheckedAt: now, ExpiresAt: expires, AbsoluteExpiry: expires, LastSeenAt: now, IPHash: metadata.IPHash, UserAgentHash: metadata.UserAgentHash, IPMasked: metadata.IPMasked, LocationSnapshot: metadata.Location, DeviceSnapshot: metadata.Device}
 	successEvent, err := s.newSecurityEvent(claims.TenantID, claims.IdentityID, customerID, "LOGIN_SUCCEEDED", "LOW", "", metadata, now)
 	if err != nil {
 		return LoginResult{}, err
