@@ -184,6 +184,8 @@ paths:
     put: {$ref: '#/components/x-operations/selectPresaleExecutionDepartment'}
   /api/v1/presale/requests/{id}/progress:
     post: {$ref: '#/components/x-operations/addPresaleProgress'}
+  /api/v1/presale/requests/{id}/complete:
+    post: {$ref: '#/components/x-operations/completePresaleRequest'}
   /api/v1/presale/requests/{id}/cancel:
     post: {$ref: '#/components/x-operations/cancelPresaleRequest'}
   /api/v1/presale/requests/{id}/worklogs:
@@ -603,6 +605,7 @@ components:
     replacePresaleAssignments: {<<: *presaleIDRead, operationId: replacePresaleAssignments, x-permission: presale.assign, parameters: [{$ref: '#/components/parameters/NumericID'}, {$ref: '#/components/parameters/IdempotencyKey'}]}
     selectPresaleExecutionDepartment: {<<: *presaleIDRead, operationId: selectPresaleExecutionDepartment, x-permission: presale.assign, parameters: [{$ref: '#/components/parameters/NumericID'}, {$ref: '#/components/parameters/IdempotencyKey'}]}
     addPresaleProgress: {<<: *presaleIDRead, operationId: addPresaleProgress, x-permission: presale.progress, parameters: [{$ref: '#/components/parameters/NumericID'}, {$ref: '#/components/parameters/IdempotencyKey'}]}
+    completePresaleRequest: {<<: *presaleIDRead, operationId: completePresaleRequest, x-permission: presale.complete, parameters: [{$ref: '#/components/parameters/NumericID'}], requestBody: {$ref: '#/components/requestBodies/PresaleComplete'}}
     cancelPresaleRequest: {<<: *presaleIDRead, operationId: cancelPresaleRequest, x-permission: service applies applicant/manager policy, parameters: [{$ref: '#/components/parameters/NumericID'}, {$ref: '#/components/parameters/IdempotencyKey'}]}
     listPresaleWorklogs: {<<: *presaleIDRead, operationId: listPresaleWorklogs}
     addPresaleWorklog: {<<: *presaleIDRead, operationId: addPresaleWorklog, x-permission: presale.worklog, parameters: [{$ref: '#/components/parameters/NumericID'}, {$ref: '#/components/parameters/IdempotencyKey'}]}
