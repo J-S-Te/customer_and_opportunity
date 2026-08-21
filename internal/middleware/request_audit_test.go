@@ -72,11 +72,42 @@ func TestRequestAuditOmitsInvalidOrUnavailableUserLoginIP(t *testing.T) {
 				c.Request = c.Request.WithContext(auth.WithPrincipal(c.Request.Context(), auth.Principal{UserID: "user-a", LoginIP: loginIP}))
 				c.Status(http.StatusNoContent)
 			})
-			router.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/customers", nil))
+			req := httptest.NewRequest(http.MethodGet, "/customers", nil)
+			req.RemoteAddr = "172.18.0.12:8080"
+			router.ServeHTTP(httptest.NewRecorder(), req)
 			if store.completion.UserLoginIP != "" {
 				t.Fatalf("login IP=%q completion=%+v", loginIP, store.completion)
 			}
 		})
+	}
+}
+
+func TestRequestAuditFallsBackToForwardedPublicIP(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store := &requestAuditCapture{}
+	router := gin.New()
+	router.Use(RequestID(), RequestAudit(store, RequestAuditOptions{TenantID: "tenant-a", ApplicationCode: "customer_and_opportunity", EnvironmentCode: "prod"}))
+	router.GET("/customers", func(c *gin.Context) {
+		c.Request = c.Request.WithContext(auth.WithPrincipal(c.Request.Context(), auth.Principal{UserID: "user-a", DisplayName: "User A", LoginIP: "172.18.0.17"}))
+		c.Status(http.StatusNoContent)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/customers", nil)
+	req.RemoteAddr = "172.18.0.12:8080"
+	req.Header.Set("X-Forwarded-For", "198.51.100.99, 125.120.19.87")
+	router.ServeHTTP(httptest.NewRecorder(), req)
+
+	if store.completion.UserLoginIP != "125.120.19.87" {
+		t.Fatalf("fallback user login IP=%q, want forwarded public IP", store.completion.UserLoginIP)
+	}
+}
+
+func TestRequestClientIPRejectsPrivateOnlyAddresses(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/customers", nil)
+	req.RemoteAddr = "172.18.0.12:8080"
+	req.Header.Set("X-Forwarded-For", "172.18.0.17")
+	if got := requestClientIP(req); got != "" {
+		t.Fatalf("request client IP=%q, want empty for private addresses", got)
 	}
 }
 
