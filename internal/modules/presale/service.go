@@ -527,11 +527,14 @@ func (s *Service) HandleApprovalCallback(ctx context.Context, tenant string, in 
 	in.EngineTaskID = strings.TrimSpace(in.EngineTaskID)
 	in.ApproverID = strings.TrimSpace(in.ApproverID)
 	in.ApproverName = strings.TrimSpace(in.ApproverName)
+	in.NextApproverID = strings.TrimSpace(in.NextApproverID)
+	in.NextApproverName = strings.TrimSpace(in.NextApproverName)
 	in.Result = strings.ToUpper(strings.TrimSpace(in.Result))
 	in.Comment = strings.TrimSpace(in.Comment)
 	if in.RequestID == 0 || in.EventSequence == 0 || in.OccurredAt.IsZero() || in.Node < 1 || in.Node > 10 ||
 		!validApprovalTaskIdentity(in.EngineInstanceID) || !validApprovalTaskIdentity(in.EngineTaskID) || !validApprovalTaskIdentity(in.ApproverID) ||
 		in.ApproverName == "" || len([]rune(in.ApproverName)) > 128 || len([]rune(in.Comment)) > 2000 ||
+		(in.NextApproverID != "" && (!validApprovalTaskIdentity(in.NextApproverID) || in.NextApproverName == "" || len([]rune(in.NextApproverName)) > 128)) ||
 		(in.Result != "PASS" && in.Result != "REJECT") || (in.Result == "REJECT" && in.Comment == "") {
 		return ErrInvalidApprovalEvent
 	}
@@ -591,6 +594,18 @@ func (s *Service) HandleApprovalCallback(ctx context.Context, tenant string, in 
 			to = StatusRejected
 		} else if _, hasNext := nextApprovalNode(inst, in.Node); !hasNext {
 			to = StatusApprovedPendingAssignment
+		}
+		if in.Result == "PASS" && in.NextApproverID != "" {
+			body := "售前申请已流转到您当前审批节点，请及时处理。"
+			if in.NextApproverName != "" {
+				body = in.NextApproverName + "，售前申请已流转到您当前审批节点，请及时处理。"
+			}
+			s.notifyWorkflow(tx, WorkflowNotification{TenantID: tenant, RecipientID: in.NextApproverID, Type: "PRESALE_APPROVAL_PENDING", Title: "售前审批待处理", Body: body, RequestID: r.ID, RequestNo: r.RequestNo})
+		} else if in.Result == "PASS" && to != from {
+			s.notifyWorkflow(tx, WorkflowNotification{TenantID: tenant, RecipientID: r.ApplicantID, Type: "PRESALE_APPROVAL_APPROVED", Title: "售前审批已通过", Body: "您的售前申请已完成审批。", RequestID: r.ID, RequestNo: r.RequestNo})
+		}
+		if in.Result == "REJECT" {
+			s.notifyWorkflow(tx, WorkflowNotification{TenantID: tenant, RecipientID: r.ApplicantID, Type: "PRESALE_APPROVAL_REJECTED", Title: "售前审批已驳回", Body: "您的售前申请已被驳回：" + in.Comment, RequestID: r.ID, RequestNo: r.RequestNo})
 		}
 		if to != from {
 			return s.statusLog(tx, r, from, to, "APPROVAL_CALLBACK", in.Comment, in.ApproverID, log.RequestIDTrace)
