@@ -125,6 +125,8 @@ func personalInboxQuery(db *gorm.DB, principal auth.Principal) *gorm.DB {
 	if principal.HasPermission("presale.read") {
 		scopes = append(scopes, "(type=? AND recipient_id=?)")
 		args = append(args, TypePresaleProgressApplicant, principal.UserID)
+		scopes = append(scopes, "(type IN (?,?,?) AND recipient_id=?)")
+		args = append(args, TypePresaleApprovalPending, TypePresaleApprovalApproved, TypePresaleApprovalRejected, principal.UserID)
 	}
 	// 即使主体拥有售前权限，缺少平台签发的人员标识时也不能查看人员维度的指派通知；
 	// 返回空集比拿用户 ID 猜测人员身份更安全。

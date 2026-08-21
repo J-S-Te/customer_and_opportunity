@@ -95,6 +95,8 @@ type ApprovalCallbackInput struct {
 	Comment          string    `json:"comment"`
 	ApproverID       string    `json:"approver_id" binding:"required"`
 	ApproverName     string    `json:"approver_name" binding:"required"`
+	NextApproverID   string    `json:"next_approver_id"`
+	NextApproverName string    `json:"next_approver_name"`
 	OccurredAt       time.Time `json:"occurred_at" binding:"required"`
 }
 

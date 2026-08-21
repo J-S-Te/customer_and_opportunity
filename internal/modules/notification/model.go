@@ -10,6 +10,9 @@ const (
 	TypeOpportunityOwnerChanged  = "OPPORTUNITY_OWNER_CHANGED"
 	TypePresaleAssigneeAdded     = "PRESALE_ASSIGNEE_ADDED"
 	TypePresaleAssigneeRemoved   = "PRESALE_ASSIGNEE_REMOVED"
+	TypePresaleApprovalPending   = "PRESALE_APPROVAL_PENDING"
+	TypePresaleApprovalApproved  = "PRESALE_APPROVAL_APPROVED"
+	TypePresaleApprovalRejected  = "PRESALE_APPROVAL_REJECTED"
 	TypePresaleProgressApplicant = "PRESALE_PROGRESS_APPLICANT"
 	TypePresaleProgressAssignee  = "PRESALE_PROGRESS_ASSIGNEE"
 	StatusUnread                 = "UNREAD"
@@ -19,6 +22,8 @@ const (
 	RecipientNewOwner            = "NEW_OWNER"
 	RecipientAssigneeAdded       = "ASSIGNEE_ADDED"
 	RecipientAssigneeRemoved     = "ASSIGNEE_REMOVED"
+	RecipientApprovalPending     = "APPROVAL_PENDING"
+	RecipientApprovalResult      = "APPROVAL_RESULT"
 	RecipientProgressApplicant   = "PROGRESS_APPLICANT"
 	RecipientProgressAssignee    = "PROGRESS_ASSIGNEE"
 )
