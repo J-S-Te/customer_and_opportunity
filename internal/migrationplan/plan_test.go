@@ -17,7 +17,7 @@ func TestRepositoryMigrationsAreAssignedExactlyOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(crm.Entries) != 55 || len(portal.Entries) != 33 {
+    if len(crm.Entries) != 56 || len(portal.Entries) != 33 {
 		t.Fatalf("unexpected plan lengths: crm=%d portal=%d", len(crm.Entries), len(portal.Entries))
 	}
 	for _, plan := range []Plan{crm, portal} {
