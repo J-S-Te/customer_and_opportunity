@@ -10,6 +10,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/auth"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/loginip"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/requestaudit"
 )
 
@@ -106,8 +107,18 @@ func TestRequestClientIPRejectsPrivateOnlyAddresses(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/customers", nil)
 	req.RemoteAddr = "172.18.0.12:8080"
 	req.Header.Set("X-Forwarded-For", "172.18.0.17")
-	if got := requestClientIP(req); got != "" {
+	if got := loginip.FromRequest(req); got != "" {
 		t.Fatalf("request client IP=%q, want empty for private addresses", got)
+	}
+}
+
+func TestRequestClientIPIgnoresSpoofedHeadersFromPublicPeer(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/customers", nil)
+	req.RemoteAddr = "203.0.113.5:12345"
+	req.Header.Set("X-Real-IP", "8.8.8.8")
+	req.Header.Set("X-Forwarded-For", "8.8.8.8, 1.2.3.4")
+	if got := loginip.FromRequest(req); got != "203.0.113.5" {
+		t.Fatalf("request client IP=%q, want direct public peer 203.0.113.5", got)
 	}
 }
 
@@ -116,14 +127,37 @@ func TestRequestAuditSkipsInfrastructureProbes(t *testing.T) {
 	router := gin.New()
 	router.Use(RequestID(), RequestAudit(store, RequestAuditOptions{TenantID: "tenant-a", ApplicationCode: "customer_and_opportunity", EnvironmentCode: "test"}))
 	router.GET("/healthz", func(c *gin.Context) { c.Status(http.StatusOK) })
+	router.GET("/livez", func(c *gin.Context) { c.Status(http.StatusOK) })
+	router.GET("/readyz/", func(c *gin.Context) { c.Status(http.StatusOK) })
 	router.GET("/customer-portal/readyz", func(c *gin.Context) { c.Status(http.StatusOK) })
+	router.GET("/customer-portal/livez/", func(c *gin.Context) { c.Status(http.StatusOK) })
 
-	for _, path := range []string{"/healthz", "/customer-portal/readyz"} {
+	for _, path := range []string{"/healthz", "/livez", "/readyz/", "/customer-portal/readyz", "/customer-portal/livez/"} {
 		store.start = requestaudit.Start{}
 		store.completion = requestaudit.Completion{}
 		router.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, path, nil))
 		if store.start.EventID != "" {
 			t.Fatalf("probe %s should not create an audit reservation", path)
+		}
+	}
+}
+
+func TestIsProbePathDoesNotSkipBusinessRoutes(t *testing.T) {
+	for _, path := range []string{"/api/healthz/report", "/healthz-export", "/business/livez/history"} {
+		if isProbePath(path) {
+			t.Fatalf("business path %q classified as probe", path)
+		}
+	}
+}
+
+func TestIsProbePathRecognizesExactNestedAndTrailingSlashProbes(t *testing.T) {
+	for _, path := range []string{
+		"/healthz", "/readyz", "/livez",
+		"/healthz/", "/readyz/", "/livez/",
+		"/customer-portal/healthz", "/customer-portal/readyz", "/customer-portal/livez",
+	} {
+		if !isProbePath(path) {
+			t.Fatalf("probe path %q was not recognized", path)
 		}
 	}
 }

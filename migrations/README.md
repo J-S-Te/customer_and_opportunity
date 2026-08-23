@@ -56,10 +56,14 @@
 48. `000078_presale_approval_rules.up.sql`
 49. `000080_crm_session_data_scopes.up.sql`
 50. `000081_portal_identity_reconciliation.up.sql`
-51. `000084_presale_workflow_notifications.up.sql`
-52. `000085_presale_approval_notifications.up.sql`
-53. `000094_add_user_login_ip_to_request_audit_outbox.up.sql`
-54. `000096_add_login_ip_to_crm_oidc_sessions.up.sql`
+51. `000082_opportunity_contract_link.up.sql`
+52. `000083_opportunity_type_source_multiselect.up.sql`
+53. `000084_presale_workflow_notifications.up.sql`
+54. `000085_presale_approval_notifications.up.sql`
+55. `000094_add_user_login_ip_to_request_audit_outbox.up.sql`
+56. `000096_add_login_ip_to_crm_oidc_sessions.up.sql`
+57. `000098_add_platform_delivered_at_to_crm_notifications.up.sql`
+58. `000099_widen_crm_notification_source_event_id.up.sql`
 
 ## customer_portal schema
 
@@ -127,6 +131,7 @@
 `000073` 为 Portal 报告投递 Worker 与项目 PDF Worker保存多实例运行心跳。Portal 仅在任一对应实例心跳新鲜时受理首次异步工作；已有幂等请求重放不依赖当前心跳。配置存在不等于 Worker 存活，查询错误、心跳过期或无实例均失败关闭。
 `000071` 为 TS-008 售前预警增加显式 `USER`/`PERSON` 收件人命名空间，并把命名空间纳入唯一键和个人收件箱索引；`recipient_id` 及该表操作人审计列扩为大小写敏感的 128 字符，以完整承载既有 CRM OIDC `platform_user_id` 契约，PMS `person_id` 仍遵守 64 字符上限。存量 `recipient_id` 缺少可证明来源，统一保留为不可查询的 `LEGACY_UNKNOWN`；只取消尚未投影的旧 PENDING 预警及其 outbox，不把 OIDC `sub` 猜成 PMS `person_id`，也不改写已经投影的历史证据。新增写入必须显式给出命名空间；该迁移仍需上一版本存量数据、在线 DDL 和 metadata lock 演练。
 `000085` 扩展 CRM 通知资源形状约束，允许售前审批待处理、通过和驳回通知落库；不为已有待审批记录伪造历史通知，生产环境须执行前向迁移后再启用审批通知写入。
+`000101` 仅重新排队历史上因 `source_event_id` 以数字开头而被基础平台编码校验拒绝的通知；新版投递 Worker 会把这类 ID 稳定映射为合法的 `CRM_` 事件编码。其他 422 校验失败不会被重试，避免无效收件人或无效资源形成永久重试循环。
 `000072` 新建独立 Worker 多实例心跳表，以 `worker_type + worker_id` 保存最后一次成功读取售前 outbox 的时间。CRM 只在任一 `presale_delivery` 实例具有新鲜数据库证据时接受新的售前申请；无记录、过期或查询失败均失败关闭，已提交申请的幂等重放不受 Worker 暂停影响。首笔心跳与 outbox 查询/领取在同一短事务，写入失败会回滚租约；此后每处理一个具有 5 秒硬超时的外部事件就刷新心跳，刷新失败会告警但不会中断已领取批次。CRM/Worker 使用相同新鲜度窗口，Worker 启动时校验该窗口足以覆盖轮询、外部超时和调度抖动；配置项本身不能把 Worker 标记为可用。
 `000048` 新建转合同逐次投递诊断表；既有 `OPPORTUNITY_SIGNED` 仍由 Worker 按原事件 ID 领取，不伪造历史投递成功。
 `000046` 新建项目进度 PDF 任务、账号绑定的一次性下载授权和不可变事件表，不从历史项目浏览记录伪造导出请求；生产有导出证据后只允许前向修复。`000016` 的同步游标列使用 `sync_cursor`，避免 MySQL 8.4 保留字 `CURSOR` 导致空库迁移失败。

@@ -3,7 +3,9 @@ name: customer-and-opportunity-ci-cd
 on:
   pull_request:
   push:
-    branches: [main]
+    # develop/cxh 是日常集成分支：必须在进入 main 前运行迁移清单和完整测试，
+    # 镜像发布仍由下方 job 条件限制为仅 main 分支执行。
+    branches: [main, develop/cxh]
   workflow_dispatch:
 
 permissions:

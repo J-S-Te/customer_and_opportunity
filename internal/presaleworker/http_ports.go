@@ -75,6 +75,8 @@ func (p *httpPorts) Start(ctx context.Context, event presale.OutboxEvent) (presa
 	type approvalStartData struct {
 		EngineInstanceID string `json:"engine_instance_id"`
 		EventSequence    uint64 `json:"event_sequence"`
+		NextApproverID   string `json:"next_approver_id"`
+		NextApproverName string `json:"next_approver_name"`
 	}
 	response, err := p.postJSON(ctx, p.approvalClient, p.approval.StartURL, event.EventID, event.Payload)
 	if err != nil {
@@ -84,7 +86,7 @@ func (p *httpPorts) Start(ctx context.Context, event presale.OutboxEvent) (presa
 	if err != nil {
 		return presale.ApprovalStartResult{}, fmt.Errorf("invalid approval start response")
 	}
-	result := presale.ApprovalStartResult{EngineInstanceID: data.EngineInstanceID, EventSequence: data.EventSequence}
+	result := presale.ApprovalStartResult{EngineInstanceID: data.EngineInstanceID, EventSequence: data.EventSequence, NextApproverID: data.NextApproverID, NextApproverName: data.NextApproverName}
 	if !validIntegrationIdentity(result.EngineInstanceID) || result.EventSequence == 0 {
 		return presale.ApprovalStartResult{}, fmt.Errorf("approval response is missing instance identity")
 	}

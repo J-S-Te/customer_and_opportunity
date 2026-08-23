@@ -101,7 +101,7 @@ type LoginResult struct {
 	ExpiresAt                time.Time
 }
 
-func (s *Service) CompleteLogin(ctx context.Context, state, code string) (LoginResult, error) {
+func (s *Service) CompleteLogin(ctx context.Context, state, code string, callbackLoginIP ...string) (LoginResult, error) {
 	if strings.TrimSpace(state) == "" || strings.TrimSpace(code) == "" {
 		return LoginResult{}, loginFailure("callback_parameters", errors.New("state or code is missing"))
 	}
@@ -131,6 +131,16 @@ func (s *Service) CompleteLogin(ctx context.Context, state, code string) (LoginR
 		}
 		return LoginResult{}, loginFailure("authorization_claims", err)
 	}
+	// The browser reaches this callback through the managed reverse proxy. Its
+	// validated public address is the authoritative login address for the new
+	// CRM session; the platform authorization-context value remains a fallback
+	// for non-HTTP callers and backward compatibility.
+	if len(callbackLoginIP) > 0 {
+		if value := loginip.Normalize(callbackLoginIP[0]); value != "" {
+			claims.LoginIP = value
+		}
+	}
+	claims.LoginIP = loginip.Normalize(claims.LoginIP)
 	// This is deliberately after all CRM code/token/claims checks.  A failed
 	// platform receipt must remain visible to its deployment gate, but cannot
 	// turn an invalid token into a valid CRM session or bypass the checks above.

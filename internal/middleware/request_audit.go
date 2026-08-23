@@ -3,7 +3,6 @@ package middleware
 import (
 	"context"
 	"log/slog"
-	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -67,7 +66,7 @@ func RequestAudit(store requestAuditStore, options RequestAuditOptions) gin.Hand
 		// this fallback the outbox dispatcher sends no user_login_ip and the
 		// platform records its Docker-network delivery address (172.x) instead.
 		if userLoginIP == "" {
-			userLoginIP = requestClientIP(c.Request)
+			userLoginIP = loginip.FromRequest(c.Request)
 		}
 		route := c.FullPath()
 		if route == "" {
@@ -101,34 +100,8 @@ func RequestAudit(store requestAuditStore, options RequestAuditOptions) gin.Hand
 	}
 }
 
-// requestClientIP reads only syntactically valid public addresses. The
-// production API is reachable through the managed frontend container, which
-// is the only component allowed to set these forwarding headers; private
-// container addresses are deliberately rejected and never promoted to audit
-// user_login_ip values.
-func requestClientIP(r *http.Request) string {
-	if r == nil {
-		return ""
-	}
-	if ip := loginip.Normalize(r.Header.Get("X-Real-IP")); ip != "" {
-		return ip
-	}
-	// Nginx writes the actual peer address as the right-most XFF entry. Walk
-	// from that end so a client-supplied left-most value cannot spoof the
-	// audit address.
-	values := strings.Split(r.Header.Get("X-Forwarded-For"), ",")
-	for i := len(values) - 1; i >= 0; i-- {
-		if ip := loginip.Normalize(strings.TrimSpace(values[i])); ip != "" {
-			return ip
-		}
-	}
-	remote := strings.TrimSpace(r.RemoteAddr)
-	if host, _, err := net.SplitHostPort(remote); err == nil {
-		remote = host
-	}
-	return loginip.Normalize(remote)
-}
-
+// isProbePath recognizes only infrastructure probe endpoints, including their
+// mounted-prefix forms. Similar business-route names must still be audited.
 func isProbePath(path string) bool {
 	path = strings.TrimRight(strings.TrimSpace(path), "/")
 	return path == "/healthz" || path == "/livez" || path == "/readyz" || strings.HasSuffix(path, "/healthz") || strings.HasSuffix(path, "/livez") || strings.HasSuffix(path, "/readyz")

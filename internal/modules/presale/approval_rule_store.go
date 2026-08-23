@@ -121,9 +121,9 @@ func validateApprovalRule(rule ApprovalRule) error {
 	if _, err := rule.Expression.Match(ApprovalFacts{}); err != nil {
 		return ErrInvalidInput
 	}
-	// 售前流程的首审固定为销售总监；驳回后的编辑重提也始终回到该节点。
+	// 首审必须是审批节点且配置了角色；角色码由规则自定义，不再固定为销售总监。
 	first := rule.Nodes[0]
-	if first.Type != ApprovalNodeApproval || strings.TrimSpace(first.RoleCode) != "sales_director" {
+	if first.Type != ApprovalNodeApproval || strings.TrimSpace(first.RoleCode) == "" {
 		return ErrInvalidInput
 	}
 	seen := map[string]bool{}

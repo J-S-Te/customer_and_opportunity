@@ -113,7 +113,7 @@ func (w *Worker) startApproval(ctx context.Context, event presale.OutboxEvent) e
 		return err
 	}
 	// 远端 Start 以事件 ID 幂等；本地投影失败后重试会取得同一审批实例，再完成状态收敛。
-	return w.service.MarkApprovalStarted(ctx, event.TenantID, presale.ApprovalStartedInput{RequestID: requestID, EngineInstanceID: result.EngineInstanceID, EventSequence: result.EventSequence})
+	return w.service.MarkApprovalStarted(ctx, event.TenantID, presale.ApprovalStartedInput{RequestID: requestID, EngineInstanceID: result.EngineInstanceID, EventSequence: result.EventSequence, NextApproverID: result.NextApproverID, NextApproverName: result.NextApproverName})
 }
 
 func (w *Worker) publishWorklog(ctx context.Context, event presale.OutboxEvent) error {
