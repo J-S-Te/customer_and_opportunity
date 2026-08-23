@@ -41,6 +41,10 @@ type ApprovalCommandPort interface {
 type ApprovalStartResult struct {
 	EngineInstanceID string
 	EventSequence    uint64
+	// NextApproverID/NextApproverName 是审批引擎返回的兼容展示信息；业务服务仍会
+	// 通过基础平台角色目录解析当前有效审批人，不能把引擎快照直接作为通知授权依据。
+	NextApproverID   string
+	NextApproverName string
 }
 
 // PMS 推送只定义领域端口；机器认证、超时和具体 MQ/HTTP 协议由生产基础设施负责。

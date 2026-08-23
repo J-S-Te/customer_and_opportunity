@@ -89,6 +89,8 @@ func main() {
 		writeJSON(writer, http.StatusCreated, envelope{Code: "OK", Message: "ok", RequestID: newRequestID(), Data: map[string]any{
 			"engine_instance_id": "MOCK-INSTANCE-" + randomHex(24),
 			"event_sequence":     1,
+			"next_approver_id":   env("MOCK_APPROVAL_NEXT_APPROVER_ID", "mock-approver-user"),
+			"next_approver_name": env("MOCK_APPROVAL_NEXT_APPROVER_NAME", "模拟审批人"),
 		}})
 	})
 	mux.HandleFunc("/approval/actions", func(writer http.ResponseWriter, request *http.Request) {

@@ -83,6 +83,8 @@ type ApprovalStartedInput struct {
 	RequestID        uint64
 	EngineInstanceID string
 	EventSequence    uint64
+	NextApproverID   string
+	NextApproverName string
 }
 
 type ApprovalCallbackInput struct {

@@ -78,6 +78,18 @@ func (client *HTTPClient) List(ctx context.Context, query Query) (Page, error) {
 	if userID := strings.TrimSpace(query.UserID); userID != "" {
 		values.Set("user_id", userID)
 	}
+	seenRoles := make(map[string]struct{}, len(query.RoleCodes))
+	for _, rawRole := range query.RoleCodes {
+		role := strings.TrimSpace(rawRole)
+		if role == "" {
+			continue
+		}
+		if _, exists := seenRoles[role]; exists {
+			continue
+		}
+		seenRoles[role] = struct{}{}
+		values.Add("role_code", role)
+	}
 	if query.Page > 0 {
 		values.Set("page", strconv.Itoa(query.Page))
 	}

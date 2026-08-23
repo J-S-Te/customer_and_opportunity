@@ -175,6 +175,39 @@ func TestCRMSessionPersistsAndRestoresTrustedLoginIP(t *testing.T) {
 	}
 }
 
+func TestCRMSessionCapturesLoginIPFromOIDCCallback(t *testing.T) {
+	now := time.Date(2026, 8, 23, 1, 2, 3, 0, time.UTC)
+	repo := newMemoryRepo()
+	service := newTestService(t, repo, &fakeOIDC{exchanged: validClaims(now)}, now)
+	start, err := service.BeginLogin(context.Background(), "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := service.CompleteLogin(context.Background(), strings.Split(start.AuthorizationURL, "state=")[1], "code", "125.120.19.87")
+	if err != nil {
+		t.Fatal(err)
+	}
+	principal, err := service.Authenticate(context.Background(), result.SessionToken)
+	if err != nil || principal.LoginIP != "125.120.19.87" {
+		t.Fatalf("principal=%#v err=%v", principal, err)
+	}
+}
+
+func TestCRMSessionRejectsPrivateCallbackLoginIP(t *testing.T) {
+	now := time.Date(2026, 8, 23, 1, 2, 3, 0, time.UTC)
+	repo := newMemoryRepo()
+	service := newTestService(t, repo, &fakeOIDC{exchanged: validClaims(now)}, now)
+	start, _ := service.BeginLogin(context.Background(), "/")
+	result, err := service.CompleteLogin(context.Background(), strings.Split(start.AuthorizationURL, "state=")[1], "code", "172.18.0.17")
+	if err != nil {
+		t.Fatal(err)
+	}
+	principal, err := service.Authenticate(context.Background(), result.SessionToken)
+	if err != nil || principal.LoginIP != "" {
+		t.Fatalf("principal=%#v err=%v", principal, err)
+	}
+}
+
 func TestAuthorizationMetadataFromTokenIsNotTrustedAsRoleDirectoryVersion(t *testing.T) {
 	now := time.Date(2026, 8, 11, 1, 2, 3, 0, time.UTC)
 	claims := validClaims(now)

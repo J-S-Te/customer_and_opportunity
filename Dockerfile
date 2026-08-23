@@ -10,6 +10,10 @@ RUN go mod download
 
 COPY . ./
 
+# 在镜像编译前校验 CRM/Portal 迁移归属与 SQL 可拆分性，避免漏登记的迁移直到
+# docker-local 或生产迁移容器启动时才被发现。
+RUN go test ./internal/migrationplan ./cmd/local-migrate
+
 RUN set -eu; \
     for command in \
       crm-server portal-server authz-catalog production-migrate local-migrate \
@@ -18,7 +22,8 @@ RUN set -eu; \
       portal-access-disable-worker portal-feedback-worker portal-invite-compensation-worker \
       portal-project-export-worker portal-project-worker portal-report-worker \
       presale-alert-worker presale-assignment-notification-worker presale-engineer-sync-worker \
-      presale-progress-notification-worker presale-report-aggregate-worker presale-worker; do \
+      presale-progress-notification-worker presale-report-aggregate-worker presale-worker \
+      notification-delivery-worker; do \
       CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w' -o "/out/${command}" "./cmd/${command}"; \
     done
 

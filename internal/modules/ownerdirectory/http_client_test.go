@@ -45,12 +45,15 @@ func TestHTTPClientUsesExactScopeAndParsesPlatformEnvelope(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	page, err := client.List(context.Background(), Query{UserID: "oidc-sub-1", Page: 1, PageSize: 1})
+	page, err := client.List(context.Background(), Query{UserID: "oidc-sub-1", RoleCodes: []string{" sales_director ", "sales_director", "technical_director"}, Page: 1, PageSize: 1})
 	if err != nil || len(page.Items) != 1 || page.Items[0].Organizations[0].ID != "org-1" {
 		t.Fatalf("page=%#v err=%v", page, err)
 	}
 	if directoryQuery.Get("user_id") != "oidc-sub-1" || directoryQuery.Get("page") != "1" || directoryQuery.Get("page_size") != "1" {
 		t.Fatalf("directory query=%v", directoryQuery)
+	}
+	if got := directoryQuery["role_code"]; len(got) != 2 || got[0] != "sales_director" || got[1] != "technical_director" {
+		t.Fatalf("role filters=%v", got)
 	}
 	if err = client.Validate(context.Background(), "oidc-sub-1", "org-1"); err != nil {
 		t.Fatalf("Validate() error=%v", err)

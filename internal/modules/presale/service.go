@@ -172,6 +172,11 @@ func (s *Service) CreateRequest(ctx context.Context, actor Actor, key string, in
 		if e = s.repo.CreateApprovalInstance(tx, inst); e != nil {
 			return e
 		}
+		if s.notifications != nil {
+			if e = s.notifyApprovalNode(tx, actor.TenantID, r, inst, 1); e != nil {
+				return e
+			}
+		}
 		created = r
 		return nil
 	})
@@ -264,6 +269,11 @@ func (s *Service) ReopenRequest(ctx context.Context, actor Actor, id uint64, ver
 		}); err != nil {
 			return err
 		}
+		if s.notifications != nil {
+			if err = s.notifyApprovalNode(tx, actor.TenantID, r, inst, 1); err != nil {
+				return err
+			}
+		}
 		if err = s.statusLog(tx, r, previousStatus, StatusPendingApproval, "REOPENED", "", actor.UserID, actor.RequestID); err != nil {
 			return err
 		}
@@ -353,13 +363,20 @@ func (s *Service) MarkApprovalStarted(ctx context.Context, tenant string, in App
 		if e = s.repo.UpdateRequestVersioned(tx, r, r.Version, map[string]any{"status": StatusPendingApproval, "current_approval_node": 1, "updated_by": "approval-engine"}); e != nil {
 			return e
 		}
+		// 审批人必须从基础平台当前有效角色绑定中解析；引擎回传的展示字段不能替代
+		// 当前授权校验。一个节点可能有多个有效审批人，必须逐一生成待处理通知。
+		if s.notifications != nil {
+			if e = s.notifyApprovalNode(tx, tenant, r, inst, 1); e != nil {
+				return e
+			}
+		}
 		return s.statusLog(tx, r, StatusApprovalStarting, StatusPendingApproval, "APPROVAL_STARTED", "", "approval-engine", "")
 	})
 }
 
 // 审批命令不直接改变申请状态，而是把“当前真实待办 + 审批人 + 动作”绑定到审批实例，
-// 并与 Outbox、幂等记录同事务提交。节点 1 仅销售总监可处理，节点 2 仅组长可处理；
-// 最终状态只能由携带同一任务绑定的审批引擎回调推进。
+// 并与 Outbox、幂等记录同事务提交。当前审批节点的角色由审批规则快照决定（approvalNodeRoleAllowedForInstance），
+// 不再硬编码为特定角色；最终状态只能由携带同一任务绑定的审批引擎回调推进。
 func (s *Service) RequestApprovalAction(ctx context.Context, actor Actor, id uint64, key string, in ApprovalActionInput) error {
 	if !actor.Can("presale.approve") {
 		return ErrForbidden
@@ -376,7 +393,9 @@ func (s *Service) RequestApprovalAction(ctx context.Context, actor Actor, id uin
 	if in.Version == 0 || len([]rune(in.Comment)) > 2000 || (in.Action == "REJECT" && in.Comment == "") {
 		return ErrInvalidInput
 	}
-	if !actor.HasRole("sales_director") && !actor.HasRole("technical_director") && !actor.HasRole("team_lead") && !actor.HasRole("crm_super_admin") {
+	// 角色为空的账户不可能命中任何审批节点角色，前置失败关闭（先于任何数据库查询），
+	// 避免被撤销角色后仍能探测幂等重放记录。具体节点角色由 approvalNodeRoleAllowedForInstance 按规则快照动态校验。
+	if len(actor.Roles) == 0 {
 		return ErrForbidden
 	}
 	hash, err := mutationDigest(actor, id, "APPROVAL_ACTION", in.Action, struct {
@@ -404,7 +423,7 @@ func (s *Service) RequestApprovalAction(ctx context.Context, actor Actor, id uin
 		}
 		currentNodeAllowed := approvalNodeRoleAllowedForInstance(actor, r.CurrentApprovalNode, instance)
 		if old, findErr := s.repo.FindMutationReplay(tx, actor.TenantID, id, actor.UserID, key); findErr == nil {
-			return validateApprovalReplay(old, actor, id, in.Action, hash)
+			return validateApprovalReplay(old, actor, id, in.Action, hash, instance)
 		} else if !errors.Is(findErr, ErrNotFound) {
 			return findErr
 		}
@@ -497,6 +516,11 @@ func (s *Service) applyInternalApprovalAction(ctx context.Context, actor Actor, 
 	} else if nextNode, ok := nextApprovalNode(instance, node); ok {
 		requestFields["current_approval_node"] = nextNode
 		instanceFields["current_node"] = nextNode
+		if s.notifications != nil {
+			if err := s.notifyApprovalNode(ctx, actor.TenantID, request, instance, nextNode); err != nil {
+				return err
+			}
+		}
 	} else {
 		to = StatusApprovedPendingAssignment
 		requestFields["status"] = to
@@ -595,17 +619,23 @@ func (s *Service) HandleApprovalCallback(ctx context.Context, tenant string, in 
 		} else if _, hasNext := nextApprovalNode(inst, in.Node); !hasNext {
 			to = StatusApprovedPendingAssignment
 		}
-		if in.Result == "PASS" && in.NextApproverID != "" {
-			body := "售前申请已流转到您当前审批节点，请及时处理。"
-			if in.NextApproverName != "" {
-				body = in.NextApproverName + "，售前申请已流转到您当前审批节点，请及时处理。"
+		if in.Result == "PASS" && to == StatusPendingApproval && s.notifications != nil {
+			nextNode, hasNext := nextApprovalNode(inst, in.Node)
+			if !hasNext {
+				return ErrDependencyUnavailable
 			}
-			s.notifyWorkflow(tx, WorkflowNotification{TenantID: tenant, RecipientID: in.NextApproverID, Type: "PRESALE_APPROVAL_PENDING", Title: "售前审批待处理", Body: body, RequestID: r.ID, RequestNo: r.RequestNo})
+			if e = s.notifyApprovalNode(tx, tenant, r, inst, nextNode); e != nil {
+				return e
+			}
 		} else if in.Result == "PASS" && to != from {
-			s.notifyWorkflow(tx, WorkflowNotification{TenantID: tenant, RecipientID: r.ApplicantID, Type: "PRESALE_APPROVAL_APPROVED", Title: "售前审批已通过", Body: "您的售前申请已完成审批。", RequestID: r.ID, RequestNo: r.RequestNo})
+			if e = s.notifyWorkflow(tx, WorkflowNotification{TenantID: tenant, RecipientID: r.ApplicantID, Type: "PRESALE_APPROVAL_APPROVED", Title: "售前审批已通过", Body: "您的售前申请已完成审批。", RequestID: r.ID, RequestNo: r.RequestNo}); e != nil {
+				return e
+			}
 		}
 		if in.Result == "REJECT" {
-			s.notifyWorkflow(tx, WorkflowNotification{TenantID: tenant, RecipientID: r.ApplicantID, Type: "PRESALE_APPROVAL_REJECTED", Title: "售前审批已驳回", Body: "您的售前申请已被驳回：" + in.Comment, RequestID: r.ID, RequestNo: r.RequestNo})
+			if e = s.notifyWorkflow(tx, WorkflowNotification{TenantID: tenant, RecipientID: r.ApplicantID, Type: "PRESALE_APPROVAL_REJECTED", Title: "售前审批已驳回", Body: "您的售前申请已被驳回：" + in.Comment, RequestID: r.ID, RequestNo: r.RequestNo}); e != nil {
+				return e
+			}
 		}
 		if to != from {
 			return s.statusLog(tx, r, from, to, "APPROVAL_CALLBACK", in.Comment, in.ApproverID, log.RequestIDTrace)
@@ -776,7 +806,6 @@ func (s *Service) ReplaceAssignments(ctx context.Context, actor Actor, id uint64
 			if e = s.recordAssignmentNotification(tx, actor, r, a, AssignmentEventAdded, in.ChangeReason, now); e != nil {
 				return e
 			}
-			s.notifyWorkflow(tx, WorkflowNotification{TenantID: actor.TenantID, RecipientID: a.AssigneeID, Type: "PRESALE_ASSIGNEE_ADDED", Title: "你被指派售前支持任务", Body: "你已被加入售前支持执行人员，请进入详情处理", RequestID: r.ID, RequestNo: r.RequestNo})
 		}
 		from := r.Status
 		if from == StatusApprovedPendingAssignment {
@@ -869,18 +898,90 @@ func (s *Service) SelectExecutionDepartment(ctx context.Context, actor Actor, id
 			return e
 		}
 		r.ExecutionDepartmentID, r.ExecutionDepartment = in.DepartmentID, name
-		s.notifyWorkflow(tx, WorkflowNotification{TenantID: actor.TenantID, RecipientID: r.ApplicantID, Type: "PRESALE_DEPARTMENT_SELECTED", Title: "售前执行部门已确定", Body: "技术总监已选择执行部门：" + name, RequestID: r.ID, RequestNo: r.RequestNo})
+		if e = s.notifyWorkflow(tx, WorkflowNotification{TenantID: actor.TenantID, RecipientID: r.ApplicantID, Type: "PRESALE_DEPARTMENT_SELECTED", Title: "售前执行部门已确定", Body: "技术总监已选择执行部门：" + name, RequestID: r.ID, RequestNo: r.RequestNo}); e != nil {
+			return e
+		}
 		out = r
 		return nil
 	})
 	return out, err
 }
 
-func (s *Service) notifyWorkflow(ctx context.Context, n WorkflowNotification) {
+func (s *Service) notifyWorkflow(ctx context.Context, n WorkflowNotification) error {
 	if s.notifications == nil {
-		return
+		return nil
 	}
-	_ = s.notifications.Write(ctx, n)
+	return s.notifications.Write(ctx, n)
+}
+
+const approvalRecipientPageSize = 50
+
+// notifyApprovalNode resolves every currently active user bound to the node role and writes one
+// notification per unique recipient. An empty role, unavailable directory, or empty result fails
+// the surrounding transaction so a workflow can never advance without a reachable approver.
+func (s *Service) notifyApprovalNode(ctx context.Context, tenant string, request *PresaleRequest, instance *ApprovalInstance, node uint8) error {
+	role, ok := approvalRoleForNode(instance, node)
+	if !ok || s.ownerDirectory == nil || request == nil {
+		return ErrDependencyUnavailable
+	}
+	recipients := make([]ownerdirectory.User, 0)
+	seen := make(map[string]struct{})
+	for pageNumber := 1; pageNumber <= ownerDirectoryMaxPages; pageNumber++ {
+		page, err := s.ownerDirectory.List(ctx, ownerdirectory.Query{RoleCodes: []string{role}, Page: pageNumber, PageSize: approvalRecipientPageSize})
+		if err != nil {
+			return ErrDependencyUnavailable
+		}
+		for _, user := range page.Items {
+			user.ID = strings.TrimSpace(user.ID)
+			if user.ID == "" {
+				continue
+			}
+			if _, exists := seen[user.ID]; exists {
+				continue
+			}
+			seen[user.ID] = struct{}{}
+			recipients = append(recipients, user)
+		}
+		if len(page.Items) == 0 || int64(len(recipients)) >= page.Total || len(page.Items) < approvalRecipientPageSize {
+			break
+		}
+	}
+	if len(recipients) == 0 {
+		return ErrDependencyUnavailable
+	}
+	for _, recipient := range recipients {
+		body := "售前申请已流转到您当前审批节点，请及时处理。"
+		if name := strings.TrimSpace(recipient.DisplayName); name != "" {
+			body = name + "，" + body
+		}
+		if err := s.notifyWorkflow(ctx, WorkflowNotification{TenantID: tenant, RecipientID: recipient.ID, Type: "PRESALE_APPROVAL_PENDING", Title: "售前审批待处理", Body: body, RequestID: request.ID, RequestNo: request.RequestNo}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func approvalRoleForNode(instance *ApprovalInstance, node uint8) (string, bool) {
+	if node == 0 {
+		return "", false
+	}
+	if instance == nil || len(instance.NodesJSON) == 0 {
+		switch node {
+		case 1:
+			return "sales_director", true
+		case 2:
+			return "technical_director", true
+		default:
+			return "", false
+		}
+	}
+	var nodes []ApprovalNode
+	if json.Unmarshal(instance.NodesJSON, &nodes) != nil || int(node) > len(nodes) {
+		return "", false
+	}
+	current := nodes[node-1]
+	role := strings.TrimSpace(current.RoleCode)
+	return role, current.Type == ApprovalNodeApproval && role != ""
 }
 
 const assignmentNotificationEventType = "PRESALE_ASSIGNMENT_SITE_NOTIFICATION"
@@ -1307,7 +1408,9 @@ func (s *Service) Complete(ctx context.Context, actor Actor, id uint64, in Compl
 		if e = s.statusLog(tx, r, StatusExecuting, StatusCompleted, "MANUAL_COMPLETION", strings.TrimSpace(in.Reason), actor.UserID, actor.RequestID); e != nil {
 			return e
 		}
-		s.notifyWorkflow(tx, WorkflowNotification{TenantID: actor.TenantID, RecipientID: r.ApplicantID, Type: "PRESALE_COMPLETED", Title: "售前支持已完成", Body: "技术人员已人工结束售前支持流程", RequestID: r.ID, RequestNo: r.RequestNo})
+		if e = s.notifyWorkflow(tx, WorkflowNotification{TenantID: actor.TenantID, RecipientID: r.ApplicantID, Type: "PRESALE_COMPLETED", Title: "售前支持已完成", Body: "技术人员已人工结束售前支持流程", RequestID: r.ID, RequestNo: r.RequestNo}); e != nil {
+			return e
+		}
 		r.Status, r.CompletedAt = StatusCompleted, &now
 		out = r
 		return nil
@@ -1396,27 +1499,32 @@ func approvalReplayAction(node uint8, action string) string {
 	return fmt.Sprintf("NODE_%d_%s", node, action)
 }
 
-func validateApprovalReplay(value *MutationReplay, actor Actor, requestID uint64, action, hash string) error {
+func validateApprovalReplay(value *MutationReplay, actor Actor, requestID uint64, action, hash string, instance *ApprovalInstance) error {
 	if value == nil || value.RequestID != requestID || value.ActorID != actor.UserID || value.Operation != "APPROVAL_ACTION" || value.RequestHash != hash {
 		return ErrIdempotencyConflict
 	}
 	if value.Action != approvalReplayAction(1, action) && value.Action != approvalReplayAction(2, action) {
 		return ErrIdempotencyConflict
 	}
-	return approvalReplayRoleAllowed(actor, value.Action)
+	return approvalReplayRoleAllowed(actor, value.Action, instance)
 }
 
-func approvalReplayRoleAllowed(actor Actor, replayAction string) error {
+// approvalReplayRoleAllowed 复用 approvalNodeRoleAllowedForInstance 的动态节点角色判断：
+// 有规则快照时按快照的 role_code 校验，历史无快照实例回退到旧的角色映射。
+func approvalReplayRoleAllowed(actor Actor, replayAction string, instance *ApprovalInstance) error {
+	var node uint8
 	switch {
-	case strings.HasPrefix(replayAction, "NODE_1_") && (actor.HasRole("sales_director") || actor.HasRole("crm_super_admin")):
-		return nil
-	case strings.HasPrefix(replayAction, "NODE_2_") && (actor.HasRole("team_lead") || actor.HasRole("crm_super_admin")):
-		return nil
-	case strings.HasPrefix(replayAction, "NODE_2_") && actor.HasRole("technical_director"):
-		return nil
+	case strings.HasPrefix(replayAction, "NODE_1_"):
+		node = 1
+	case strings.HasPrefix(replayAction, "NODE_2_"):
+		node = 2
 	default:
 		return ErrForbidden
 	}
+	if approvalNodeRoleAllowedForInstance(actor, node, instance) {
+		return nil
+	}
+	return ErrForbidden
 }
 
 func approvalNodeRoleAllowed(actor Actor, node uint8) bool {
@@ -1497,6 +1605,10 @@ func (s *Service) resolveApprovalMutationRace(ctx context.Context, actor Actor, 
 		if _, err := s.repo.FindRequestForUpdate(tx, actor.TenantID, requestID); err != nil {
 			return err
 		}
+		instance, err := s.repo.FindApprovalInstanceForUpdate(tx, actor.TenantID, requestID)
+		if err != nil {
+			return err
+		}
 		old, err := s.repo.FindMutationReplay(tx, actor.TenantID, requestID, actor.UserID, key)
 		if errors.Is(err, ErrNotFound) {
 			return ErrIdempotencyConflict
@@ -1504,7 +1616,7 @@ func (s *Service) resolveApprovalMutationRace(ctx context.Context, actor Actor, 
 		if err != nil {
 			return err
 		}
-		return validateApprovalReplay(old, actor, requestID, action, hash)
+		return validateApprovalReplay(old, actor, requestID, action, hash, instance)
 	})
 }
 

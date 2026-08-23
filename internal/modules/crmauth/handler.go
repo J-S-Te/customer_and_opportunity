@@ -11,6 +11,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/apperror"
 	sharedauthorization "github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/authorizationcontext"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/loginip"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/response"
 )
 
@@ -48,7 +49,7 @@ func (h *Handler) Callback(c *gin.Context) {
 		response.Error(c, apperror.ErrUnauthenticated)
 		return
 	}
-	result, err := h.service.CompleteLogin(c.Request.Context(), c.Query("state"), c.Query("code"))
+	result, err := h.service.CompleteLogin(c.Request.Context(), c.Query("state"), c.Query("code"), loginip.FromRequest(c.Request))
 	if err != nil {
 		// Keep the browser response deliberately generic, but retain the typed
 		// server-side cause. Without this distinction every discovery, code

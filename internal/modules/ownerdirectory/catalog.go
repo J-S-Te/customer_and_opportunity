@@ -33,10 +33,11 @@ type Page struct {
 }
 
 type Query struct {
-	Keyword  string
-	UserID   string
-	Page     int
-	PageSize int
+	Keyword   string
+	UserID    string
+	RoleCodes []string
+	Page      int
+	PageSize  int
 }
 
 // PrimaryOrganization returns the organization that the authoritative platform
