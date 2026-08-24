@@ -12,12 +12,12 @@ import (
 
 func TestClassifyPlatformBinding(t *testing.T) {
 	tests := []struct {
-		name       string
-		crmStatus  string
-		found      bool
-		status     string
-		wantCode   string
-		wantNil    bool
+		name      string
+		crmStatus string
+		found     bool
+		status    string
+		wantCode  string
+		wantNil   bool
 	}{
 		{name: "active and bound", crmStatus: "ACTIVE", found: true, status: "ACTIVE", wantNil: true},
 		{name: "active but missing", crmStatus: "ACTIVE", found: false, wantCode: "PLATFORM_BINDING_MISSING"},

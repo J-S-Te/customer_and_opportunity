@@ -281,11 +281,11 @@ func (s *AccessDisableService) resumeDisable(ctx context.Context, principal auth
 			if disableErr := s.binding.DisableCustomerBindingIdempotent(ctx, operation.PlatformUserID, customerRef, disableRemoteKey(operation, "binding")); disableErr != nil {
 				bindingResult = "PENDING"
 				compensationErr := s.repo.CreateCompensation(ctx, &CompensationTask{
-					Model:          database.Model{TenantID: operation.TenantID, CreatedBy: operation.ActorID, UpdatedBy: operation.ActorID, CreatedAt: s.clock.Now().UTC(), UpdatedAt: s.clock.Now().UTC(), Version: 1},
-					TaskNo:         disableRemoteKey(operation, "binding"), TaskType: CompensationBindingDisable,
-					CustomerID:     operation.CustomerID, ContactID: operation.ContactID,
+					Model:  database.Model{TenantID: operation.TenantID, CreatedBy: operation.ActorID, UpdatedBy: operation.ActorID, CreatedAt: s.clock.Now().UTC(), UpdatedAt: s.clock.Now().UTC(), Version: 1},
+					TaskNo: disableRemoteKey(operation, "binding"), TaskType: CompensationBindingDisable,
+					CustomerID: operation.CustomerID, ContactID: operation.ContactID,
 					PlatformUserID: operation.PlatformUserID, AccountNo: "EXT-" + strings.ToUpper(operation.PlatformUserID),
-					Status:         CompensationPending, LastErrorCode: "PLATFORM_BINDING_DISABLE_FAILED",
+					Status: CompensationPending, LastErrorCode: "PLATFORM_BINDING_DISABLE_FAILED",
 				})
 				if s.platformOnly {
 					return nil, s.failDisable(ctx, operation, leaseOwner, "PLATFORM_BINDING_DISABLE_FAILED", errors.Join(disableErr, compensationErr))
