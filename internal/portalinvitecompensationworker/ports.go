@@ -56,7 +56,9 @@ func (r httpBindingRepair) RepairBinding(ctx context.Context, task portalinvite.
 var errBindingRepairNotConfigured = errors.New("platform customer binding repair adapter is not configured")
 
 // httpBindingStatusReader 把平台绑定 BIND 客户端适配为对账只读端口（同一 scope，只读调用）。
-type httpBindingStatusReader struct{ writer *portalinvite.HTTPPlatformBindingWriter }
+type httpBindingStatusReader struct {
+	writer *portalinvite.HTTPPlatformBindingWriter
+}
 
 func (r httpBindingStatusReader) BindingStatus(ctx context.Context, platformUserID string) (string, bool, error) {
 	return r.writer.BindingStatus(ctx, platformUserID)

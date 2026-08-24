@@ -44,11 +44,13 @@ type BindingConfig struct {
 	DisableScope        string
 }
 
+// PlatformConfig 是补偿 Worker 调用基础平台接口所需的配置。
 type PlatformConfig struct {
 	RoleAssignURL, TokenURL, ClientID, ClientSecret, Scope, ApplicationCode string
 	TLS                                                                     integrationhttp.TLSOptions
 }
 
+// PortalConfig 是补偿 Worker 调用客户门户接口所需的配置。
 type PortalConfig struct {
 	ProvisionURL string
 	TokenURL     string
@@ -87,13 +89,13 @@ func LoadConfig() (Config, error) {
 			},
 		},
 		Binding: BindingConfig{
-			Enabled:         boolEnvDefault("PORTAL_INVITE_COMPENSATION_BINDING_ENABLED", false),
-			BaseURL:         os.Getenv("PORTAL_INVITE_COMPENSATION_BINDING_BASE_URL"),
-			TokenURL:        os.Getenv("PORTAL_INVITE_COMPENSATION_BINDING_TOKEN_URL"),
-			ClientID:        os.Getenv("PORTAL_INVITE_COMPENSATION_BINDING_CLIENT_ID"),
-			ClientSecret:    os.Getenv("PORTAL_INVITE_COMPENSATION_BINDING_CLIENT_SECRET"),
-			Scope:           env("PORTAL_INVITE_COMPENSATION_BINDING_SCOPE", "portal_mapping_provision"),
-			ApplicationCode: os.Getenv("PORTAL_INVITE_COMPENSATION_BINDING_APPLICATION_CODE"),
+			Enabled:             boolEnvDefault("PORTAL_INVITE_COMPENSATION_BINDING_ENABLED", false),
+			BaseURL:             os.Getenv("PORTAL_INVITE_COMPENSATION_BINDING_BASE_URL"),
+			TokenURL:            os.Getenv("PORTAL_INVITE_COMPENSATION_BINDING_TOKEN_URL"),
+			ClientID:            os.Getenv("PORTAL_INVITE_COMPENSATION_BINDING_CLIENT_ID"),
+			ClientSecret:        os.Getenv("PORTAL_INVITE_COMPENSATION_BINDING_CLIENT_SECRET"),
+			Scope:               env("PORTAL_INVITE_COMPENSATION_BINDING_SCOPE", "portal_mapping_provision"),
+			ApplicationCode:     os.Getenv("PORTAL_INVITE_COMPENSATION_BINDING_APPLICATION_CODE"),
 			DisableClientID:     os.Getenv("PORTAL_INVITE_COMPENSATION_BINDING_DISABLE_CLIENT_ID"),
 			DisableClientSecret: os.Getenv("PORTAL_INVITE_COMPENSATION_BINDING_DISABLE_CLIENT_SECRET"),
 			DisableScope:        env("PORTAL_INVITE_COMPENSATION_BINDING_DISABLE_SCOPE", "portal_mapping_disable"),

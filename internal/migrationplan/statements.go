@@ -5,10 +5,9 @@ import (
 	"strings"
 )
 
-// SplitStatements splits the repository-maintained MySQL migration files into
-// statement-level checkpoints. The migration baseline does not permit stored
-// program DELIMITER blocks; quoted strings, identifiers and comments are still
-// handled so semicolons inside them never become execution boundaries.
+// SplitStatements 将仓库维护的 MySQL 迁移文件切分为语句级检查点。
+// 迁移基线不允许存储程序 DELIMITER 块；函数仍会处理带引号的字符串、标识符
+// 和注释，确保其中的分号不会被误判为执行边界。
 func SplitStatements(contents string) ([]string, error) {
 	const (
 		plain = iota

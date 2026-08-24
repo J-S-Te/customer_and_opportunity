@@ -23,12 +23,12 @@ import (
 )
 
 const (
-	externalUserProvisionScope = "external_user.provision"
-	applicationRoleAssignScope = "application_role.assign"
-	applicationRoleRevokeScope = "application_role.revoke"
-	portalMappingProvisionScope  = "portal_mapping_provision"
-	portalMappingDisableScope    = "portal_mapping_disable"
-	portalApplicationRole      = "portal_customer"
+	externalUserProvisionScope  = "external_user.provision"
+	applicationRoleAssignScope  = "application_role.assign"
+	applicationRoleRevokeScope  = "application_role.revoke"
+	portalMappingProvisionScope = "portal_mapping_provision"
+	portalMappingDisableScope   = "portal_mapping_disable"
+	portalApplicationRole       = "portal_customer"
 )
 
 // HTTPPlatformProvisioner 是 CRM 对基础平台外部身份合同的防腐层。创建用户与授予角色使用不同 OAuth 客户端，
@@ -271,10 +271,10 @@ type HTTPPlatformBindingWriter struct {
 
 type PlatformBindingWriterOptions struct {
 	BaseURL, TokenURL, ClientID, ClientSecret, Scope, ApplicationCode string
-	TLS                                                                integrationhttp.TLSOptions
-	HTTPClient                                                         *http.Client
-	Now                                                                func() time.Time
-	NonceReader                                                        io.Reader
+	TLS                                                               integrationhttp.TLSOptions
+	HTTPClient                                                        *http.Client
+	Now                                                               func() time.Time
+	NonceReader                                                       io.Reader
 }
 
 func NewHTTPPlatformBindingWriter(ctx context.Context, options PlatformBindingWriterOptions) (*HTTPPlatformBindingWriter, error) {
@@ -385,10 +385,10 @@ type HTTPPlatformBindingDisabler struct {
 
 type PlatformBindingDisablerOptions struct {
 	BaseURL, TokenURL, ClientID, ClientSecret, Scope, ApplicationCode string
-	TLS                                                                integrationhttp.TLSOptions
-	HTTPClient                                                         *http.Client
-	Now                                                                func() time.Time
-	NonceReader                                                        io.Reader
+	TLS                                                               integrationhttp.TLSOptions
+	HTTPClient                                                        *http.Client
+	Now                                                               func() time.Time
+	NonceReader                                                       io.Reader
 }
 
 func NewHTTPPlatformBindingDisabler(ctx context.Context, options PlatformBindingDisablerOptions) (*HTTPPlatformBindingDisabler, error) {
