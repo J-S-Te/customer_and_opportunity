@@ -17,27 +17,36 @@ type presaleOpportunityReader struct {
 }
 
 func (a presaleOpportunityReader) GetAccessible(ctx context.Context, actor presale.Actor, opportunityID uint64) (presale.OpportunitySnapshot, error) {
+	principal := presaleOpportunityPrincipal(actor)
+	value, err := a.service.Get(auth.WithPrincipal(ctx, principal), opportunityID)
+	if err != nil {
+		return presale.OpportunitySnapshot{}, err
+	}
+	return presale.OpportunitySnapshot{ID: value.ID, OpportunityNo: value.OpportunityNo}, nil
+}
+
+// presaleOpportunityPrincipal 复用基础平台已经签发并由 CRM 会话保存的数据范围。
+// 商机选择列表和售前创建校验必须使用同一份 SELF/ORG/ALL 上下文，不能根据角色名
+// 再次推断范围，否则 ORG 用户会在列表中选到商机后被创建接口错误拒绝。
+func presaleOpportunityPrincipal(actor presale.Actor) auth.Principal {
 	permissions := make(map[string]struct{}, len(actor.Permissions))
 	for code, allowed := range actor.Permissions {
 		if allowed {
 			permissions[code] = struct{}{}
 		}
 	}
-	principal := auth.Principal{
-		UserID: actor.UserID, PersonID: actor.PersonID, TenantID: actor.TenantID,
-		DisplayName: actor.UserName, Permissions: permissions,
-	}
-	switch {
-	case actor.Roles["technical_director"] || actor.Roles["team_lead"] || actor.Roles["sales_director"] || actor.Roles["crm_super_admin"]:
-		principal.ScopeMode = auth.ScopeAll
+	scopeMode := auth.ScopeMode(actor.ScopeMode)
+	switch scopeMode {
+	case auth.ScopeSelf, auth.ScopeOrg, auth.ScopeAll:
 	default:
-		principal.ScopeMode = auth.ScopeSelf
+		// 缺失或未知范围保持最小权限，绝不通过角色名称扩大数据访问范围。
+		scopeMode = auth.ScopeSelf
 	}
-	value, err := a.service.Get(auth.WithPrincipal(ctx, principal), opportunityID)
-	if err != nil {
-		return presale.OpportunitySnapshot{}, err
+	return auth.Principal{
+		UserID: actor.UserID, PersonID: actor.PersonID, TenantID: actor.TenantID,
+		DisplayName: actor.UserName, Permissions: permissions, ScopeMode: scopeMode,
+		OrganizationIDs: append([]string(nil), actor.OrganizationIDs...),
 	}
-	return presale.OpportunitySnapshot{ID: value.ID, OpportunityNo: value.OpportunityNo}, nil
 }
 
 type presalePhoneProtector struct {
