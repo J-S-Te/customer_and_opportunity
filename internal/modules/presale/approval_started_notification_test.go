@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -176,6 +177,16 @@ func TestInternalApprovalStartNotifiesEveryActiveFirstNodeApprover(t *testing.T)
 	if writer.written[0].RecipientID != "sales-director-1" || writer.written[1].RecipientID != "sales-director-2" {
 		t.Fatalf("unexpected recipients: %+v", writer.written)
 	}
+	for _, notification := range writer.written {
+		if notification.TenantID != actor.TenantID || notification.Type != "PRESALE_APPROVAL_PENDING" ||
+			notification.Title != "售前审批待处理" || notification.RequestID != created.ID ||
+			notification.RequestNo != created.RequestNo || !strings.Contains(notification.Body, "流转到您当前审批节点") {
+			t.Fatalf("unexpected first-node notification contract: %+v", notification)
+		}
+	}
+	if len(catalog.queries) != 1 || len(catalog.queries[0].RoleCodes) != 1 || catalog.queries[0].RoleCodes[0] != "sales_director" {
+		t.Fatalf("submission did not resolve the sales director role: %+v", catalog.queries)
+	}
 }
 
 func TestInternalApprovalStartFailsClosedWithoutActiveFirstNodeApprover(t *testing.T) {
@@ -219,6 +230,13 @@ func TestInternalApprovalPassNotifiesEveryActiveNextNodeApprover(t *testing.T) {
 	}
 	if len(writer.written) != 2 || writer.written[0].RecipientID != "technical-1" || writer.written[1].RecipientID != "technical-2" {
 		t.Fatalf("unexpected notifications: %+v", writer.written)
+	}
+	for _, notification := range writer.written {
+		if notification.TenantID != actor.TenantID || notification.Type != "PRESALE_APPROVAL_PENDING" ||
+			notification.Title != "售前审批待处理" || notification.RequestID != repo.request.ID ||
+			notification.RequestNo != repo.request.RequestNo || !strings.Contains(notification.Body, "流转到您当前审批节点") {
+			t.Fatalf("unexpected next-node notification contract: %+v", notification)
+		}
 	}
 	if len(catalog.queries) != 1 || catalog.queries[0].RoleCodes[0] != "technical_director" {
 		t.Fatalf("unexpected directory query: %+v", catalog.queries)

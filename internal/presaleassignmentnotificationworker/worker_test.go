@@ -79,6 +79,34 @@ func TestProjectionUsesDatabaseEvidenceAndSafeLocalPath(t *testing.T) {
 	}
 }
 
+func TestAssignedPersonReceivesUnreadInboxNotification(t *testing.T) {
+	now := time.Date(2026, 8, 24, 9, 30, 0, 0, time.UTC)
+	event := validEvent()
+	evidence := presale.AssignmentEvent{
+		AssignmentID: 9, EventType: presale.AssignmentEventAdded,
+		RecipientPersonID: "assigned-person-1",
+	}
+	request := presale.PresaleRequest{
+		BaseModel: presale.BaseModel{ID: 7}, RequestNo: "TS202608240001",
+		OpportunityID: 3, OpportunityNoSnapshot: "SJ202608240001",
+	}
+
+	message := project(event, evidence, request, now)
+
+	if message.Type != notification.TypePresaleAssigneeAdded ||
+		message.RecipientID != "assigned-person-1" ||
+		message.RecipientKind != notification.RecipientAssigneeAdded ||
+		message.Status != notification.StatusUnread {
+		t.Fatalf("assigned person inbox routing=%#v", message)
+	}
+	if message.RequestID != request.ID || message.RequestNo != request.RequestNo || message.AssignmentID != evidence.AssignmentID {
+		t.Fatalf("assigned person notification business reference=%#v", message)
+	}
+	if message.Title == "" || message.Body == "" || message.TargetPath != "/customer-opportunity/presale?request_id=7" {
+		t.Fatalf("assigned person notification presentation=%#v", message)
+	}
+}
+
 func TestClaimAndRetryContract(t *testing.T) {
 	for _, fragment := range []string{"FOR UPDATE SKIP LOCKED", "event_type=?", "locked_until<?"} {
 		if !strings.Contains(claimSQL(), fragment) {

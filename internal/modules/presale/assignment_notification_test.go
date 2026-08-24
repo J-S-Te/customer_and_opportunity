@@ -2,6 +2,8 @@ package presale
 
 import (
 	"context"
+	"encoding/json"
+	"strconv"
 	"testing"
 	"time"
 
@@ -90,6 +92,24 @@ func TestReplaceAssignmentsWritesEvidenceAndOutboxForAddedAndRemoved(t *testing.
 		if repo.events[index].EventID != repo.outbox[index].EventID || repo.outbox[index].EventType != assignmentNotificationEventType {
 			t.Fatalf("event/outbox mismatch")
 		}
+	}
+	addedEvent := repo.events[1]
+	addedOutbox := repo.outbox[1]
+	if addedEvent.RecipientPersonID != "new" || addedEvent.AssignmentID != added.ID || addedEvent.EventType != AssignmentEventAdded {
+		t.Fatalf("added assignee notification evidence=%#v", addedEvent)
+	}
+	if addedEvent.EventID != AssignmentNotificationEventID(actor.TenantID, base.request.ID, added.ID, AssignmentEventAdded) {
+		t.Fatalf("added assignee notification event id=%q", addedEvent.EventID)
+	}
+	var payload struct {
+		AssignmentEventID uint64 `json:"assignment_event_id"`
+	}
+	if err := json.Unmarshal(addedOutbox.Payload, &payload); err != nil {
+		t.Fatalf("decode assignment notification payload: %v", err)
+	}
+	if payload.AssignmentEventID != addedEvent.ID || addedOutbox.AggregateType != "presale_assignment_event" ||
+		addedOutbox.AggregateID != strconv.FormatUint(addedEvent.ID, 10) || addedOutbox.Status != "PENDING" {
+		t.Fatalf("added assignee notification outbox=%#v payload=%#v", addedOutbox, payload)
 	}
 }
 
