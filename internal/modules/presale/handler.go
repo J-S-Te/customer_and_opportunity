@@ -9,6 +9,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/apperror"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/pagination"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/requestbody"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/response"
 )
@@ -619,14 +620,9 @@ func (h *Handler) Worklogs(c *gin.Context) {
 }
 
 func bindPagination(c *gin.Context) (int, int, bool) {
-	page, err := strconv.Atoi(c.DefaultQuery("page", "1"))
-	if err != nil || page < 1 {
+	page, pageSize, err := pagination.ParseQuery(c.DefaultQuery("page", "1"), c.DefaultQuery("page_size", "20"))
+	if err != nil {
 		response.Error(c, apperror.New(http.StatusBadRequest, "COMMON_INVALID_PAGINATION", "invalid page"))
-		return 0, 0, false
-	}
-	pageSize, err := strconv.Atoi(c.DefaultQuery("page_size", "20"))
-	if err != nil || pageSize < 1 || pageSize > 100 {
-		response.Error(c, apperror.New(http.StatusBadRequest, "COMMON_INVALID_PAGINATION", "invalid page size"))
 		return 0, 0, false
 	}
 	return page, pageSize, true

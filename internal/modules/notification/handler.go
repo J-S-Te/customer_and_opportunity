@@ -5,6 +5,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/apperror"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/pagination"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/response"
 )
 
@@ -13,13 +14,8 @@ type Handler struct{ service *Service }
 func NewHandler(service *Service) *Handler { return &Handler{service: service} }
 
 func (h *Handler) ListMine(c *gin.Context) {
-	page, err := strconv.Atoi(c.DefaultQuery("page", "1"))
-	if err != nil || page < 1 {
-		response.Error(c, apperror.New(400, "COMMON_INVALID_PAGINATION", "invalid pagination"))
-		return
-	}
-	pageSize, err := strconv.Atoi(c.DefaultQuery("page_size", "20"))
-	if err != nil || pageSize < 1 || pageSize > 100 {
+	page, pageSize, err := pagination.ParseQuery(c.DefaultQuery("page", "1"), c.DefaultQuery("page_size", "20"))
+	if err != nil {
 		response.Error(c, apperror.New(400, "COMMON_INVALID_PAGINATION", "invalid pagination"))
 		return
 	}
