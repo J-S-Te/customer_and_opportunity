@@ -21,6 +21,9 @@ func createProjectConversation(deps RouterDependencies) gin.HandlerFunc {
 			response.Error(c, projectmessage.ErrValidation)
 			return
 		}
+		if !portalProjectVisible(c, deps, c.Param("projectID")) {
+			return
+		}
 		value, err := deps.ProjectMessages.Create(c.Request.Context(), projectMessageCustomerActor(c), c.Param("projectID"), projectmessage.CreateCommand{IdempotencyKey: c.GetHeader("Idempotency-Key")})
 		if err != nil {
 			response.Error(c, err)
@@ -38,6 +41,9 @@ func getCurrentProjectConversation(deps RouterDependencies) gin.HandlerFunc {
 		}
 		if deps.ProjectMessages == nil {
 			response.Error(c, projectmessage.ErrNotFound)
+			return
+		}
+		if !portalProjectVisible(c, deps, c.Param("projectID")) {
 			return
 		}
 		value, err := deps.ProjectMessages.CurrentCustomer(c.Request.Context(), projectMessageCustomerActor(c), c.Param("projectID"), before, size)

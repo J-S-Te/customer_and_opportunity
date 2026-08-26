@@ -729,7 +729,17 @@ func (s *Service) resumeProvision(ctx context.Context, principal auth.Principal,
 		return nil, err
 	}
 	now := s.clock.Now().UTC()
+	roleWasAlreadyAssigned := operation.Stage == OperationStageRoleAssigned
 	if operation.Stage == OperationStageCompleted {
+		// 已完成只代表本地 Saga 已落账，不代表平台角色投影永远存在。
+		// 角色可能被人工撤销、Keycloak 投影丢失，或历史版本在角色成功后落账前崩溃。
+		// 每次幂等重入都重新调用平台的角色收敛接口，接口使用稳定幂等键，
+		// 既能修复历史半完成数据，也不会重复授予角色。
+		identity := ProvisionedIdentity{PlatformUserID: operation.PlatformUserID, AccountNo: operation.AccountNo}
+		if roleErr := s.platform.AssignPortalRoleIdempotent(ctx, identity.PlatformUserID, operationRemoteKey(operation, "portal-role")); roleErr != nil {
+			compensationErr := s.recordCompensationForOperation(ctx, principal, contact, identity, CompensationRole, "ROLE_RECONCILIATION_FAILED", operationRemoteKey(operation, "portal-role"))
+			return nil, s.failProvision(ctx, operation, "ROLE_RECONCILIATION_FAILED", errors.Join(roleErr, compensationErr))
+		}
 		return s.completedProvisionResult(ctx, operation, contact)
 	}
 	if operation.Stage == OperationStagePrepared {
@@ -764,6 +774,15 @@ func (s *Service) resumeProvision(ctx context.Context, principal auth.Principal,
 		}
 	}
 	if operation.Stage == OperationStageRoleAssigned {
+		// 角色状态是可被外部撤销的投影，不因本地阶段已前进而跳过收敛。
+		// 这覆盖“角色已成功、随后被撤销/丢失、但本地操作仍为 ROLE_ASSIGNED”的窗口。
+		if roleWasAlreadyAssigned {
+			err = s.platform.AssignPortalRoleIdempotent(ctx, identity.PlatformUserID, operationRemoteKey(operation, "portal-role"))
+		}
+		if err != nil {
+			compensationErr := s.recordCompensationForOperation(ctx, principal, contact, identity, CompensationRole, "ROLE_RECONCILIATION_FAILED", operationRemoteKey(operation, "portal-role"))
+			return nil, s.failProvision(ctx, operation, "ROLE_RECONCILIATION_FAILED", errors.Join(err, compensationErr))
+		}
 		// Phase 2 双写：门户映射仍是权威，平台客户绑定失败不中断邀请开通；失败入队绑定
 		// 补偿任务，由补偿 worker 按同一幂等键补齐，对账 worker 观察残余差异。
 		if s.binding != nil {

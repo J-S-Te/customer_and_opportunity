@@ -167,6 +167,7 @@ func NewRouter(deps RouterDependencies) *gin.Engine {
 	internal.POST("/filings/:id/unlock", requireMachineScope("portal.filing.unlock"), unlockFiling(deps))
 	internal.POST("/filing-material-scan-callbacks", requireMachineScope("portal.filing_material.scan.write"), filingMaterialScanCallback(deps))
 	internal.GET("/customers/:customerID/projects", requireMachineScope("portal.project_history.read"), listProjectHistoryForCRM(deps))
+	internal.POST("/project-access/sync", requireMachineScope("portal.project_access.sync"), syncProjectAccess(deps))
 	internal.GET("/project-conversations", requireMachineScope("portal.project_message.manage"), listProjectConversationsForManager(deps))
 	internal.GET("/project-conversations/:id", requireMachineScope("portal.project_message.manage"), getProjectConversationForManager(deps))
 	internal.POST("/project-conversations/:id/messages", requireMachineScope("portal.project_message.manage"), sendProjectMessageForManager(deps))
@@ -708,7 +709,7 @@ func listProjects(deps RouterDependencies) gin.HandlerFunc {
 		if !ok {
 			return
 		}
-		value, err := deps.Projects.List(c.Request.Context(), project.Scope{TenantID: session.TenantID, CustomerID: session.CustomerID}, project.ListQuery{Status: c.Query("status"), Page: page, PageSize: size})
+		value, err := deps.Projects.List(c.Request.Context(), portalProjectScope(session), project.ListQuery{Status: c.Query("status"), Page: page, PageSize: size})
 		if err != nil {
 			response.Error(c, err)
 			return
@@ -749,6 +750,39 @@ func listProjectHistoryForCRM(deps RouterDependencies) gin.HandlerFunc {
 		response.OK(c, value)
 	}
 }
+
+// syncProjectAccess 接收项目系统按项目给出的完整 Portal 账号集合。
+// 租户、客户和项目均在服务端通过项目快照再次确认，重复 source_version 请求安全重放。
+func syncProjectAccess(deps RouterDependencies) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var body struct {
+			TenantID      string    `json:"tenant_id"`
+			CustomerID    uint64    `json:"customer_id"`
+			ProjectID     string    `json:"project_id"`
+			SourceVersion string    `json:"source_version"`
+			AccountIDs    []string  `json:"account_ids"`
+			UpdatedAt     time.Time `json:"updated_at"`
+		}
+		if !decode(c, &body) {
+			return
+		}
+		principal, ok := sharedauth.FromContext(c.Request.Context())
+		if !ok || strings.TrimSpace(principal.TenantID) == "" || strings.TrimSpace(body.TenantID) != strings.TrimSpace(principal.TenantID) {
+			response.Error(c, apperror.ErrForbidden)
+			return
+		}
+		if deps.Projects == nil {
+			response.Error(c, apperror.New(http.StatusServiceUnavailable, "PORTAL_PROJECT_ACCESS_NOT_CONFIGURED", "project account binding store is not configured"))
+			return
+		}
+		err := deps.Projects.SyncAccountBindings(c.Request.Context(), project.SyncAccountBindingsCommand{TenantID: body.TenantID, CustomerID: body.CustomerID, ProjectID: body.ProjectID, SourceVersion: body.SourceVersion, AccountIDs: body.AccountIDs, UpdatedAt: body.UpdatedAt})
+		if err != nil {
+			response.Error(c, err)
+			return
+		}
+		response.OK(c, gin.H{"accepted": true})
+	}
+}
 func getProject(deps RouterDependencies) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if !onlyProjectQueryKeys(c) {
@@ -756,7 +790,7 @@ func getProject(deps RouterDependencies) gin.HandlerFunc {
 			return
 		}
 		session := currentSession(c)
-		value, err := deps.Projects.Get(c.Request.Context(), project.Scope{TenantID: session.TenantID, CustomerID: session.CustomerID}, c.Param("projectID"))
+		value, err := deps.Projects.Get(c.Request.Context(), portalProjectScope(session), c.Param("projectID"))
 		if err != nil {
 			response.Error(c, err)
 			return
@@ -771,7 +805,7 @@ func listActivities(deps RouterDependencies) gin.HandlerFunc {
 		if !ok {
 			return
 		}
-		value, err := deps.Projects.Activities(c.Request.Context(), project.Scope{TenantID: session.TenantID, CustomerID: session.CustomerID}, c.Param("projectID"), page, size)
+		value, err := deps.Projects.Activities(c.Request.Context(), portalProjectScope(session), c.Param("projectID"), page, size)
 		if err != nil {
 			response.Error(c, err)
 			return
@@ -797,6 +831,9 @@ func createProjectExport(deps RouterDependencies) gin.HandlerFunc {
 		}
 		if deps.ProjectExports == nil {
 			response.Error(c, projectexport.ErrNotFound)
+			return
+		}
+		if !portalProjectVisible(c, deps, c.Param("projectID")) {
 			return
 		}
 		value, err := deps.ProjectExports.Create(c.Request.Context(), projectExportActor(c), c.Param("projectID"), c.GetHeader("Idempotency-Key"))
@@ -925,6 +962,37 @@ func actor(c *gin.Context) report.Actor {
 	s := currentSession(c)
 	return report.Actor{TenantID: s.TenantID, CustomerID: s.CustomerID, AccountID: s.PlatformUserID}
 }
+
+// portalProjectScope 将平台下发的项目级数据范围传递到项目查询层。
+// Portal 超管仍受当前租户和客户单位边界约束；普通账号只在平台明确下发项目范围
+// 且本地存在对应绑定时收紧访问，未完成存量绑定迁移的账号继续沿用单位级回退策略。
+func portalProjectScope(session *account.Session) project.Scope {
+	if session == nil {
+		return project.Scope{}
+	}
+	allowAll := false
+	for _, role := range session.Roles {
+		if role == "portal_super_admin" {
+			allowAll = true
+			break
+		}
+	}
+	return project.Scope{TenantID: session.TenantID, CustomerID: session.CustomerID, AccountID: session.PlatformUserID, AllowAll: allowAll}
+}
+
+// portalProjectVisible 在所有接收 project_id 的写入入口复用项目服务端可见性校验，
+// 防止攻击者绕过项目下拉框直接提交同单位其他项目标识。
+func portalProjectVisible(c *gin.Context, deps RouterDependencies, projectID string) bool {
+	if strings.TrimSpace(projectID) == "" || deps.Projects == nil {
+		response.Error(c, apperror.New(http.StatusNotFound, "PORTAL_PROJECT_NOT_FOUND", "project not found"))
+		return false
+	}
+	if _, err := deps.Projects.Get(c.Request.Context(), portalProjectScope(currentSession(c)), projectID); err != nil {
+		response.Error(c, err)
+		return false
+	}
+	return true
+}
 func listReports(deps RouterDependencies) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		page, _ := strconv.Atoi(c.Query("page"))
@@ -966,6 +1034,12 @@ func createReport(deps RouterDependencies) gin.HandlerFunc {
 		}
 		if !decode(c, &body) {
 			return
+		}
+		if body.ProjectID != "" {
+			if _, err := deps.Projects.Get(c.Request.Context(), portalProjectScope(currentSession(c)), body.ProjectID); err != nil {
+				response.Error(c, report.ErrProjectNotAccessible)
+				return
+			}
 		}
 		value, err := deps.Reports.Create(c.Request.Context(), actor(c), report.CreateCommand{ProjectID: body.ProjectID, ReportType: body.ReportType, Reason: body.Reason, ReceiveEmail: body.ReceiveEmail, IdempotencyKey: c.GetHeader("Idempotency-Key")})
 		if err != nil {
@@ -1273,6 +1347,12 @@ func createFiling(deps RouterDependencies) gin.HandlerFunc {
 		if !decode(c, &body) {
 			return
 		}
+		if body.ProjectID != "" {
+			if _, err := deps.Projects.Get(c.Request.Context(), portalProjectScope(currentSession(c)), body.ProjectID); err != nil {
+				response.Error(c, filing.ErrNotFound)
+				return
+			}
+		}
 		value, err := deps.Filings.Create(c.Request.Context(), filingActor(c), filing.CreateCommand{ProjectID: body.ProjectID, IdempotencyKey: c.GetHeader("Idempotency-Key")})
 		if err != nil {
 			response.Error(c, err)
@@ -1538,6 +1618,9 @@ func createFeedback(deps RouterDependencies) gin.HandlerFunc {
 		if !decode(c, &body) {
 			return
 		}
+		if body.ProjectID != "" && !portalProjectVisible(c, deps, body.ProjectID) {
+			return
+		}
 		value, err := deps.Feedback.Create(c.Request.Context(), feedbackActor(c), feedback.CreateCommand{Type: body.Type, Title: body.Title, Description: body.Description, ProjectID: body.ProjectID, ExpectedContact: body.ExpectedContact, IdempotencyKey: c.GetHeader("Idempotency-Key")})
 		if err != nil {
 			response.Error(c, err)
@@ -1588,6 +1671,9 @@ func evaluationActor(c *gin.Context) evaluation.Actor {
 
 func evaluationEligibility(deps RouterDependencies) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		if !portalProjectVisible(c, deps, c.Param("projectID")) {
+			return
+		}
 		value, err := deps.Evaluations.Eligibility(c.Request.Context(), evaluationActor(c), c.Param("projectID"))
 		if err != nil {
 			response.Error(c, err)
@@ -1608,6 +1694,9 @@ func submitEvaluation(deps RouterDependencies) gin.HandlerFunc {
 			Comment           string `json:"comment"`
 		}
 		if !decode(c, &body) {
+			return
+		}
+		if !portalProjectVisible(c, deps, body.ProjectID) {
 			return
 		}
 		value, err := deps.Evaluations.Submit(c.Request.Context(), evaluationActor(c), evaluation.SubmitCommand{

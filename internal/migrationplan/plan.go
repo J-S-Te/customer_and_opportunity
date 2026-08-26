@@ -65,7 +65,7 @@ var baseFiles = map[Schema][]string{
 		"000070_portal_identity_disable_idempotency.up.sql",
 		"000073_portal_worker_heartbeats.up.sql", "000076_portal_request_audit_outbox.up.sql", "000077_portal_customer_service_options.up.sql",
 		"000079_portal_session_data_scopes.up.sql",
-		"000095_add_user_login_ip_to_portal_request_audit_outbox.up.sql", "000097_add_login_ip_to_portal_sessions.up.sql",
+		"000095_add_user_login_ip_to_portal_request_audit_outbox.up.sql", "000097_add_login_ip_to_portal_sessions.up.sql", "000102_portal_project_account_bindings.up.sql",
 	},
 }
 

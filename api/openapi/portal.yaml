@@ -166,6 +166,8 @@ paths:
     post: {$ref: '#/components/x-operations/filingMaterialScanCallback'}
   /internal/customers/{customerID}/projects:
     get: {$ref: '#/components/x-operations/listProjectHistoryForCRM'}
+  /internal/project-access/sync:
+    post: {$ref: '#/components/x-operations/syncProjectAccess'}
   /internal/customers/{customerID}/capabilities:
     get: {$ref: '#/components/x-operations/getCustomerCapabilities'}
     put: {$ref: '#/components/x-operations/updateCustomerCapabilities'}
@@ -365,6 +367,27 @@ components:
     unlockFiling: {<<: *machineProvision, operationId: unlockFiling, x-scope: portal.filing.unlock, security: [{machineJWT: [portal.filing.unlock]}], parameters: [{$ref: '#/components/parameters/ID'}, {$ref: '#/components/parameters/IdempotencyKey'}]}
     filingMaterialScanCallback: {<<: *machineProvision, operationId: filingMaterialScanCallback, x-scope: portal.filing_material.scan.write, security: [{machineJWT: [portal.filing_material.scan.write]}]}
     listProjectHistoryForCRM: {<<: *machineProvision, operationId: listProjectHistoryForCRM, x-scope: portal.project_history.read, security: [{machineJWT: [portal.project_history.read]}], parameters: [{name: customerID, in: path, required: true, schema: {type: integer, format: uint64, minimum: 1}}]}
+    syncProjectAccess:
+      <<: *machineProvision
+      operationId: syncProjectAccess
+      x-scope: portal.project_access.sync
+      security: [{machineJWT: [portal.project_access.sync]}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [tenant_id, customer_id, project_id, source_version, updated_at]
+              properties:
+                tenant_id: {type: string}
+                customer_id: {type: integer, format: uint64, minimum: 1}
+                project_id: {type: string, minLength: 1, maxLength: 64}
+                source_version: {type: string, minLength: 1, maxLength: 64}
+                account_ids: {type: array, maxItems: 1000, items: {type: string, minLength: 1, maxLength: 128}}
+                updated_at: {type: string, format: date-time}
+      description: Replaces only SYNC bindings for one tenant/customer/project atomically; MANUAL bindings are retained and repeating a source version is idempotent.
     getCustomerCapabilities: {<<: *machineProvision, operationId: getCustomerCapabilities, x-scope: portal.customer_capabilities.read, security: [{machineJWT: [portal.customer_capabilities.read]}], parameters: [{name: customerID, in: path, required: true, schema: {type: integer, format: uint64, minimum: 1}}]}
     updateCustomerCapabilities: {<<: *machineProvision, operationId: updateCustomerCapabilities, x-scope: portal.customer_capabilities.manage, security: [{machineJWT: [portal.customer_capabilities.manage]}], parameters: [{name: customerID, in: path, required: true, schema: {type: integer, format: uint64, minimum: 1}}], requestBody: {required: true, content: {application/json: {schema: {type: object, additionalProperties: false, required: [capabilities], properties: {capabilities: {type: object, additionalProperties: false, properties: {project_enabled: {type: boolean}, report_enabled: {type: boolean}, filing_enabled: {type: boolean}, feedback_enabled: {type: boolean}, evaluation_enabled: {type: boolean}}}}}}}}}
     listConversationsForManager: &machineMessage {<<: *machineProvision, operationId: listConversationsForManager, x-scope: portal.project_message.manage, security: [{machineJWT: [portal.project_message.manage]}]}

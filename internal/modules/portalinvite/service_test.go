@@ -420,7 +420,7 @@ func TestPartialExternalCompletionCreatesObservableCompensation(t *testing.T) {
 	}
 }
 
-func TestCreateRequiresActorBoundIdempotencyAndExactReplayDoesNotRepeatRemoteWrites(t *testing.T) {
+func TestCreateRequiresActorBoundIdempotencyAndExactReplayReconcilesRole(t *testing.T) {
 	now := time.Date(2026, 8, 2, 1, 2, 3, 0, time.UTC)
 	repo := &fakeRepo{}
 	platform := &fakePlatform{identity: ProvisionedIdentity{PlatformUserID: "subject-a", AccountNo: "account-a"}}
@@ -439,7 +439,7 @@ func TestCreateRequiresActorBoundIdempotencyAndExactReplayDoesNotRepeatRemoteWri
 	if err != nil {
 		t.Fatal(err)
 	}
-	if first.InviteNo != second.InviteNo || first.ActivationURL != second.ActivationURL || platform.provisionCalls != 1 || platform.roleCalls != 1 || portal.calls != 1 {
+	if first.InviteNo != second.InviteNo || first.ActivationURL != second.ActivationURL || platform.provisionCalls != 1 || platform.roleCalls != 2 || portal.calls != 1 {
 		t.Fatalf("first=%#v second=%#v calls=%d/%d/%d", first, second, platform.provisionCalls, platform.roleCalls, portal.calls)
 	}
 	if len(repo.operations) != 1 || strings.Contains(string(repo.operations[0].ContactSnapshotCipher), contact.Phone) || strings.Contains(string(repo.operations[0].TokenCipher), strings.TrimPrefix(first.ActivationURL, "https://portal.example/activate?token=")) {
@@ -466,7 +466,7 @@ func TestCreateResumesFailedMappingWithSameRemoteIdempotencyKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.InviteNo == "" || platform.provisionCalls != 1 || platform.roleCalls != 1 || portal.calls != 2 || len(portal.keys) != 2 || portal.keys[0] != portal.keys[1] {
+	if result.InviteNo == "" || platform.provisionCalls != 1 || platform.roleCalls != 2 || portal.calls != 2 || len(portal.keys) != 2 || portal.keys[0] != portal.keys[1] {
 		t.Fatalf("result=%#v calls=%d/%d/%d keys=%v", result, platform.provisionCalls, platform.roleCalls, portal.calls, portal.keys)
 	}
 	if len(repo.compensations) != 1 || repo.compensations[0].TaskNo != portal.keys[0] {
