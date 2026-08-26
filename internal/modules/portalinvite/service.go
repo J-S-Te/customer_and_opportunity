@@ -24,7 +24,7 @@ import (
 	"gorm.io/gorm"
 )
 
-const inviteTTL = 2 * time.Hour
+const inviteTTL = 24 * time.Hour
 
 const accessDisableRequestLease = time.Minute
 
