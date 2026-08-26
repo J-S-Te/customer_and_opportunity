@@ -17,10 +17,17 @@ import (
 	requestctx "github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/request"
 )
 
-const portalRole = "portal_customer"
+const (
+	portalCustomerRole   = "portal_customer"
+	portalSuperAdminRole = "portal_super_admin"
+)
 
 const authorizationCheckInterval = 15 * time.Second
 const authorizationMaxStale = 60 * time.Second
+
+// portalSessionIdleTimeout 定义 Portal 服务端会话的最大空闲时间。客户端 Cookie
+// 即使仍在有效期内，超过该时间未访问也不能重新续活会话。
+const portalSessionIdleTimeout = 30 * time.Minute
 
 type Service struct {
 	repo            Repository
@@ -332,12 +339,17 @@ func (s *Service) CompleteLogin(ctx context.Context, state, code string, metadat
 		s.writeLoginSecurityEvent(ctx, activation, "LOGIN_FAILED", "HIGH", "OIDC_TOKEN_INVALID", metadata, now)
 		return LoginResult{}, ErrInvalidClaims
 	}
-	// Phase 4：平台绑定开启且声明存在时，非邀请登录直接以 customer_ref 作为客户边界，
-	// 不查本地映射；邀请登录仍走本地映射消费（映射激活由邀请链路负责）。声明缺失或
-	// 开关关闭时回退旧路径（本地 portal_identity_links 仍为权威）。
+	// 门户超级管理员是内部运营身份，不绑定任意客户；客户数据访问仍必须经后续受控
+	// 客户上下文建立。外部客户则继续走既有身份映射，不能因为拥有同一组功能权限而
+	// 绕过客户归属校验。
 	customerID := uint64(0)
 	var link *IdentityLink
-	if s.usePlatformBinding && claims.CustomerRef != "" {
+	if isPortalSuperAdmin(claims.Roles) {
+		if activation.ExpectedPlatformUserID != "" || activation.CustomerID != 0 {
+			s.writeLoginSecurityEvent(ctx, activation, "SUBJECT_MISMATCH", "HIGH", "PORTAL_ADMIN_INVITATION_REJECTED", metadata, now)
+			return LoginResult{}, ErrSubjectMismatch
+		}
+	} else if s.usePlatformBinding && claims.CustomerRef != "" {
 		parsed, parseErr := strconv.ParseUint(claims.CustomerRef, 10, 64)
 		if parseErr != nil || parsed == 0 {
 			s.writeLoginSecurityEvent(ctx, activation, "LOGIN_FAILED", "HIGH", "OIDC_CUSTOMER_REF_INVALID", metadata, now)
@@ -439,7 +451,8 @@ func validPortalAuthorization(claims Claims, environmentCode string) bool {
 		identityID = claims.Subject
 	}
 	manifest := platformcatalog.PortalManifest()
-	if len(claims.Roles) != 1 || claims.Roles[0] != portalRole || !platformcatalog.HasRole(manifest, claims.Roles[0]) || len(claims.Permissions) == 0 {
+	roleCode, ok := portalBrowserRole(claims.Roles)
+	if !ok || !platformcatalog.HasRole(manifest, roleCode) || len(claims.Permissions) == 0 {
 		return false
 	}
 	seen := make(map[string]struct{}, len(claims.Permissions))
@@ -453,11 +466,38 @@ func validPortalAuthorization(claims Claims, environmentCode string) bool {
 		seen[permission] = struct{}{}
 	}
 	_, decision, err := sharedauthorization.ValidateScopes(claims.DataScopes, claims.Roles, environmentCode, identityID, claims.PersonID)
+	if err != nil {
+		return false
+	}
+	if roleCode == portalSuperAdminRole {
+		// 内部管理会话只接受全局范围，不能携带 SELF/ORG/PROJECT 等客户侧范围，避免
+		// 客户上下文与管理员身份混淆。
+		return decision.AllowAll && len(decision.SelfIDs) == 0
+	}
 	// Portal data is always bound to the server-side IdentityLink customer.
 	// APPLICATION/TENANT/ENVIRONMENT and a matching SELF scope may authorize
 	// that customer; ORG/PROJECT-only scopes cannot be safely translated to a
 	// customer and therefore fail closed.
-	return err == nil && (decision.AllowAll || len(decision.SelfIDs) > 0)
+	return decision.AllowAll || len(decision.SelfIDs) > 0
+}
+
+// portalBrowserRole 返回唯一的浏览器门户角色。客户与内部超级管理员绝不能在同一
+// 会话中同时生效，否则服务端无法确定客户数据边界。
+func portalBrowserRole(roles []string) (string, bool) {
+	if len(roles) != 1 {
+		return "", false
+	}
+	switch roles[0] {
+	case portalCustomerRole, portalSuperAdminRole:
+		return roles[0], true
+	default:
+		return "", false
+	}
+}
+
+func isPortalSuperAdmin(roles []string) bool {
+	roleCode, ok := portalBrowserRole(roles)
+	return ok && roleCode == portalSuperAdminRole
 }
 
 // AuthenticateSession 校验本地会话并在线复核授权。allowStale 仅对只读请求为 true：
@@ -470,8 +510,16 @@ func (s *Service) AuthenticateSession(ctx context.Context, tenantID, rawToken st
 	if err != nil {
 		return nil, ErrInvalidLoginState
 	}
+	// 服务层再次校验空闲边界，避免非 GORM 仓储实现或测试替身绕过会话策略。
+	// 临界时刻按已超时处理，必须重新登录后才能建立新会话。
+	if session.LastSeenAt.IsZero() || !session.LastSeenAt.Add(portalSessionIdleTimeout).After(now) {
+		return nil, ErrInvalidLoginState
+	}
 	var link *IdentityLink
-	if s.usePlatformBinding {
+	if isPortalSuperAdmin(session.Roles) {
+		// 管理员主会话不绑定客户；实际跨客户访问必须通过专用客户上下文，而不是使用
+		// CustomerID=0 放宽现有客户查询。
+	} else if s.usePlatformBinding {
 		// 平台绑定路径：会话客户边界由登录时的 customer_ref 建立，本地映射不再是权威。
 		if session.CustomerID == 0 {
 			return nil, ErrIdentityDisabled
@@ -506,7 +554,7 @@ func (s *Service) AuthenticateSession(ctx context.Context, tenantID, rawToken st
 			s.revokeAuthorization(ctx, tenantID, session.PlatformUserID, now, "USERINFO_REJECTED")
 			return nil, ErrInvalidLoginState
 		}
-		if s.usePlatformBinding {
+		if s.usePlatformBinding && !isPortalSuperAdmin(session.Roles) {
 			// 客户重绑定必须即时生效：customer_ref 与登录时建立的边界不一致即撤销会话。
 			parsed, parseErr := strconv.ParseUint(current.CustomerRef, 10, 64)
 			if parseErr != nil || parsed != session.CustomerID {

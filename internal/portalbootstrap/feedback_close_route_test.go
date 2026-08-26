@@ -116,7 +116,7 @@ func feedbackCloseRouteFixture(t *testing.T, permissions []string, repository *f
 	session := &account.Session{
 		Model: database.Model{TenantID: "tenant-a"}, SessionIDHash: reportNotificationRouteSessionHash("opaque-session"),
 		PlatformUserID: "subject-a", CustomerID: 7, Permissions: permissions,
-		AuthorizationCheckedAt: now, ExpiresAt: now.Add(time.Hour), AbsoluteExpiry: now.Add(time.Hour),
+		AuthorizationCheckedAt: now, ExpiresAt: now.Add(time.Hour), AbsoluteExpiry: now.Add(time.Hour), LastSeenAt: now,
 	}
 	accountRepository := &reportNotificationRouteAccountRepository{
 		session: session,

@@ -38,10 +38,16 @@ func (r *GORMRepository) UpsertPendingLink(ctx context.Context, value *IdentityL
 	if current.CustomerID != value.CustomerID || current.Status == IdentityDisabled {
 		return nil, ErrIdentityDisabled
 	}
-	if current.AccountNo != value.AccountNo {
-		return nil, ErrInvalidClaims
-	}
 	updates := map[string]any{"contact_id": value.ContactID, "updated_by": value.UpdatedBy, "updated_at": value.UpdatedAt}
+	if current.AccountNo != value.AccountNo {
+		// 历史外部客户使用 EXT-... 登录名；平台迁移为联系人手机号后，尚未激活的
+		// 门户映射必须同步该账号名，否则 CRM 重试会被误判为身份声明非法。
+		// 已激活身份的账号名仍不可变，防止联系人变更改写已使用账号。
+		if !canUpdatePendingLinkAccountNo(current.Status) {
+			return nil, ErrInvalidClaims
+		}
+		updates["account_no"] = value.AccountNo
+	}
 	// 补偿重试只携带不可变集成身份，不携带可变联系人信息；空展示名不能覆盖已登记的客户名称。
 	if strings.TrimSpace(value.DisplayName) != "" {
 		updates["display_name"] = value.DisplayName
@@ -50,6 +56,11 @@ func (r *GORMRepository) UpsertPendingLink(ctx context.Context, value *IdentityL
 		return nil, updateErr
 	}
 	return &current, nil
+}
+
+// canUpdatePendingLinkAccountNo 限制账号名迁移只能发生在未激活映射，避免联系人资料变化影响已使用账号。
+func canUpdatePendingLinkAccountNo(status IdentityStatus) bool {
+	return status == IdentityPending
 }
 
 func (r *GORMRepository) FindLink(ctx context.Context, tenantID, subject string) (*IdentityLink, error) {
@@ -221,9 +232,9 @@ func (r *GORMRepository) CreateSession(ctx context.Context, value *Session) erro
 	return r.tx(ctx).Create(value).Error
 }
 func (r *GORMRepository) FindSession(ctx context.Context, tenantID, sessionHash string, now time.Time) (*Session, error) {
-	// 查询直接限定租户、未撤销及双重到期时间，调用方不会拿到待二次判断的过期会话。
+	// 查询直接限定租户、未撤销、空闲超时及双重到期时间，调用方不会拿到待二次判断的过期会话。
 	var value Session
-	err := r.tx(ctx).Where("tenant_id = ? AND session_id_hash = ? AND revoked_at IS NULL AND expires_at > ? AND absolute_expiry > ?", tenantID, sessionHash, now, now).Take(&value).Error
+	err := r.tx(ctx).Where("tenant_id = ? AND session_id_hash = ? AND revoked_at IS NULL AND last_seen_at > ? AND expires_at > ? AND absolute_expiry > ?", tenantID, sessionHash, sessionIdleCutoff(now), now, now).Take(&value).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, ErrInvalidLoginState
 	}
@@ -232,7 +243,7 @@ func (r *GORMRepository) FindSession(ctx context.Context, tenantID, sessionHash 
 func (r *GORMRepository) ListSessions(ctx context.Context, tenantID, subject string, now time.Time) ([]Session, error) {
 	var values []Session
 	err := r.tx(ctx).
-		Where("tenant_id = ? AND platform_user_id = ? AND revoked_at IS NULL AND expires_at > ? AND absolute_expiry > ?", tenantID, subject, now, now).
+		Where("tenant_id = ? AND platform_user_id = ? AND revoked_at IS NULL AND last_seen_at > ? AND expires_at > ? AND absolute_expiry > ?", tenantID, subject, sessionIdleCutoff(now), now, now).
 		Order("last_seen_at DESC, id DESC").
 		Find(&values).Error
 	return values, err
@@ -240,7 +251,7 @@ func (r *GORMRepository) ListSessions(ctx context.Context, tenantID, subject str
 func (r *GORMRepository) FindOwnedSession(ctx context.Context, tenantID, subject, publicID string, now time.Time) (*Session, error) {
 	var value Session
 	err := r.tx(ctx).
-		Where("tenant_id = ? AND platform_user_id = ? AND public_id = ? AND revoked_at IS NULL AND expires_at > ? AND absolute_expiry > ?", tenantID, subject, publicID, now, now).
+		Where("tenant_id = ? AND platform_user_id = ? AND public_id = ? AND revoked_at IS NULL AND last_seen_at > ? AND expires_at > ? AND absolute_expiry > ?", tenantID, subject, publicID, sessionIdleCutoff(now), now, now).
 		Take(&value).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, ErrSessionNotFound
@@ -268,7 +279,7 @@ func (r *GORMRepository) TouchSession(ctx context.Context, tenantID, sessionHash
 		updates["authorization_checked_at"] = checkedAt
 	}
 	result := r.tx(ctx).Model(&Session{}).
-		Where("tenant_id = ? AND session_id_hash = ? AND revoked_at IS NULL AND expires_at > ? AND absolute_expiry > ?", tenantID, sessionHash, seenAt, seenAt).
+		Where("tenant_id = ? AND session_id_hash = ? AND revoked_at IS NULL AND last_seen_at > ? AND expires_at > ? AND absolute_expiry > ?", tenantID, sessionHash, sessionIdleCutoff(seenAt), seenAt, seenAt).
 		Updates(updates)
 	if result.Error != nil {
 		return result.Error
@@ -296,7 +307,11 @@ func activeSessionQuery(db *gorm.DB, tenantID, sessionHash string, now time.Time
 	return db.Table((Session{}).TableName()).
 		Clauses(clause.Locking{Strength: "UPDATE"}).
 		Select("session_id_hash").
-		Where("tenant_id = ? AND session_id_hash = ? AND revoked_at IS NULL AND expires_at > ? AND absolute_expiry > ? AND deleted_at IS NULL", tenantID, sessionHash, now, now)
+		Where("tenant_id = ? AND session_id_hash = ? AND revoked_at IS NULL AND last_seen_at > ? AND expires_at > ? AND absolute_expiry > ? AND deleted_at IS NULL", tenantID, sessionHash, sessionIdleCutoff(now), now, now)
+}
+
+func sessionIdleCutoff(now time.Time) time.Time {
+	return now.Add(-portalSessionIdleTimeout)
 }
 func (r *GORMRepository) MarkLinkVerified(ctx context.Context, tenantID string, id, revision uint64, now time.Time) error {
 	result := r.tx(ctx).Model(&IdentityLink{}).

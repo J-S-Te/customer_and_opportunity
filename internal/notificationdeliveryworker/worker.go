@@ -149,6 +149,18 @@ func (a *App) deliver(ctx context.Context, item notification.Notification) error
 	defer response.Body.Close()
 	responseBody, _ := io.ReadAll(io.LimitReader(response.Body, 1024))
 	if response.StatusCode >= 200 && response.StatusCode < 300 {
+		var receipt struct {
+			Data struct {
+				Status string `json:"status"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(responseBody, &receipt); err != nil {
+			return fmt.Errorf("decode platform notification receipt: %w", err)
+		}
+		status := strings.ToUpper(strings.TrimSpace(receipt.Data.Status))
+		if status != "ACCEPTED" && status != "DUPLICATE" {
+			return fmt.Errorf("platform notification receipt is not accepted: %q", status)
+		}
 		return nil
 	}
 	return &platformAPIError{statusCode: response.StatusCode, body: strings.TrimSpace(string(responseBody))}

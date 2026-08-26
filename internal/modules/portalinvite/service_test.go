@@ -455,7 +455,7 @@ func TestCreateResumesFailedMappingWithSameRemoteIdempotencyKey(t *testing.T) {
 	repo := &fakeRepo{}
 	platform := &fakePlatform{identity: ProvisionedIdentity{PlatformUserID: "subject-a", AccountNo: "account-a"}}
 	portal := &fakePortal{err: errors.New("ambiguous transport failure")}
-	contact := ContactIdentity{TenantID: "tenant-a", CustomerID: 7, ContactID: 9, DisplayName: "登记人", Email: "contact@example.test"}
+	contact := ContactIdentity{TenantID: "tenant-a", CustomerID: 7, ContactID: 9, DisplayName: "登记人", Phone: "13800138000", Email: "contact@example.test"}
 	service := NewService(repo, fakeCustomer{identity: contact}, platform, portal, &fakeAudit{}, []byte(strings.Repeat("p", 32)), "https://portal.example", fixedClock{now}, &deterministicRandom{}, testOperationProtector{})
 
 	if _, err := service.Create(serviceContext(), 7, CreateRequest{IdempotencyKey: "retry-key"}); err == nil {

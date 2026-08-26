@@ -243,6 +243,49 @@ func TestInternalApprovalPassNotifiesEveryActiveNextNodeApprover(t *testing.T) {
 	}
 }
 
+func TestInternalApprovalTerminalActionsNotifyApplicant(t *testing.T) {
+	nodes, err := json.Marshal([]ApprovalNode{{ID: "sales", Type: ApprovalNodeApproval, RoleCode: "sales_director"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name      string
+		action    string
+		comment   string
+		wantType  string
+		wantTitle string
+		wantBody  string
+	}{
+		{name: "pass", action: "PASS", wantType: "PRESALE_APPROVAL_APPROVED", wantTitle: "售前审批已通过", wantBody: "您的售前申请已完成审批。"},
+		{name: "reject", action: "REJECT", comment: "资料不完整", wantType: "PRESALE_APPROVAL_REJECTED", wantTitle: "售前审批已驳回", wantBody: "您的售前申请已被驳回：资料不完整"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			actor := Actor{TenantID: "tenant-a", UserID: "director-a", UserName: "销售总监", Roles: map[string]bool{"sales_director": true}, Permissions: map[string]bool{"presale.approve": true}}
+			repo := &mutationRepository{
+				request:  &PresaleRequest{BaseModel: BaseModel{ID: 9, TenantID: actor.TenantID, Version: 3}, ApplicantID: "sales-1", RequestNo: "TS9", Status: StatusPendingApproval, CurrentApprovalNode: 1},
+				approval: &ApprovalInstance{EngineInstanceID: "instance-1", CurrentNode: 1, Status: "PENDING", NodesJSON: nodes},
+				replays:  map[string]*MutationReplay{}, approvalLogs: map[string]*ApprovalLog{},
+			}
+			writer := &captureWorkflowNotifications{}
+			service := NewService(repo, nil, nil, fixedClock{at: time.Date(2026, 8, 23, 8, 0, 0, 0, time.UTC)}, fixedIDs{}).UseWorkflowNotifications(writer)
+
+			if err := service.RequestApprovalAction(context.Background(), actor, 9, "terminal-"+test.name, ApprovalActionInput{Action: test.action, Comment: test.comment, Version: 3}); err != nil {
+				t.Fatalf("RequestApprovalAction: %v", err)
+			}
+			if len(writer.written) != 1 {
+				t.Fatalf("notifications=%+v, want one applicant notification", writer.written)
+			}
+			notice := writer.written[0]
+			if notice.TenantID != actor.TenantID || notice.RecipientID != "sales-1" || notice.Type != test.wantType || notice.Title != test.wantTitle || notice.Body != test.wantBody || notice.RequestID != 9 || notice.RequestNo != "TS9" {
+				t.Fatalf("notification=%+v", notice)
+			}
+		})
+	}
+}
+
 func TestInternalApprovalPassFailsClosedWithoutActiveNextNodeApprover(t *testing.T) {
 	actor := Actor{TenantID: "tenant-a", UserID: "sales-1", UserName: "销售总监", Roles: map[string]bool{"sales_director": true}, Permissions: map[string]bool{"presale.approve": true}}
 	repo := &mutationRepository{

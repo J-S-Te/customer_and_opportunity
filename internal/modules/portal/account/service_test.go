@@ -76,6 +76,31 @@ func TestPortalAuthorizationScopeSemantics(t *testing.T) {
 	}
 }
 
+func TestPortalSuperAdminAuthorizationRequiresGlobalScope(t *testing.T) {
+	base := Claims{Subject: "identity-a", Roles: []string{"portal_super_admin"}, Permissions: []string{"project.read"}}
+	for _, scope := range []DataScope{
+		{RoleCode: "portal_super_admin", ScopeType: "APPLICATION"},
+		{RoleCode: "portal_super_admin", ScopeType: "TENANT"},
+		{RoleCode: "portal_super_admin", ScopeType: "ENVIRONMENT", ScopeID: "01ENV", EnvironmentCode: "dev"},
+	} {
+		claims := base
+		claims.DataScopes = []DataScope{scope}
+		if !validPortalAuthorization(claims, "dev") {
+			t.Fatalf("valid admin scope rejected: %#v", scope)
+		}
+	}
+	for _, scope := range []DataScope{
+		{RoleCode: "portal_super_admin", ScopeType: "SELF", ScopeID: "identity-a", EnvironmentCode: "dev"},
+		{RoleCode: "portal_super_admin", ScopeType: "PROJECT", ScopeID: "project-a"},
+	} {
+		claims := base
+		claims.DataScopes = []DataScope{scope}
+		if validPortalAuthorization(claims, "dev") {
+			t.Fatalf("customer-side admin scope accepted: %#v", scope)
+		}
+	}
+}
+
 func TestPortalAccountIDIsStableBusinessIdentifier(t *testing.T) {
 	if got := portalAccountID(42); got != "PA42" {
 		t.Fatalf("portalAccountID(42)=%q", got)

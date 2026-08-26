@@ -158,6 +158,7 @@ func platformBindingSession(now time.Time) *Session {
 		DataScopes:        []DataScope{{RoleCode: "portal_customer", ScopeType: "APPLICATION"}},
 		AccessTokenCipher: []byte("access-token"), AuthorizationCheckedAt: now.Add(-16 * time.Second),
 		ExpiresAt: now.Add(time.Minute), AbsoluteExpiry: now.Add(time.Minute),
+		LastSeenAt: now.Add(-time.Minute),
 	}
 }
 

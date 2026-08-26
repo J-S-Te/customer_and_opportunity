@@ -503,7 +503,9 @@ func (s *Service) Create(ctx context.Context, customerID uint64, request CreateR
 	if err != nil {
 		return nil, err
 	}
-	if strings.TrimSpace(contact.Phone) == "" && strings.TrimSpace(contact.Email) == "" {
+	// 客户门户使用登记联系人手机号作为唯一登录名。邮箱可作为辅助联系方式，
+	// 但不能替代手机号，否则无法满足邀请激活与账号归属的一致性约束。
+	if strings.TrimSpace(contact.Phone) == "" {
 		return nil, ErrContactInvalid
 	}
 	snapshot, err := json.Marshal(contact)

@@ -118,11 +118,40 @@ func revalidationFixture(now time.Time) (*Service, *revalidationRepository, *rev
 		DataScopes:        []DataScope{{RoleCode: "portal_customer", ScopeType: "APPLICATION"}},
 		AccessTokenCipher: []byte("access-token"), AuthorizationCheckedAt: now.Add(-16 * time.Second),
 		ExpiresAt: now.Add(time.Minute), AbsoluteExpiry: now.Add(time.Minute),
+		LastSeenAt: now.Add(-time.Minute),
 	}
 	repo := &revalidationRepository{session: session, link: &IdentityLink{Model: database.Model{ID: 9, TenantID: "tenant-a"}, PlatformUserID: "subject-a", CustomerID: 7, Status: IdentityActive}}
 	oidc := &revalidationOIDC{claims: Claims{Subject: "subject-a", IdentityID: "subject-a", TenantID: "tenant-a", Roles: []string{"portal_customer"}, Permissions: []string{"report.read", "project.read"}, DataScopes: []DataScope{{RoleCode: "portal_customer", ScopeType: "APPLICATION"}}, RoleConfigHash: "catalog-v1", AuthzRevision: 3}}
 	service := NewService(repo, oidc, nil, passthroughProtector{}, fixedClock{now: now}, unusedRandom{}, "catalog-v1", 15*time.Minute)
 	return service, repo, oidc
+}
+
+func TestAuthenticateSessionRejectsThirtyMinuteIdleSession(t *testing.T) {
+	now := time.Date(2026, 8, 1, 1, 2, 3, 0, time.UTC)
+	service, repo, oidc := revalidationFixture(now)
+	repo.session.LastSeenAt = now.Add(-portalSessionIdleTimeout)
+
+	if _, err := service.AuthenticateSession(context.Background(), "tenant-a", "session-token", true); !errors.Is(err, ErrInvalidLoginState) {
+		t.Fatalf("idle session error=%v, want ErrInvalidLoginState", err)
+	}
+	if oidc.calls != 0 || repo.touched || repo.linkVerified {
+		t.Fatalf("idle session continued authentication: calls=%d touched=%t verified=%t", oidc.calls, repo.touched, repo.linkVerified)
+	}
+}
+
+func TestAuthenticateSessionTouchesSessionInsideIdleWindow(t *testing.T) {
+	now := time.Date(2026, 8, 1, 1, 2, 3, 0, time.UTC)
+	service, repo, _ := revalidationFixture(now)
+	repo.session.LastSeenAt = now.Add(-portalSessionIdleTimeout + time.Millisecond)
+	repo.session.AuthorizationCheckedAt = now.Add(-time.Second)
+
+	value, err := service.AuthenticateSession(context.Background(), "tenant-a", "session-token", true)
+	if err != nil {
+		t.Fatalf("active session error=%v", err)
+	}
+	if !repo.touched || !value.LastSeenAt.Equal(now) {
+		t.Fatalf("active session touched=%t last_seen_at=%s, want %s", repo.touched, value.LastSeenAt, now)
+	}
 }
 
 func TestAuthenticateSessionRevalidatesCurrentAuthorization(t *testing.T) {
