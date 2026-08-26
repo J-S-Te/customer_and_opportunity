@@ -307,7 +307,7 @@ func TestCreateReturnsOneTimeTokenButNeverLeaksRawIdentityOrTokenToPersistence(t
 	if !strings.HasPrefix(result.ActivationURL, "https://portal.example/customer-portal/activate?token=") {
 		t.Fatalf("activation URL=%q", result.ActivationURL)
 	}
-	if result.ExpiresAt.Sub(now) != 2*time.Hour {
+	if result.ExpiresAt.Sub(now) != inviteTTL {
 		t.Fatalf("expiry=%s", result.ExpiresAt)
 	}
 	if result.IdentitySummary == "platform-subject-123456789" || !strings.Contains(result.IdentitySummary, "…") {
