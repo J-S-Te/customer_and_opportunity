@@ -56,6 +56,50 @@ func TestPublicRouteRequiresPermissionAndCustomerScope(t *testing.T) {
 	}
 }
 
+func TestCreateResponseReturnsNonCacheableActivationURL(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	now := time.Date(2026, 7, 31, 1, 2, 3, 0, time.UTC)
+	service, _, _ := newTestService(now)
+	router := gin.New()
+	api := router.Group("/api/v1", func(c *gin.Context) {
+		principal := auth.Principal{
+			TenantID:  "tenant-a",
+			UserID:    "sales-a",
+			ScopeMode: auth.ScopeAll,
+			Permissions: map[string]struct{}{
+				"portal_account.provision": {},
+			},
+		}
+		c.Request = c.Request.WithContext(auth.WithPrincipal(c.Request.Context(), principal))
+		c.Next()
+	})
+	RegisterRoutes(api, NewHandler(service))
+
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/customers/7/portal-invites", nil)
+	request.Header.Set("Idempotency-Key", "handler-create-contract")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	if response.Header().Get("Cache-Control") != "no-store, private" || response.Header().Get("Pragma") != "no-cache" {
+		t.Fatalf("sensitive response cache policy is missing: %#v", response.Header())
+	}
+	var body struct {
+		Code string `json:"code"`
+		Data struct {
+			ActivationURL string `json:"activation_url"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body.Code != "OK" || strings.TrimSpace(body.Data.ActivationURL) == "" {
+		t.Fatal("create response must contain a one-time activation URL")
+	}
+}
+
 func TestCurrentInviteRouteAllowsProvisionOrRevokeOnly(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	now := time.Date(2026, 7, 31, 1, 2, 3, 0, time.UTC)

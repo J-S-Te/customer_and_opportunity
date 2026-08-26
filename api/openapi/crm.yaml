@@ -260,6 +260,24 @@ components:
         request_id: {type: string}
         data: {}
         details: {}
+    PortalInviteCreateEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/Envelope'
+        - type: object
+          required: [data]
+          properties:
+            data:
+              type: object
+              additionalProperties: false
+              required: [invite_no, activation_url, status, expires_at, contact_summary, identity_summary, login_account]
+              properties:
+                invite_no: {type: string, minLength: 1, maxLength: 64}
+                activation_url: {type: string, format: uri, description: One-time Bearer URL. Do not log or persist in a browser history.}
+                status: {type: string, enum: [PENDING]}
+                expires_at: {type: string, format: date-time}
+                contact_summary: {type: string, maxLength: 200}
+                identity_summary: {type: string, maxLength: 128}
+                login_account: {type: string, maxLength: 128}
     Error:
       allOf:
         - $ref: '#/components/schemas/Envelope'
@@ -531,7 +549,32 @@ components:
     listCustomerFollowups: {<<: *customerIDRead, operationId: listCustomerFollowups}
     createCustomerFollowup: {<<: *customerIDRead, operationId: createCustomerFollowup, x-permission: customer.update}
     requestCustomerExport: {<<: *crmRead, operationId: requestCustomerExport, tags: [Customer], x-permission: customer.export, description: Current handler returns 503 until the export Provider is configured.}
-    createPortalInvite: {<<: *customerIDRead, operationId: createPortalInvite, tags: [Portal invite], x-permission: portal_account.provision, parameters: [{$ref: '#/components/parameters/CustomerID'}, {$ref: '#/components/parameters/IdempotencyKey'}]}
+    createPortalInvite:
+      <<: *customerIDRead
+      operationId: createPortalInvite
+      tags: [Portal invite]
+      x-permission: portal_account.provision
+      description: |-
+        Creates or resumes the durable Portal provisioning Saga and returns the one-time activation URL
+        only in this response. The URL is a Bearer credential and must not be cached, logged, or fetched
+        again through the status endpoint.
+      parameters: [{$ref: '#/components/parameters/CustomerID'}, {$ref: '#/components/parameters/IdempotencyKey'}]
+      responses:
+        '201':
+          description: Portal identity and one-time invitation are ready.
+          headers:
+            Cache-Control: {schema: {type: string, const: 'no-store, private'}}
+            Pragma: {schema: {type: string, const: no-cache}}
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PortalInviteCreateEnvelope'
+        '400': {$ref: '#/components/responses/Error'}
+        '401': {$ref: '#/components/responses/Error'}
+        '403': {$ref: '#/components/responses/Error'}
+        '409': {$ref: '#/components/responses/Error'}
+        '422': {$ref: '#/components/responses/Error'}
+        '503': {$ref: '#/components/responses/Error'}
     getCurrentPortalInvite: {<<: *customerIDRead, operationId: getCurrentPortalInvite, tags: [Portal invite], x-permission: portal_account.provision|portal_account.revoke}
     getPortalAccessStatus: {<<: *customerIDRead, operationId: getPortalAccessStatus, tags: [Portal invite], x-permission: portal_account.provision|portal_account.disable, description: Returns the effective local access state and the latest durable disable operation without exposing the platform subject.}
     disablePortalAccess: {<<: *customerIDRead, operationId: disablePortalAccess, tags: [Portal invite], x-permission: portal_account.disable, parameters: [{$ref: '#/components/parameters/CustomerID'}, {$ref: '#/components/parameters/IdempotencyKey'}], requestBody: {$ref: '#/components/requestBodies/ReasonOnly'}, description: Disables the Portal mapping and sessions before revoking the platform role; invitation revoke remains a separate action.}

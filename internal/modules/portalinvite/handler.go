@@ -30,6 +30,9 @@ func (h *Handler) Create(c *gin.Context) {
 		response.Error(c, err)
 		return
 	}
+	// 激活链接属于一次性 Bearer 凭证，禁止浏览器和中间缓存保存创建响应。
+	c.Header("Cache-Control", "no-store, private")
+	c.Header("Pragma", "no-cache")
 	response.Created(c, value)
 }
 
