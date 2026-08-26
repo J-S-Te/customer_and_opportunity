@@ -40,6 +40,34 @@ func TestVisibleSnapshotQueryAlwaysScopesTenantCustomerAndProject(t *testing.T) 
 	}
 }
 
+func TestVisibleSnapshotQueryUsesAccountBindingWithCustomerFallback(t *testing.T) {
+	db, err := gorm.Open(mysql.New(mysql.Config{DSN: "user:pass@tcp(127.0.0.1:1)/portal?parseTime=true", SkipInitializeWithVersion: true}), &gorm.Config{DryRun: true, DisableAutomaticPing: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	statement := visibleSnapshotQuery(db, Scope{TenantID: "tenant-a", CustomerID: 7, AccountID: "subject-a"}, "P-1").Take(&Snapshot{}).Statement
+	sql := statement.SQL.String()
+	for _, fragment := range []string{"portal_project_account_bindings", "NOT EXISTS", "EXISTS", "portal_project_snapshots.project_id"} {
+		if !strings.Contains(sql, fragment) {
+			t.Fatalf("account-bound visibility SQL missing %q: %s", fragment, sql)
+		}
+	}
+	if len(statement.Vars) < 9 {
+		t.Fatalf("account-bound visibility variables=%#v", statement.Vars)
+	}
+}
+
+func TestVisibleSnapshotQueryWithoutAccountPreservesCustomerScope(t *testing.T) {
+	db, err := gorm.Open(mysql.New(mysql.Config{DSN: "user:pass@tcp(127.0.0.1:1)/portal?parseTime=true", SkipInitializeWithVersion: true}), &gorm.Config{DryRun: true, DisableAutomaticPing: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	statement := visibleSnapshotQuery(db, Scope{TenantID: "tenant-a", CustomerID: 7}, "P-1").Take(&Snapshot{}).Statement
+	if strings.Contains(statement.SQL.String(), "portal_project_account_bindings") {
+		t.Fatalf("empty account unexpectedly enabled account filter: %s", statement.SQL.String())
+	}
+}
+
 func TestSuccessfulSyncQueryAlwaysScopesTenantAndCustomer(t *testing.T) {
 	db, err := gorm.Open(mysql.New(mysql.Config{DSN: "user:pass@tcp(127.0.0.1:1)/portal?parseTime=true", SkipInitializeWithVersion: true}), &gorm.Config{DryRun: true, DisableAutomaticPing: true})
 	if err != nil {

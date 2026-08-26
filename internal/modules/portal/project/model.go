@@ -6,6 +6,29 @@ import (
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/database"
 )
 
+// BindingSource 标识项目账号绑定的来源。同步绑定可由上游项目系统重建，
+// 手工绑定由门户运营人员显式维护，二者在撤销时互不覆盖。
+type BindingSource string
+
+const (
+	BindingSourceSync   BindingSource = "SYNC"
+	BindingSourceManual BindingSource = "MANUAL"
+)
+
+// AccountBinding 将一个 Portal 账号绑定到客户范围内的具体项目。
+// AccountID 使用已验证的 OIDC subject，不使用姓名、手机号或人员展示字段。
+type AccountBinding struct {
+	database.Model
+	CustomerID    uint64        `gorm:"not null;uniqueIndex:uq_portal_project_account_binding,priority:2;index"`
+	ProjectID     string        `gorm:"size:64;not null;uniqueIndex:uq_portal_project_account_binding,priority:3"`
+	AccountID     string        `gorm:"size:128;not null;uniqueIndex:uq_portal_project_account_binding,priority:4"`
+	Source        BindingSource `gorm:"size:16;not null;uniqueIndex:uq_portal_project_account_binding,priority:5"`
+	Status        string        `gorm:"size:16;not null;index"`
+	SourceVersion string        `gorm:"size:64;not null;default:''"`
+}
+
+func (AccountBinding) TableName() string { return "portal_project_account_bindings" }
+
 type Snapshot struct {
 	database.Model
 	ProjectID            string     `gorm:"size:64;not null;uniqueIndex:uq_portal_project,priority:2"`

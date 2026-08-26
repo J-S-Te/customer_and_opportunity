@@ -150,7 +150,7 @@ func LoadConfig() (Config, error) {
 }
 
 func portalOIDCIdentityProviderHint() string {
-	return valueOrDefault("PORTAL_OIDC_IDP_HINT", "basic-platform")
+	return valueOrDefault("PORTAL_OIDC_IDP_HINT", "basic-platform-customer")
 }
 
 func (c Config) validate() error {

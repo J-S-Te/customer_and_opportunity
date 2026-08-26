@@ -21,7 +21,7 @@ func (r *GORMRepository) session(ctx context.Context) *gorm.DB {
 
 func (r *GORMRepository) List(ctx context.Context, scope Scope, query ListQuery) (pagination.Page[Snapshot], error) {
 	page := pagination.Page[Snapshot]{Items: []Snapshot{}, Page: query.Page, PageSize: query.PageSize}
-	db := r.session(ctx).Where("tenant_id = ? AND customer_id = ? AND deleted_at IS NULL", scope.TenantID, scope.CustomerID)
+	db := visibleSnapshotListQuery(r.session(ctx), scope)
 	if query.Status != "" {
 		db = db.Where("status = ?", query.Status)
 	}
@@ -84,7 +84,31 @@ func (r *GORMRepository) AssertVisible(ctx context.Context, scope Scope, project
 }
 
 func visibleSnapshotQuery(db *gorm.DB, scope Scope, projectID string) *gorm.DB {
-	return db.Where("tenant_id = ? AND customer_id = ? AND project_id = ?", scope.TenantID, scope.CustomerID, projectID)
+	return visibleSnapshotListQuery(db, scope).Where("project_id = ?", projectID)
+}
+
+// visibleSnapshotListQuery 保持客户边界，并在账号已有绑定时增加账号-项目边界。
+// NOT EXISTS 是有意保留的存量回退：没有任何绑定的账号继续按客户查看，避免上线迁移
+// 时把存量用户误锁在空列表；一旦创建首条绑定，后续查询立即进入账号级隔离。
+func visibleSnapshotListQuery(db *gorm.DB, scope Scope) *gorm.DB {
+	db = db.Where("tenant_id = ? AND customer_id = ? AND deleted_at IS NULL", scope.TenantID, scope.CustomerID)
+	if scope.AllowAll || scope.AccountID == "" {
+		return db
+	}
+	bindings := "portal_project_account_bindings"
+	return db.Where(`(
+		NOT EXISTS (
+			SELECT 1 FROM `+bindings+` b0
+			WHERE b0.tenant_id = ? AND b0.customer_id = ? AND b0.account_id = ?
+			  AND b0.status = 'ACTIVE' AND b0.deleted_at IS NULL
+		)
+		OR EXISTS (
+			SELECT 1 FROM `+bindings+` b1
+			WHERE b1.tenant_id = ? AND b1.customer_id = ? AND b1.account_id = ?
+			  AND b1.project_id = portal_project_snapshots.project_id
+			  AND b1.status = 'ACTIVE' AND b1.deleted_at IS NULL
+		)
+	)`, scope.TenantID, scope.CustomerID, scope.AccountID, scope.TenantID, scope.CustomerID, scope.AccountID)
 }
 func (r *GORMRepository) FindStatusForEvaluation(ctx context.Context, scope Scope, projectID string) (string, error) {
 	var value Snapshot
@@ -97,12 +121,19 @@ func (r *GORMRepository) FindStatusForEvaluation(ctx context.Context, scope Scop
 }
 
 func evaluationStatusQuery(db *gorm.DB, scope Scope, projectID string) *gorm.DB {
-	return db.Clauses(clause.Locking{Strength: "SHARE"}).
-		Select("id", "status").
-		Where("tenant_id = ? AND customer_id = ? AND project_id = ? AND deleted_at IS NULL", scope.TenantID, scope.CustomerID, projectID)
+	return visibleSnapshotQuery(db, scope, projectID).
+		Clauses(clause.Locking{Strength: "SHARE"}).Select("id", "status")
 }
 func (r *GORMRepository) ListActivities(ctx context.Context, scope Scope, projectID string, pageNo, pageSize int) (pagination.Page[Activity], error) {
 	page := pagination.Page[Activity]{Items: []Activity{}, Page: pageNo, PageSize: pageSize}
+	// 先以同一套项目可见性条件确认项目归属，再读取动态，避免通过 URL
+	// 直接枚举同单位但未授权项目的活动记录。
+	if err := visibleSnapshotQuery(r.session(ctx), scope, projectID).Select("id").Take(&Snapshot{}).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return page, ErrNotFound
+		}
+		return page, err
+	}
 	db := r.session(ctx).Where("tenant_id = ? AND customer_id = ? AND project_id = ?", scope.TenantID, scope.CustomerID, projectID)
 	if err := db.Model(&Activity{}).Count(&page.Total).Error; err != nil {
 		return page, err
@@ -173,6 +204,39 @@ func (r *GORMRepository) UpsertBundle(ctx context.Context, bundle *Bundle) (bool
 		err = database.WithTransaction(ctx, r.db, operation)
 	}
 	return changed, err
+}
+
+// SyncAccountBindings 在项目快照行锁保护下原子替换同步来源绑定；手工来源独立保留。
+// 事务失败时不会留下半套账号权限，重放同一 sourceVersion 也不会生成重复行。
+func (r *GORMRepository) SyncAccountBindings(ctx context.Context, tenantID string, customerID uint64, projectID, sourceVersion string, accountIDs []string, updatedAt time.Time) error {
+	operation := func(txCtx context.Context) error {
+		tx := database.FromContext(txCtx, r.db)
+		var snapshot Snapshot
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("tenant_id = ? AND customer_id = ? AND project_id = ? AND deleted_at IS NULL", tenantID, customerID, projectID).Take(&snapshot).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrNotFound
+			}
+			return err
+		}
+		var current AccountBinding
+		if err := tx.Where("tenant_id = ? AND customer_id = ? AND project_id = ? AND source = ? AND deleted_at IS NULL", tenantID, customerID, projectID, BindingSourceSync).Order("id DESC").First(&current).Error; err == nil && current.SourceVersion == sourceVersion {
+			return nil
+		}
+		if err := tx.Unscoped().Where("tenant_id = ? AND customer_id = ? AND project_id = ? AND source = ?", tenantID, customerID, projectID, BindingSourceSync).Delete(&AccountBinding{}).Error; err != nil {
+			return err
+		}
+		for _, accountID := range accountIDs {
+			value := &AccountBinding{Model: database.Model{TenantID: tenantID, CreatedBy: "project-sync", UpdatedBy: "project-sync", CreatedAt: updatedAt, UpdatedAt: updatedAt, Version: 1}, CustomerID: customerID, ProjectID: projectID, AccountID: accountID, Source: BindingSourceSync, Status: "ACTIVE", SourceVersion: sourceVersion}
+			if err := tx.Create(value).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if database.FromContext(ctx, nil) != nil {
+		return operation(ctx)
+	}
+	return database.WithTransaction(ctx, r.db, operation)
 }
 
 func isNewerSource(candidate, current time.Time) bool { return candidate.After(current) }

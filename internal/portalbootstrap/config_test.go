@@ -37,7 +37,7 @@ func TestPortalConfigRejectsUntrimmedIdentityProviderHint(t *testing.T) {
 
 func TestPortalOIDCIdentityProviderHintDefaultsAndCanBeOverridden(t *testing.T) {
 	t.Setenv("PORTAL_OIDC_IDP_HINT", "")
-	if got := portalOIDCIdentityProviderHint(); got != "basic-platform" {
+	if got := portalOIDCIdentityProviderHint(); got != "basic-platform-customer" {
 		t.Fatalf("default identity provider hint = %q", got)
 	}
 	t.Setenv("PORTAL_OIDC_IDP_HINT", "corporate-broker")

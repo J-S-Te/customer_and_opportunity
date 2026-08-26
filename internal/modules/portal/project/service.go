@@ -15,6 +15,11 @@ var ErrNotFound = apperror.New(http.StatusNotFound, "PORTAL_PROJECT_NOT_FOUND", 
 type Scope struct {
 	TenantID   string
 	CustomerID uint64
+	// AccountID 为空时保留历史的客户级可见性；非空时若该账号已有绑定则只返回绑定项目。
+	// 该回退策略用于渐进迁移存量账号，绑定写入后立即收紧范围。
+	AccountID string
+	// AllowAll 仅供受控的单位/门户管理员上下文使用，仍不会越过 TenantID/CustomerID。
+	AllowAll bool
 }
 type ListQuery struct {
 	Status         string
@@ -59,6 +64,21 @@ type Repository interface {
 
 type Source interface {
 	ChangedProjects(context.Context, string, uint64, string) ([]Bundle, error)
+}
+
+// AccountBindingRepository 是项目账号授权的可选持久化端口，独立于快照读取接口，
+// 使旧的项目仓储替身仍可用于领域测试。
+type AccountBindingRepository interface {
+	SyncAccountBindings(context.Context, string, uint64, string, string, []string, time.Time) error
+}
+
+type SyncAccountBindingsCommand struct {
+	TenantID      string
+	CustomerID    uint64
+	ProjectID     string
+	SourceVersion string
+	AccountIDs    []string
+	UpdatedAt     time.Time
 }
 
 type Service struct {
@@ -161,4 +181,31 @@ func (s *Service) Sync(ctx context.Context, tenantID string, customerID uint64, 
 		}
 	}
 	return updated, nil
+}
+
+// SyncAccountBindings 用上游项目系统提供的完整账号集合重建 SYNC 绑定。
+// 同一项目的重复请求安全重放；MANUAL 来源不会被覆盖。空集合表示上游明确撤销
+// 全部同步授权，但在任何校验失败时不会改变现有绑定。
+func (s *Service) SyncAccountBindings(ctx context.Context, command SyncAccountBindingsCommand) error {
+	command.TenantID, command.ProjectID, command.SourceVersion = strings.TrimSpace(command.TenantID), strings.TrimSpace(command.ProjectID), strings.TrimSpace(command.SourceVersion)
+	if command.TenantID == "" || command.CustomerID == 0 || command.ProjectID == "" || command.SourceVersion == "" || command.UpdatedAt.IsZero() {
+		return apperror.New(http.StatusBadRequest, "COMMON_INVALID_ARGUMENT", "invalid project account binding sync request")
+	}
+	seen := make(map[string]struct{}, len(command.AccountIDs))
+	accounts := make([]string, 0, len(command.AccountIDs))
+	for _, value := range command.AccountIDs {
+		value = strings.TrimSpace(value)
+		if value == "" || len(value) > 128 {
+			return apperror.New(http.StatusBadRequest, "COMMON_INVALID_ARGUMENT", "invalid account id")
+		}
+		if _, ok := seen[value]; !ok {
+			seen[value] = struct{}{}
+			accounts = append(accounts, value)
+		}
+	}
+	repo, ok := s.repo.(AccountBindingRepository)
+	if !ok {
+		return apperror.New(http.StatusServiceUnavailable, "PORTAL_PROJECT_ACCESS_NOT_CONFIGURED", "project account binding store is not configured")
+	}
+	return repo.SyncAccountBindings(ctx, command.TenantID, command.CustomerID, command.ProjectID, command.SourceVersion, accounts, command.UpdatedAt.UTC())
 }
