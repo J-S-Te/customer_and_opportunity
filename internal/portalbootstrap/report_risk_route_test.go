@@ -135,7 +135,7 @@ func reportRiskRouteAccountService(t *testing.T, permissions []string) *account.
 	t.Helper()
 	now := time.Now().UTC()
 	repository := &reportNotificationRouteAccountRepository{
-		session: &account.Session{Model: database.Model{TenantID: "tenant-a"}, SessionIDHash: reportNotificationRouteSessionHash("opaque-session"), PlatformUserID: "subject-a", CustomerID: 7, Permissions: permissions, AuthorizationCheckedAt: now, ExpiresAt: now.Add(time.Hour), AbsoluteExpiry: now.Add(time.Hour)},
+		session: &account.Session{Model: database.Model{TenantID: "tenant-a"}, SessionIDHash: reportNotificationRouteSessionHash("opaque-session"), PlatformUserID: "subject-a", CustomerID: 7, Permissions: permissions, AuthorizationCheckedAt: now, ExpiresAt: now.Add(time.Hour), AbsoluteExpiry: now.Add(time.Hour), LastSeenAt: now},
 		link:    &account.IdentityLink{Model: database.Model{TenantID: "tenant-a"}, PlatformUserID: "subject-a", CustomerID: 7, Status: account.IdentityActive},
 	}
 	return account.NewService(repository, nil, nil, nil, reportNotificationRouteClock{now: now}, nil, "", time.Hour)

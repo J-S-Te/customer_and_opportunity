@@ -73,8 +73,9 @@ func CRMManifest() Manifest {
 	return Manifest{Version: "crm-2026.08.14-v9", Permissions: permissions, Roles: roles, Policy: Policy{MaxEffectiveRoles: 10}}
 }
 
-// Portal 与 CRM 虽由同一仓库交付，授权目录仍相互独立。Portal 会话只接受一个外部客户角色，
-// 并始终叠加本地 CUSTOMER 数据范围，角色本身不能扩大客户边界。
+// Portal 与 CRM 虽由同一仓库交付，授权目录仍相互独立。portal_customer 是外部客户
+// 身份，必须叠加本地 CUSTOMER 数据范围；portal_super_admin 是内部运营身份，不能被
+// 当作任意客户使用。二者均为单角色会话，具体数据范围由 Portal 服务端再次收口。
 func PortalManifest() Manifest {
 	permissions := []Permission{
 		permission("project.read", "查看本人项目", "project", "read", "LOW"),
@@ -97,10 +98,13 @@ func PortalManifest() Manifest {
 		permission("account.security.manage", "管理当前账号安全", "account_security", "manage", "HIGH"),
 	}
 	return Manifest{
-		Version:     "portal-2026.08.01-v2",
+		Version:     "portal-2026.08.25-v3",
 		Permissions: permissions,
-		Roles:       []Role{role("portal_customer", "门户客户", "访问当前客户映射范围内的 Portal 自助能力", permissionCodes(permissions)...)},
-		Policy:      Policy{MaxEffectiveRoles: 1},
+		Roles: []Role{
+			role("portal_customer", "门户客户", "访问当前客户映射范围内的 Portal 自助能力", permissionCodes(permissions)...),
+			role("portal_super_admin", "门户超级管理员", "管理客户门户运营；跨客户业务数据必须经过受控客户上下文", permissionCodes(permissions)...),
+		},
+		Policy: Policy{MaxEffectiveRoles: 1},
 	}
 }
 

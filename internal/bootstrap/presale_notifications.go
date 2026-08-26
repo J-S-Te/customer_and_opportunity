@@ -24,6 +24,6 @@ func (w presaleNotificationWriter) Write(ctx context.Context, n presale.Workflow
 }
 
 func presaleNotificationSourceEventID(n presale.WorkflowNotification) string {
-	raw := fmt.Sprintf("%s:%s:%s:%s:%d", n.TenantID, n.Type, n.RequestNo, n.RecipientID, n.AssignmentID)
+	raw := fmt.Sprintf("%s:%s:%s:%s:%d:%d", n.TenantID, n.Type, n.RequestNo, n.RecipientID, n.AssignmentID, n.ApprovalNode)
 	return fmt.Sprintf("CRM_%X", sha256.Sum256([]byte(raw)))
 }

@@ -13,6 +13,22 @@ import (
 	"gorm.io/gorm"
 )
 
+func TestCanUpdatePendingLinkAccountNoOnlyBeforeActivation(t *testing.T) {
+	tests := []struct {
+		status IdentityStatus
+		want   bool
+	}{
+		{status: IdentityPending, want: true},
+		{status: IdentityActive, want: false},
+		{status: IdentityDisabled, want: false},
+	}
+	for _, test := range tests {
+		if got := canUpdatePendingLinkAccountNo(test.status); got != test.want {
+			t.Fatalf("canUpdatePendingLinkAccountNo(%q) = %t, want %t", test.status, got, test.want)
+		}
+	}
+}
+
 func TestActiveSessionRecheckUsesEveryValidityPredicate(t *testing.T) {
 	db, err := gorm.Open(mysql.New(mysql.Config{
 		DSN:                       "portal:test@tcp(127.0.0.1:9910)/portal?parseTime=true&loc=UTC",
@@ -33,6 +49,7 @@ func TestActiveSessionRecheckUsesEveryValidityPredicate(t *testing.T) {
 		"tenant_id = ?",
 		"session_id_hash = ?",
 		"revoked_at IS NULL",
+		"last_seen_at > ?",
 		"expires_at > ?",
 		"absolute_expiry > ?",
 		"deleted_at IS NULL",
@@ -42,10 +59,14 @@ func TestActiveSessionRecheckUsesEveryValidityPredicate(t *testing.T) {
 			t.Fatalf("active session recheck SQL missing %q: %s", expected, sql)
 		}
 	}
-	if len(statement.Vars) < 4 || statement.Vars[0] != "tenant-a" || statement.Vars[1] != "session-hash" {
+	if len(statement.Vars) < 5 || statement.Vars[0] != "tenant-a" || statement.Vars[1] != "session-hash" {
 		t.Fatalf("active session recheck variables = %#v", statement.Vars)
 	}
-	for _, value := range statement.Vars[2:4] {
+	idleCutoff, ok := statement.Vars[2].(time.Time)
+	if !ok || !idleCutoff.Equal(now.Add(-portalSessionIdleTimeout)) {
+		t.Fatalf("active session idle cutoff = %#v, want %s", statement.Vars[2], now.Add(-portalSessionIdleTimeout))
+	}
+	for _, value := range statement.Vars[3:5] {
 		got, ok := value.(time.Time)
 		if !ok || !got.Equal(now) {
 			t.Fatalf("active session recheck time variable = %#v, want %s", value, now)

@@ -37,7 +37,9 @@ func TestDeliverPostsIngestionEvent(t *testing.T) {
 			if err := json.Unmarshal(body, &received); err != nil {
 				t.Fatalf("bad payload: %v", err)
 			}
+			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"data":{"status":"ACCEPTED"}}`))
 		default:
 			t.Fatalf("unexpected path %s", r.URL.Path)
 		}
@@ -68,6 +70,26 @@ func TestDeliverPostsIngestionEvent(t *testing.T) {
 		received.TargetURL != "/customer-opportunity/opportunities?opportunity_id=42" ||
 		received.ReferenceType != "OPPORTUNITY" || received.ReferenceID != "42" {
 		t.Fatalf("unexpected payload: %+v", received)
+	}
+}
+
+func TestDeliverRejectsSuccessfulHTTPWithoutAcceptedReceipt(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/oauth2/token" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"access_token":"tok","token_type":"bearer"}`))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"data":{"status":"DEAD"}}`))
+	}))
+	defer server.Close()
+
+	app := &App{config: Config{PlatformBaseURL: server.URL, PlatformTokenURL: server.URL + "/oauth2/token", ClientID: "client", ClientSecret: "secret"}, client: server.Client()}
+	item := notification.Notification{Model: database.Model{CreatedAt: time.Now().UTC()}, SourceEventID: "evt-1", Type: notification.TypePresaleAssigneeAdded, Title: "title", Body: "body", RecipientID: "u-1", OpportunityID: 1}
+	if err := app.deliver(context.Background(), item); err == nil || !strings.Contains(err.Error(), "not accepted") {
+		t.Fatalf("deliver error=%v, want non-accepted receipt error", err)
 	}
 }
 

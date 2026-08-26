@@ -534,6 +534,24 @@ func (s *Service) applyInternalApprovalAction(ctx context.Context, actor Actor, 
 	if err := s.repo.UpdateRequestVersioned(ctx, request, request.Version, requestFields); err != nil {
 		return err
 	}
+	if to == StatusApprovedPendingAssignment {
+		if err := s.notifyWorkflow(ctx, WorkflowNotification{
+			TenantID: actor.TenantID, RecipientID: request.ApplicantID,
+			Type: "PRESALE_APPROVAL_APPROVED", Title: "售前审批已通过",
+			Body: "您的售前申请已完成审批。", RequestID: request.ID, RequestNo: request.RequestNo,
+		}); err != nil {
+			return err
+		}
+	}
+	if to == StatusRejected {
+		if err := s.notifyWorkflow(ctx, WorkflowNotification{
+			TenantID: actor.TenantID, RecipientID: request.ApplicantID,
+			Type: "PRESALE_APPROVAL_REJECTED", Title: "售前审批已驳回",
+			Body: "您的售前申请已被驳回：" + input.Comment, RequestID: request.ID, RequestNo: request.RequestNo,
+		}); err != nil {
+			return err
+		}
+	}
 	if err := s.repo.CreateMutationReplay(ctx, newMutationReplay(actor, request.ID, key, "APPROVAL_ACTION", replayAction, hash, input.Version, now)); err != nil {
 		return err
 	}
@@ -954,7 +972,7 @@ func (s *Service) notifyApprovalNode(ctx context.Context, tenant string, request
 		if name := strings.TrimSpace(recipient.DisplayName); name != "" {
 			body = name + "，" + body
 		}
-		if err := s.notifyWorkflow(ctx, WorkflowNotification{TenantID: tenant, RecipientID: recipient.ID, Type: "PRESALE_APPROVAL_PENDING", Title: "售前审批待处理", Body: body, RequestID: request.ID, RequestNo: request.RequestNo}); err != nil {
+		if err := s.notifyWorkflow(ctx, WorkflowNotification{TenantID: tenant, RecipientID: recipient.ID, Type: "PRESALE_APPROVAL_PENDING", Title: "售前审批待处理", Body: body, RequestID: request.ID, RequestNo: request.RequestNo, ApprovalNode: node}); err != nil {
 			return err
 		}
 	}
