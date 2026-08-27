@@ -21,6 +21,7 @@ import (
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/apperror"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/audit"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/auth"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/clamav"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/requestaudit"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/response"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/security"
@@ -168,8 +169,26 @@ func New(config Config) (*App, error) {
 	}
 	ownerdirectory.RegisterRoutes(api, ownerdirectory.NewHandler(ownerCatalog))
 	auditWriter := audit.NewGORMWriter(db).UsePlatformOutbox(auditStore, config.PlatformEnvironmentCode)
+	// ClamAV 客户端由附件扫描与客户导入扫描共享；未启用时两个边界保持
+	// 原有失败关闭行为。
+	var clamAVClient *clamav.Client
+	if config.ClamAVEnabled {
+		clamAVClient, err = clamav.NewClient(config.ClamAVNetwork, config.ClamAVAddress)
+		if err != nil {
+			return nil, err
+		}
+	}
 	customerRepo := customer.NewGORMRepository(db)
 	customerService := customer.NewService(db, customerRepo, auditWriter, codec)
+	if clamAVClient != nil {
+		// 客户导入扫描器：引擎可用时启用；clamd 故障返回依赖不可用，
+		// 导入不会因为扫描未完成而被放行。
+		importScanner, scannerErr := customer.NewClamAVImportScanner(clamAVClient, 60*time.Second)
+		if scannerErr != nil {
+			return nil, scannerErr
+		}
+		customerService.UseImportScanner(importScanner)
+	}
 	if config.OwnerDirectoryEnabled {
 		customerService.UseOwnerDirectory(ownerCatalog)
 	}
@@ -316,13 +335,36 @@ func New(config Config) (*App, error) {
 	}
 	var attachmentStore opportunity.AttachmentObjectStore = opportunity.UnavailableAttachmentObjectStore{}
 	var attachmentScanner opportunity.AttachmentScanner = opportunity.UnavailableAttachmentScanner{}
-	if config.AttachmentLocalEnabled {
+	switch {
+	case config.AttachmentS3Enabled:
+		// S3 兼容对象存储优先于本地目录：ETag 版本绑定与流式摘要校验满足
+		// 生产信任边界，扫描器在外部引擎之上保留进程内静态校验。
+		s3Store, storeErr := opportunity.NewS3AttachmentObjectStore(opportunity.S3AttachmentOptions{
+			Endpoint: config.AttachmentS3Endpoint, Region: config.AttachmentS3Region, Bucket: config.AttachmentS3Bucket,
+			AccessKeyID: config.AttachmentS3AccessKeyID, SecretAccessKey: config.AttachmentS3SecretAccessKey,
+			PathStyle: config.AttachmentS3PathStyle, Prefix: config.AttachmentS3Prefix,
+		})
+		if storeErr != nil {
+			return nil, storeErr
+		}
+		attachmentStore = s3Store
+		attachmentScanner = opportunity.NewCodeAttachmentScanner(s3Store)
+	case config.AttachmentLocalEnabled:
 		localStore, storeErr := opportunity.NewLocalAttachmentObjectStore(config.AttachmentLocalRoot)
 		if storeErr != nil {
 			return nil, storeErr
 		}
 		attachmentStore = localStore
 		attachmentScanner = opportunity.NewCodeAttachmentScanner(localStore)
+	}
+	if clamAVClient != nil && attachmentStore.Available() {
+		// ClamAV 引擎扫描叠加在静态内容校验之上；两道检查都通过才是 CLEAN，
+		// 引擎不可用时扫描失败，附件停在 SCANNING/SCAN_FAILED 而不是被放行。
+		clamScanner, scannerErr := opportunity.NewClamAVAttachmentScanner(attachmentStore, clamAVClient, 90*time.Second)
+		if scannerErr != nil {
+			return nil, scannerErr
+		}
+		attachmentScanner = clamScanner
 	}
 	attachmentService := opportunity.NewAttachmentService(opportunity.NewGORMAttachmentRepository(db), opportunityRepo, auditWriter, attachmentStore, attachmentScanner, 0)
 	opportunityHandler := opportunity.NewHandler(opportunityService).UseStageAlerts(opportunity.NewStageAlertService(db)).UseAttachments(attachmentService)

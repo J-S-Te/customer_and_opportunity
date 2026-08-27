@@ -119,6 +119,17 @@ type Config struct {
 	QBLaunchTTL                      time.Duration
 	AttachmentLocalEnabled           bool
 	AttachmentLocalRoot              string
+	AttachmentS3Enabled              bool
+	AttachmentS3Endpoint             string
+	AttachmentS3Region               string
+	AttachmentS3Bucket               string
+	AttachmentS3AccessKeyID          string
+	AttachmentS3SecretAccessKey      string
+	AttachmentS3PathStyle            bool
+	AttachmentS3Prefix               string
+	ClamAVEnabled                    bool
+	ClamAVNetwork                    string
+	ClamAVAddress                    string
 	PlatformBaseURL                  string
 	PlatformApplicationCode          string
 	PlatformEnvironmentCode          string
@@ -265,6 +276,36 @@ func LoadConfig() (Config, error) {
 	if err != nil {
 		return Config{}, fmt.Errorf("ATTACHMENT_LOCAL_ENABLED: %w", err)
 	}
+	attachmentS3Enabled, err := strconv.ParseBool(valueOrDefault("ATTACHMENT_S3_ENABLED", "false"))
+	if err != nil {
+		return Config{}, fmt.Errorf("ATTACHMENT_S3_ENABLED: %w", err)
+	}
+	attachmentS3PathStyle, err := strconv.ParseBool(valueOrDefault("ATTACHMENT_S3_PATH_STYLE", "true"))
+	if err != nil {
+		return Config{}, fmt.Errorf("ATTACHMENT_S3_PATH_STYLE: %w", err)
+	}
+	if attachmentS3Enabled {
+		// S3 适配器启用时要求完整的连接参数；缺少任何一项都在启动期失败，
+		// 避免运行中在本地降级与对象存储之间静默切换信任边界。
+		if strings.TrimSpace(os.Getenv("ATTACHMENT_S3_ENDPOINT")) == "" || strings.TrimSpace(os.Getenv("ATTACHMENT_S3_REGION")) == "" ||
+			strings.TrimSpace(os.Getenv("ATTACHMENT_S3_BUCKET")) == "" || strings.TrimSpace(os.Getenv("ATTACHMENT_S3_ACCESS_KEY_ID")) == "" ||
+			strings.TrimSpace(os.Getenv("ATTACHMENT_S3_SECRET_ACCESS_KEY")) == "" {
+			return Config{}, fmt.Errorf("ATTACHMENT_S3_ENABLED requires ATTACHMENT_S3_ENDPOINT, ATTACHMENT_S3_REGION, ATTACHMENT_S3_BUCKET, ATTACHMENT_S3_ACCESS_KEY_ID and ATTACHMENT_S3_SECRET_ACCESS_KEY")
+		}
+	}
+	clamAVEnabled, err := strconv.ParseBool(valueOrDefault("CLAMAV_ENABLED", "false"))
+	if err != nil {
+		return Config{}, fmt.Errorf("CLAMAV_ENABLED: %w", err)
+	}
+	clamAVNetwork := valueOrDefault("CLAMAV_NETWORK", "tcp")
+	if clamAVEnabled {
+		if clamAVNetwork != "tcp" && clamAVNetwork != "unix" {
+			return Config{}, fmt.Errorf("CLAMAV_NETWORK must be tcp or unix")
+		}
+		if strings.TrimSpace(os.Getenv("CLAMAV_ADDRESS")) == "" {
+			return Config{}, fmt.Errorf("CLAMAV_ENABLED requires CLAMAV_ADDRESS")
+		}
+	}
 	config := Config{
 		Address: valueOrDefault("HTTP_ADDRESS", ":8090"), MySQLDSN: os.Getenv("MYSQL_DSN"), PathPrefix: valueOrDefault("APP_PATH_PREFIX", "/customer-opportunity"), PublicOrigin: os.Getenv("APP_PUBLIC_ORIGIN"), EncryptionKey: encryptionKey, HMACKey: hmacKey,
 		OIDCIssuer: os.Getenv("OIDC_ISSUER"), OIDCBackchannelBaseURL: os.Getenv("OIDC_BACKCHANNEL_BASE_URL"),
@@ -348,6 +389,17 @@ func LoadConfig() (Config, error) {
 		QBBidPublicURL: os.Getenv("QB_BID_PUBLIC_URL"), QBLaunchSigningKey: qbLaunchSigningKey, QBLaunchTTL: qbLaunchTTL,
 		AttachmentLocalEnabled:    attachmentLocalEnabled,
 		AttachmentLocalRoot:       valueOrDefault("ATTACHMENT_LOCAL_ROOT", "/app/data/attachments"),
+		AttachmentS3Enabled:       attachmentS3Enabled,
+		AttachmentS3Endpoint:      strings.TrimSpace(os.Getenv("ATTACHMENT_S3_ENDPOINT")),
+		AttachmentS3Region:        strings.TrimSpace(os.Getenv("ATTACHMENT_S3_REGION")),
+		AttachmentS3Bucket:        strings.TrimSpace(os.Getenv("ATTACHMENT_S3_BUCKET")),
+		AttachmentS3AccessKeyID:   strings.TrimSpace(os.Getenv("ATTACHMENT_S3_ACCESS_KEY_ID")),
+		AttachmentS3SecretAccessKey: strings.TrimSpace(os.Getenv("ATTACHMENT_S3_SECRET_ACCESS_KEY")),
+		AttachmentS3PathStyle:     attachmentS3PathStyle,
+		AttachmentS3Prefix:        strings.TrimSpace(os.Getenv("ATTACHMENT_S3_PREFIX")),
+		ClamAVEnabled:             clamAVEnabled,
+		ClamAVNetwork:             clamAVNetwork,
+		ClamAVAddress:             strings.TrimSpace(os.Getenv("CLAMAV_ADDRESS")),
 		PlatformBaseURL:           os.Getenv("PLATFORM_BASE_URL"),
 		PlatformApplicationCode:   valueOrDefault("PLATFORM_APPLICATION_CODE", "customer_and_opportunity"),
 		PlatformEnvironmentCode:   valueOrDefault("PLATFORM_ENVIRONMENT_CODE", "dev"),

@@ -183,9 +183,11 @@ func (s *LocalAttachmentObjectStore) OpenVerified(_ context.Context, key, versio
 	return os.Open(path)
 }
 
-type CodeAttachmentScanner struct{ store *LocalAttachmentObjectStore }
+// CodeAttachmentScanner 对任意对象存储中的内容执行进程内静态校验；
+// 它既可独立作为本地部署的扫描器，也可作为外部引擎扫描器之外的第一道防线。
+type CodeAttachmentScanner struct{ store AttachmentObjectStore }
 
-func NewCodeAttachmentScanner(store *LocalAttachmentObjectStore) *CodeAttachmentScanner {
+func NewCodeAttachmentScanner(store AttachmentObjectStore) *CodeAttachmentScanner {
 	return &CodeAttachmentScanner{store: store}
 }
 func (s *CodeAttachmentScanner) Available() bool {

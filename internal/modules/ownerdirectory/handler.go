@@ -13,6 +13,10 @@ type Handler struct{ catalog Catalog }
 func NewHandler(catalog Catalog) *Handler { return &Handler{catalog: catalog} }
 
 func (handler *Handler) List(c *gin.Context) {
+	if handler == nil || handler.catalog == nil {
+		response.Error(c, ErrUnavailable)
+		return
+	}
 	page, err := optionalPositiveInt(c.Query("page"))
 	if err != nil {
 		response.Error(c, err)
