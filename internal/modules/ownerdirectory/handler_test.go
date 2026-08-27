@@ -19,6 +19,22 @@ type catalogStub struct {
 	calls int
 }
 
+func TestOwnerDirectoryHandlerFailsClosedWhenCatalogIsNil(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	response := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(response)
+	context.Request = httptest.NewRequest(http.MethodGet, "/owner-directory", nil)
+
+	NewHandler(nil).List(context)
+
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status=%d want=%d body=%s", response.Code, http.StatusServiceUnavailable, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), "CRM_OWNER_DIRECTORY_UNAVAILABLE") {
+		t.Fatalf("body=%s", response.Body.String())
+	}
+}
+
 func (stub *catalogStub) List(_ context.Context, query Query) (Page, error) {
 	stub.calls++
 	stub.query = query
