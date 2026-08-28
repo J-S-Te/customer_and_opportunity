@@ -54,6 +54,8 @@ var baseFiles = map[Schema][]string{
 		"000100_track_platform_notification_delivery_failures.up.sql", "000101_retry_numeric_platform_notification_events.up.sql",
 		"000103_crm_oidc_backchannel_logout.up.sql",
 		"000105_customer_credit.up.sql",
+		"000106_complete_customer_credit_workflow.up.sql",
+		"000107_credit_approval_history_and_queries.up.sql",
 	},
 	Portal: {
 		"000008_create_portal_core.up.sql", "000011_portal_session_claims.up.sql", "000016_portal_project_sync.up.sql",

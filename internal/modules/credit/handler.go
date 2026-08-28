@@ -64,24 +64,30 @@ func (h *Handler) History(c *gin.Context) {
 	if !ok {
 		return
 	}
-	items, err := h.service.History(c.Request.Context(), id)
+	items, err := h.service.History(c.Request.Context(), id, queryInt(c, "page", 1), queryInt(c, "page_size", 20))
 	if err != nil {
 		response.Error(c, err)
 		return
 	}
-	response.OK(c, gin.H{"items": items})
+	response.OK(c, items)
 }
 func (h *Handler) PaymentRecords(c *gin.Context) {
 	id, ok := customerID(c)
 	if !ok {
 		return
 	}
-	items, err := h.service.Payments(c.Request.Context(), id)
+	items, err := h.service.Payments(c.Request.Context(), id, queryInt(c, "page", 1), queryInt(c, "page_size", 20))
 	if err != nil {
 		response.Error(c, err)
 		return
 	}
-	response.OK(c, gin.H{"items": items})
+	response.OK(c, items)
+}
+func queryInt(c *gin.Context, key string, fallback int) int {
+	if value, err := strconv.Atoi(c.DefaultQuery(key, strconv.Itoa(fallback))); err == nil && value > 0 {
+		return value
+	}
+	return fallback
 }
 func (h *Handler) Apply(c *gin.Context) {
 	id, ok := customerID(c)
@@ -93,12 +99,42 @@ func (h *Handler) Apply(c *gin.Context) {
 		response.Error(c, apperror.New(400, "CRM_CREDIT_APPLICATION_INVALID", "invalid credit application"))
 		return
 	}
+	in.IdempotencyKey = c.GetHeader("Idempotency-Key")
 	out, err := h.service.Apply(c.Request.Context(), id, in)
 	if err != nil {
 		response.Error(c, err)
 		return
 	}
 	response.Created(c, out)
+}
+func (h *Handler) RuleSettings(c *gin.Context) {
+	value, err := h.service.RuleSettings(c.Request.Context())
+	if err != nil {
+		response.Error(c, err)
+		return
+	}
+	response.OK(c, value)
+}
+func (h *Handler) UpdateRuleSettings(c *gin.Context) {
+	var in UpdateRuleSettingsRequest
+	if c.ShouldBindJSON(&in) != nil {
+		response.Error(c, apperror.New(400, "CRM_CREDIT_RULE_INVALID", "invalid credit rule settings"))
+		return
+	}
+	value, err := h.service.UpdateRuleSettings(c.Request.Context(), in)
+	if err != nil {
+		response.Error(c, err)
+		return
+	}
+	response.OK(c, value)
+}
+func (h *Handler) Statistics(c *gin.Context) {
+	value, err := h.service.Statistics(c.Request.Context())
+	if err != nil {
+		response.Error(c, err)
+		return
+	}
+	response.OK(c, value)
 }
 func (h *Handler) Withdraw(c *gin.Context) {
 	customer, ok := customerID(c)

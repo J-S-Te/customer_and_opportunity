@@ -197,7 +197,10 @@ func referenceFor(item notification.Notification) (string, string, error) {
 	if item.OpportunityID > 0 {
 		return "OPPORTUNITY", strconv.FormatUint(item.OpportunityID, 10), nil
 	}
-	return "", "", fmt.Errorf("notification %d has no presale request or opportunity reference", item.ID)
+	if item.CustomerID > 0 {
+		return "CUSTOMER", strconv.FormatUint(item.CustomerID, 10), nil
+	}
+	return "", "", fmt.Errorf("notification %d has no presale request, opportunity, or customer reference", item.ID)
 }
 
 func (a *App) accessToken(ctx context.Context) (string, error) {
@@ -250,7 +253,7 @@ type ingestionEventPayload struct {
 
 func priorityFor(notificationType string) string {
 	switch notificationType {
-	case notification.TypePresaleApprovalPending:
+	case notification.TypePresaleApprovalPending, notification.TypeCreditApplicationPending:
 		return "HIGH"
 	default:
 		return "NORMAL"

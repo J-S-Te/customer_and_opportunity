@@ -209,7 +209,7 @@ func New(config Config) (*App, error) {
 		customerService.UseProjectHistoryReader(projectHistoryReader)
 	}
 	customer.RegisterRoutes(api, customer.NewHandler(customerService))
-	creditHandler := credit.NewHandler(credit.NewService(db))
+	creditHandler := credit.NewHandler(credit.NewService(db).UseOwnerDirectory(ownerCatalog))
 	credit.RegisterRoutes(api, creditHandler)
 	var portalInviteHandler *portalinvite.Handler
 	if config.PortalInviteEnabled {

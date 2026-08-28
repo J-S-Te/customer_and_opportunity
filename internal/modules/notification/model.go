@@ -7,25 +7,31 @@ import (
 )
 
 const (
-	TypeOpportunityOwnerChanged  = "OPPORTUNITY_OWNER_CHANGED"
-	TypePresaleAssigneeAdded     = "PRESALE_ASSIGNEE_ADDED"
-	TypePresaleAssigneeRemoved   = "PRESALE_ASSIGNEE_REMOVED"
-	TypePresaleApprovalPending   = "PRESALE_APPROVAL_PENDING"
-	TypePresaleApprovalApproved  = "PRESALE_APPROVAL_APPROVED"
-	TypePresaleApprovalRejected  = "PRESALE_APPROVAL_REJECTED"
-	TypePresaleProgressApplicant = "PRESALE_PROGRESS_APPLICANT"
-	TypePresaleProgressAssignee  = "PRESALE_PROGRESS_ASSIGNEE"
-	StatusUnread                 = "UNREAD"
-	StatusRead                   = "READ"
-	StatusCancelled              = "CANCELLED"
-	RecipientPreviousOwner       = "PREVIOUS_OWNER"
-	RecipientNewOwner            = "NEW_OWNER"
-	RecipientAssigneeAdded       = "ASSIGNEE_ADDED"
-	RecipientAssigneeRemoved     = "ASSIGNEE_REMOVED"
-	RecipientApprovalPending     = "APPROVAL_PENDING"
-	RecipientApprovalResult      = "APPROVAL_RESULT"
-	RecipientProgressApplicant   = "PROGRESS_APPLICANT"
-	RecipientProgressAssignee    = "PROGRESS_ASSIGNEE"
+	TypeOpportunityOwnerChanged      = "OPPORTUNITY_OWNER_CHANGED"
+	TypeCreditRuleChanged            = "CREDIT_RULE_CHANGED"
+	TypeCreditRuleCapReached         = "CREDIT_RULE_CAP_REACHED"
+	TypeCreditApplicationPending     = "CREDIT_APPLICATION_PENDING"
+	TypeCreditApplicationApproved    = "CREDIT_APPLICATION_APPROVED"
+	TypeCreditApplicationRejected    = "CREDIT_APPLICATION_REJECTED"
+	TypeCreditApplicationInvalidated = "CREDIT_APPLICATION_INVALIDATED"
+	TypePresaleAssigneeAdded         = "PRESALE_ASSIGNEE_ADDED"
+	TypePresaleAssigneeRemoved       = "PRESALE_ASSIGNEE_REMOVED"
+	TypePresaleApprovalPending       = "PRESALE_APPROVAL_PENDING"
+	TypePresaleApprovalApproved      = "PRESALE_APPROVAL_APPROVED"
+	TypePresaleApprovalRejected      = "PRESALE_APPROVAL_REJECTED"
+	TypePresaleProgressApplicant     = "PRESALE_PROGRESS_APPLICANT"
+	TypePresaleProgressAssignee      = "PRESALE_PROGRESS_ASSIGNEE"
+	StatusUnread                     = "UNREAD"
+	StatusRead                       = "READ"
+	StatusCancelled                  = "CANCELLED"
+	RecipientPreviousOwner           = "PREVIOUS_OWNER"
+	RecipientNewOwner                = "NEW_OWNER"
+	RecipientAssigneeAdded           = "ASSIGNEE_ADDED"
+	RecipientAssigneeRemoved         = "ASSIGNEE_REMOVED"
+	RecipientApprovalPending         = "APPROVAL_PENDING"
+	RecipientApprovalResult          = "APPROVAL_RESULT"
+	RecipientProgressApplicant       = "PROGRESS_APPLICANT"
+	RecipientProgressAssignee        = "PROGRESS_ASSIGNEE"
 )
 
 // Notification 是 CRM 站内通知的本地投影。写入此表只代表站内消息可见，
@@ -35,6 +41,7 @@ type Notification struct {
 	SourceEventID       string     `gorm:"size:256;not null;uniqueIndex:uq_crm_notification_source,priority:2"`
 	Type                string     `gorm:"size:64;not null;index"`
 	OpportunityID       uint64     `gorm:"not null;index"`
+	CustomerID          uint64     `gorm:"not null;index"`
 	OpportunityVersion  uint64     `gorm:"not null"`
 	OpportunityNo       string     `gorm:"size:32;not null"`
 	OpportunityName     string     `gorm:"size:200;not null"`
