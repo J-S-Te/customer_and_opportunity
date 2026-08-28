@@ -24,11 +24,13 @@ type OIDCOptions struct {
 	Issuer, BackchannelBaseURL, PlatformBaseURL, ClientID, ClientSecret, RedirectURI string
 	ApplicationCode, EnvironmentCode                                                 string
 	IdentityProviderHint                                                             string
+	RoleConfigHash                                                                   string
 	Scopes                                                                           []string
 }
 
 type verifiedClaims struct {
 	Subject, IdentityID, TenantID, PersonID, DisplayName, RoleConfigHash string
+	OIDCSessionID                                                        string
 	PrimaryOrgID                                                         string
 	OrganizationIDs                                                      []string
 	DataScopes                                                           []sharedauth.DataScope
@@ -58,6 +60,7 @@ type platformClaims struct {
 	Name              string `json:"name"`
 	PreferredUsername string `json:"preferred_username"`
 	TokenUse          string `json:"token_use"`
+	SessionID         string `json:"sid"`
 }
 
 type platformOIDCClient struct {
@@ -100,7 +103,7 @@ func NewPlatformOIDCClient(ctx context.Context, options OIDCOptions) (*platformO
 		platformBaseURL:      strings.TrimRight(options.PlatformBaseURL, "/"),
 		identityProviderHint: strings.TrimSpace(options.IdentityProviderHint),
 		endSessionEndpoint:   endSessionEndpoint,
-		expectedContext:      sharedauthorization.Expectation{ClientID: options.ClientID, ApplicationCode: options.ApplicationCode, EnvironmentCode: options.EnvironmentCode},
+		expectedContext:      sharedauthorization.Expectation{ClientID: options.ClientID, ApplicationCode: options.ApplicationCode, EnvironmentCode: options.EnvironmentCode, RoleConfigHash: options.RoleConfigHash},
 		verifier:             provider.Verifier(&oidc.Config{ClientID: options.ClientID}),
 		config:               oauth2.Config{ClientID: options.ClientID, ClientSecret: options.ClientSecret, Endpoint: provider.Endpoint(), RedirectURL: options.RedirectURI, Scopes: options.Scopes},
 	}, nil
@@ -192,6 +195,7 @@ func (c *platformOIDCClient) Exchange(ctx context.Context, code, verifier, nonce
 		return verifiedClaims{}, errors.New("CRM authorization context identity does not match OIDC identity")
 	}
 	contextClaims.DisplayName = claims.DisplayName
+	contextClaims.OIDCSessionID = claims.OIDCSessionID
 	contextClaims.PersonID = firstNonEmpty(contextClaims.PersonID, claims.PersonID)
 	contextClaims.ExpiresAt = earliestExpiry(claims.ExpiresAt, effectiveToken.Expiry)
 	contextClaims.AccessToken = effectiveToken.AccessToken
@@ -303,7 +307,7 @@ func claimsFromPlatform(raw platformClaims) verifiedClaims {
 	if identityID == "" {
 		return verifiedClaims{}
 	}
-	return verifiedClaims{Subject: raw.Subject, IdentityID: identityID, TenantID: raw.TenantID, PersonID: raw.PersonID, DisplayName: displayName}
+	return verifiedClaims{Subject: raw.Subject, IdentityID: identityID, TenantID: raw.TenantID, PersonID: raw.PersonID, DisplayName: displayName, OIDCSessionID: strings.TrimSpace(raw.SessionID)}
 }
 
 func normalizeAuthorization(claims verifiedClaims, expectedTenantID, expectedRoleConfigHash, expectedEnvironmentCode string, maxRoles int) (verifiedClaims, error) {

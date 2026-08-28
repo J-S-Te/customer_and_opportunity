@@ -22,6 +22,7 @@ type Session struct {
 	SessionIDHash          string `gorm:"primaryKey;size:64"`
 	TenantID               string `gorm:"size:64;not null;index"`
 	PlatformUserID         string `gorm:"size:128;not null;index"`
+	OIDCSessionID          string `gorm:"column:oidc_sid;size:128;not null;index"`
 	PersonID               string `gorm:"size:64;not null"`
 	DisplayName            string `gorm:"size:200;not null"`
 	LoginIP                string `gorm:"size:45;not null"`
@@ -41,3 +42,14 @@ type Session struct {
 }
 
 func (Session) TableName() string { return "crm_oidc_sessions" }
+
+// BackchannelLogoutReplay 记录已经受理的注销令牌 JTI。该记录与会话撤销在同一事务提交，
+// 防止进程崩溃后把“已登记但未撤销”的请求误判为成功重放。
+type BackchannelLogoutReplay struct {
+	JTI       string    `gorm:"primaryKey;size:128"`
+	Issuer    string    `gorm:"size:255;not null"`
+	ExpiresAt time.Time `gorm:"precision:3;not null;index"`
+	CreatedAt time.Time `gorm:"precision:3;not null"`
+}
+
+func (BackchannelLogoutReplay) TableName() string { return "crm_oidc_backchannel_logout_replays" }

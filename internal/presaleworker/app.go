@@ -3,11 +3,13 @@ package presaleworker
 import (
 	"context"
 	"crypto/tls"
+	"log"
 
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/presale"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/presaleworkflow"
+	workerruntime "github.com/unified-identity-auth-platform/customer-and-opportunity/internal/temporalworker"
 	"go.temporal.io/sdk/client"
-	temporalworker "go.temporal.io/sdk/worker"
+	sdkworker "go.temporal.io/sdk/worker"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
 )
@@ -16,7 +18,9 @@ type App struct {
 	db             *gorm.DB
 	worker         *Worker
 	temporalClient client.Client
-	temporalWorker temporalworker.Worker
+	temporalWorker sdkworker.Worker
+	metrics        *workerruntime.MetricsRegistry
+	temporalConfig TemporalConfig
 }
 
 func New(cfg Config) (*App, error) {
@@ -39,34 +43,52 @@ func New(cfg Config) (*App, error) {
 	repo := presale.NewGORMRepository(db)
 	service := presale.NewService(repo, nil, nil, presale.SystemClock{}, nil)
 	var temporalClient client.Client
-	var temporalWorker temporalworker.Worker
+	var temporalWorker sdkworker.Worker
+	var metrics *workerruntime.MetricsRegistry
 	if cfg.Temporal.Enabled {
+		metrics = workerruntime.NewMetricsRegistry()
 		temporalOptions := client.Options{
-			HostPort:  cfg.Temporal.Address,
-			Namespace: cfg.Temporal.Namespace,
+			HostPort:       cfg.Temporal.Address,
+			Namespace:      cfg.Temporal.Namespace,
+			MetricsHandler: metrics,
 		}
 		if cfg.Temporal.TLS {
 			temporalOptions.ConnectionOptions.TLS = &tls.Config{MinVersion: tls.VersionTLS12}
 		} else {
 			temporalOptions.ConnectionOptions.TLSDisabled = true
 		}
+		if cfg.Temporal.APIKey != "" {
+			temporalOptions.Credentials = client.NewAPIKeyStaticCredentials(cfg.Temporal.APIKey)
+		}
 		temporalClient, err = client.DialContext(context.Background(), temporalOptions)
 		if err != nil {
 			_ = dbClose(db)
 			return nil, err
 		}
-		temporalWorker = temporalworker.New(temporalClient, cfg.Temporal.TaskQueue, temporalworker.Options{DisableRegistrationAliasing: true})
+		workerOptions, optionsErr := workerruntime.WorkerOptions(workerruntime.VersioningConfig{
+			Enabled: cfg.Temporal.Versioning, DeploymentName: cfg.Temporal.DeploymentName,
+			BuildID: cfg.Temporal.BuildID, Policy: cfg.Temporal.Policy,
+		})
+		if optionsErr != nil {
+			temporalClient.Close()
+			_ = dbClose(db)
+			return nil, optionsErr
+		}
+		temporalWorker = sdkworker.New(temporalClient, cfg.Temporal.TaskQueue, workerOptions)
 		activities := &presaleworkflow.Activities{Approval: approval, PMS: pms}
 		presaleworkflow.Register(temporalWorker, activities)
 		temporalPort := presaleworkflow.Client{Temporal: temporalClient, TaskQueue: cfg.Temporal.TaskQueue}
 		approval = temporalPort
 		pms = temporalPort
 	}
-	return &App{db: db, worker: NewWorker(newOutboxStore(db), service, approval, pms, cfg), temporalClient: temporalClient, temporalWorker: temporalWorker}, nil
+	return &App{db: db, worker: NewWorker(newOutboxStore(db), service, approval, pms, cfg), temporalClient: temporalClient, temporalWorker: temporalWorker, metrics: metrics, temporalConfig: cfg.Temporal}, nil
 }
 
 func (a *App) Run(ctx context.Context) error {
 	if a.temporalWorker != nil {
+		if err := workerruntime.StartMetricsServer(ctx, a.temporalConfig.MetricsAddress, a.metrics, log.Default()); err != nil {
+			return err
+		}
 		if err := a.temporalWorker.Start(); err != nil {
 			return err
 		}

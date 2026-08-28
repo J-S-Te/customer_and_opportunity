@@ -1,12 +1,14 @@
 package opportunity
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"mime"
 	"path/filepath"
 	"strings"
@@ -93,6 +95,7 @@ type AttachmentResponse struct {
 	MIMEType        string     `json:"mime_type"`
 	SHA256          string     `json:"sha256"`
 	ScanStatus      string     `json:"scan_status"`
+	FileStatus      string     `json:"file_status"`
 	UploadExpiresAt *time.Time `json:"upload_expires_at,omitempty"`
 	UploadedAt      *time.Time `json:"uploaded_at,omitempty"`
 	ScannedAt       *time.Time `json:"scanned_at,omitempty"`
@@ -244,8 +247,15 @@ type AttachmentService struct {
 	audit         audit.Writer
 	store         AttachmentObjectStore
 	scanner       AttachmentScanner
+	gateway       AttachmentGatewayMigration
 	maxBytes      uint64
 	now           func() time.Time
+}
+
+// UseFileGatewayMigration 配置独立 File Gateway 的渐进迁移；不调用时保持 legacy 行为。
+func (s *AttachmentService) UseFileGatewayMigration(migration AttachmentGatewayMigration) *AttachmentService {
+	s.gateway = migration
+	return s
 }
 
 const attachmentSideEffectLease = 30 * time.Second
@@ -400,11 +410,27 @@ func (s *AttachmentService) UploadContent(ctx context.Context, opportunityID uin
 	if contentLength < 0 || uint64(contentLength) != value.SizeBytes || canonicalMIME(contentType) != value.MIMEType {
 		return nil, ErrAttachmentInvalid
 	}
-	if err = store.PutVerified(ctx, value.ObjectKey, body, value.SizeBytes, value.SHA256, value.MIMEType); err != nil {
+	// dual/required 模式需要把同一份已经核验的内容发送到两个边界；先做有界读取和摘要校验，
+	// 避免复用已消费的请求流或让两个存储看到不同字节。
+	content, readErr := io.ReadAll(io.LimitReader(body, int64(value.SizeBytes)+1))
+	contentDigest := sha256.Sum256(content)
+	if readErr != nil || uint64(len(content)) != value.SizeBytes || !strings.EqualFold(hex.EncodeToString(contentDigest[:]), value.SHA256) {
+		return nil, ErrAttachmentInvalid
+	}
+	if err = store.PutVerified(ctx, value.ObjectKey, bytes.NewReader(content), value.SizeBytes, value.SHA256, value.MIMEType); err != nil {
 		if errors.Is(err, ErrAttachmentInvalid) || errors.Is(err, ErrAttachmentRejected) {
 			return nil, err
 		}
 		return nil, ErrAttachmentUnavailable
+	}
+	if s.gateway != nil {
+		migrationErr := s.gateway.Migrate(ctx, AttachmentGatewayMigrationInput{TenantID: principal.TenantID, OpportunityID: opportunityID, AttachmentID: value.PublicID, FileName: value.FileName, MIMEType: value.MIMEType, SHA256: value.SHA256, IdempotencyKey: value.CreateIdempotencyKey, Content: content})
+		if migrationErr != nil {
+			if s.gateway.Required() {
+				return nil, ErrAttachmentUnavailable
+			}
+			slog.Default().WarnContext(ctx, "商机附件双写到 File Gateway 失败，保留既有存储结果", "attachment_id", value.PublicID, "opportunity_id", opportunityID, "error", migrationErr)
+		}
 	}
 	result := toAttachment(value)
 	return &result, nil
@@ -695,5 +721,23 @@ func (s *AttachmentService) releaseFinalizeLease(ctx context.Context, value *Att
 	}
 }
 func toAttachment(value *Attachment) AttachmentResponse {
-	return AttachmentResponse{ID: value.PublicID, OpportunityID: value.OpportunityID, FileName: value.FileName, SizeBytes: value.SizeBytes, MIMEType: value.MIMEType, SHA256: value.SHA256, ScanStatus: value.ScanStatus, UploadExpiresAt: value.UploadExpiresAt, UploadedAt: value.UploadedAt, ScannedAt: value.ScannedAt, Version: value.Version, CreatedAt: value.CreatedAt}
+	return AttachmentResponse{ID: value.PublicID, OpportunityID: value.OpportunityID, FileName: value.FileName, SizeBytes: value.SizeBytes, MIMEType: value.MIMEType, SHA256: value.SHA256, ScanStatus: value.ScanStatus, FileStatus: gatewayFileStatus(value.ScanStatus), UploadExpiresAt: value.UploadExpiresAt, UploadedAt: value.UploadedAt, ScannedAt: value.ScannedAt, Version: value.Version, CreatedAt: value.CreatedAt}
+}
+
+// gatewayFileStatus 在迁移期保留旧 scan_status，同时提供统一文件网关状态。
+func gatewayFileStatus(scanStatus string) string {
+	switch scanStatus {
+	case AttachmentPendingUpload:
+		return "PENDING_UPLOAD"
+	case AttachmentFinalizing, AttachmentScanning:
+		return "VALIDATING"
+	case AttachmentClean:
+		return "READY"
+	case AttachmentRejected:
+		return "REJECTED"
+	case AttachmentScanFailed:
+		return "FAILED"
+	default:
+		return "UNKNOWN"
+	}
 }

@@ -107,7 +107,7 @@ func validateMachineClaims(claims machineClaims, expectedTenant string) error {
 
 func validMachinePermission(scope string) bool {
 	switch scope {
-	case "portal.invite.verify", "customer.summary.read", "approval.callback.write", "opportunity.status.write", "opportunity.attachment.scan.write":
+	case "portal.invite.verify", "customer.summary.read", "approval.callback.write", "opportunity.status.write", "opportunity.attachment.scan.write", "customer.credit.payment.ingest", "customer.credit.internal.read":
 		return true
 	default:
 		return false

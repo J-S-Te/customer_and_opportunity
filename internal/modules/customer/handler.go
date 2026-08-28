@@ -84,6 +84,11 @@ func (h *Handler) List(c *gin.Context) {
 		response.Error(c, ErrInvalidQuery)
 		return
 	}
+	creditLevel := strings.ToUpper(strings.TrimSpace(c.Query("credit_level")))
+	if creditLevel != "" && creditLevel != "A" && creditLevel != "B" && creditLevel != "C" && creditLevel != "D" {
+		response.Error(c, ErrInvalidQuery)
+		return
+	}
 	page, err := positiveQueryInt(c.DefaultQuery("page", "1"), 0)
 	if err != nil {
 		response.Error(c, ErrInvalidQuery)
@@ -114,7 +119,7 @@ func (h *Handler) List(c *gin.Context) {
 		response.Error(c, ErrInvalidQuery)
 		return
 	}
-	result, err := h.service.List(c.Request.Context(), ListQuery{Keyword: c.Query("keyword"), CustomerType: c.Query("type"), Industry: c.Query("industry"), Region: c.Query("region"), OwnerID: c.Query("owner_id"), Status: c.Query("status"), QuickFilter: c.Query("quick_filter"), CreatedFrom: createdFrom, CreatedTo: createdTo, LastFollowupFrom: lastFollowupFrom, LastFollowupTo: lastFollowupTo, Page: page, PageSize: pageSize, SortBy: c.Query("sort_by"), SortOrder: c.Query("sort_order")})
+	result, err := h.service.List(c.Request.Context(), ListQuery{Keyword: c.Query("keyword"), CustomerType: c.Query("type"), Industry: c.Query("industry"), Region: c.Query("region"), OwnerID: c.Query("owner_id"), Status: c.Query("status"), CreditLevel: creditLevel, QuickFilter: c.Query("quick_filter"), CreatedFrom: createdFrom, CreatedTo: createdTo, LastFollowupFrom: lastFollowupFrom, LastFollowupTo: lastFollowupTo, Page: page, PageSize: pageSize, SortBy: c.Query("sort_by"), SortOrder: c.Query("sort_order")})
 	if err != nil {
 		response.Error(c, err)
 		return
@@ -132,7 +137,7 @@ func positiveQueryInt(value string, maximum int) (int, error) {
 
 func validCustomerListKeys(c *gin.Context) bool {
 	allowed := map[string]struct{}{
-		"keyword": {}, "type": {}, "industry": {}, "region": {}, "owner_id": {}, "status": {},
+		"keyword": {}, "type": {}, "industry": {}, "region": {}, "owner_id": {}, "status": {}, "credit_level": {},
 		"quick_filter": {}, "created_from": {}, "created_to": {}, "last_followup_from": {}, "last_followup_to": {},
 		"page": {}, "page_size": {}, "sort_by": {}, "sort_order": {},
 	}

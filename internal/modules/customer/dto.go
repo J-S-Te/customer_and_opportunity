@@ -199,6 +199,8 @@ type Response struct {
 	OwnerUserID          string            `json:"owner_user_id"`
 	OwnerOrgID           string            `json:"owner_org_id"`
 	Status               string            `json:"status"`
+	CreditUpdatedAt      *time.Time        `json:"credit_updated_at,omitempty"`
+	CreditLevel          string            `json:"credit_level"`
 	EndDate              *string           `json:"end_date,omitempty"`
 	MergedIntoID         *uint64           `json:"merged_into_id,omitempty"`
 	Contacts             []ContactResponse `json:"contacts,omitempty"`
@@ -216,6 +218,7 @@ type ListQuery struct {
 	Region           string
 	OwnerID          string
 	Status           string
+	CreditLevel      string
 	QuickFilter      string
 	CreatedFrom      *time.Time
 	CreatedTo        *time.Time

@@ -25,6 +25,19 @@ func TestSessionCookieSecurityAttributes(t *testing.T) {
 	}
 }
 
+func TestParseIfMatchVersionRequiresSinglePositiveVersion(t *testing.T) {
+	for _, value := range []string{"1", `"42"`, `W/"7"`} {
+		if version, err := parseIfMatchVersion(value); err != nil || version == 0 {
+			t.Fatalf("valid If-Match %q rejected: version=%d err=%v", value, version, err)
+		}
+	}
+	for _, value := range []string{"", "0", "-1", "1,2", "*", `"broken`} {
+		if _, err := parseIfMatchVersion(value); err == nil {
+			t.Fatalf("invalid If-Match %q accepted", value)
+		}
+	}
+}
+
 func TestPublicProjectDoesNotExposeTenantOrSourceIdentifiers(t *testing.T) {
 	value := project.Detail{Snapshot: project.Snapshot{Model: database.Model{ID: 42, TenantID: "tenant-secret", CreatedBy: "actor"}, ProjectID: "project-public"}}
 	raw, err := json.Marshal(publicProjectBundle(&value))

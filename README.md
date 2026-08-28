@@ -575,3 +575,19 @@ Portal 采用“CRM 预置基础平台外部用户 + 注册链接绑定 + 基础
 
 - [管理端原型（含售前技术支持）](<原型/客户与商机管理子系统-管理端（含售前技术支持）.html>)
 - [客户门户原型](原型/客户与商机管理子系统-门户端.html)
+
+# Temporal 售前 Worker 发布
+
+`presale-worker` 在启用 `PRESALE_TEMPORAL_ENABLED=true` 后，通过本仓的 Deployment-based Worker Versioning 启动。`TEMPORAL_WORKER_BUILD_ID` 在生产必须使用镜像摘要或不可变发布版本，不允许用相同 Build ID 覆盖新代码。Prometheus 指标由 `TEMPORAL_METRICS_ADDRESS`（默认 `:9093`）暴露，其中 `temporal_workflow_failed_total` 是 Workflow 失败告警依据。
+
+新版本先启动并确认目标 Task Queue 存在 Poller，再运行镜像内 `presale-worker-rollout`。推荐顺序：`RAMP 5` → `RAMP 25` → `RAMP 50` → `RAMP 100` → `PROMOTE`。每一步观察 Workflow 失败、端到端延迟与售前 Outbox 重试；异常时使用 `ABORT_RAMP` 清零灰度。`RAMP 100` 仍是可撤销灰度，稳定后必须 Promote 才成为 Current。
+
+发布命令使用以下环境变量，不接受命令行明文密钥：
+
+- `TEMPORAL_WORKER_ROLLOUT_ACTION=RAMP|PROMOTE|ABORT_RAMP`
+- `TEMPORAL_WORKER_RAMP_PERCENTAGE=5|25|50|100`
+- `TEMPORAL_WORKER_ROLLOUT_IDENTITY=<流水线唯一标识>`
+- `TEMPORAL_WORKER_DEPLOYMENT_NAME`、`TEMPORAL_WORKER_BUILD_ID`
+- `TEMPORAL_ADDRESS`、`TEMPORAL_NAMESPACE`、`TEMPORAL_TLS`；如使用 Temporal Cloud，凭据仅由运行时 `TEMPORAL_API_KEY` 注入
+
+控制命令每次先读取最新 conflict token；Promote 禁止无 Poller，且所有操作都禁止忽略缺失 Task Queue。回滚必须先恢复旧 Build ID 的 Poller，再 Promote 旧版本，不能仅删除新容器。

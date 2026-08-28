@@ -23,6 +23,7 @@ RUN set -eu; \
       portal-project-export-worker portal-project-worker portal-report-worker \
       presale-alert-worker presale-assignment-notification-worker presale-engineer-sync-worker \
       presale-progress-notification-worker presale-report-aggregate-worker presale-worker \
+      presale-worker-rollout \
       notification-delivery-worker; do \
       CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w' -o "/out/${command}" "./cmd/${command}"; \
     done
@@ -50,6 +51,9 @@ CMD ["./crm-server"]
 FROM runtime-base AS presale-worker-runtime
 
 COPY --from=builder /out/presale-worker ./presale-worker
+COPY --from=builder /out/presale-worker-rollout ./presale-worker-rollout
+
+EXPOSE 9093
 
 CMD ["./presale-worker"]
 

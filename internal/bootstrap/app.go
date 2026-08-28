@@ -10,7 +10,9 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/filegateway"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/middleware"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/credit"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/crmauth"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/customer"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/notification"
@@ -92,6 +94,7 @@ func New(config Config) (*App, error) {
 		PlatformBaseURL: config.PlatformBaseURL,
 		ClientID:        config.OIDCClientID, ClientSecret: config.OIDCClientSecret,
 		ApplicationCode: config.PlatformApplicationCode, EnvironmentCode: config.PlatformEnvironmentCode,
+		RoleConfigHash:       config.OIDCRoleConfigHash,
 		IdentityProviderHint: config.OIDCIDPHint,
 		RedirectURI:          config.OIDCRedirectURI, Scopes: config.OIDCScopes,
 	})
@@ -105,7 +108,8 @@ func New(config Config) (*App, error) {
 	if brokerErr != nil {
 		return nil, brokerErr
 	}
-	authService, authErr := crmauth.NewService(crmauth.NewGORMRepository(db), oidcClient, config.EncryptionKey, crmauth.Options{
+	authRepository := crmauth.NewGORMRepository(db)
+	authService, authErr := crmauth.NewService(authRepository, oidcClient, config.EncryptionKey, crmauth.Options{
 		TenantID: config.OIDCTenantID, RoleConfigHash: config.OIDCRoleConfigHash,
 		EnvironmentCode: config.PlatformEnvironmentCode, SessionTTL: config.OIDCSessionTTL, MaxRoles: config.OIDCMaxRoles,
 	}, brokerVerifier)
@@ -121,6 +125,7 @@ func New(config Config) (*App, error) {
 	base.GET("/auth/callback", authHandler.Callback)
 	base.POST("/auth/logout", authMiddleware, authHandler.RequireSameOrigin, authHandler.Logout)
 	base.POST("/auth/local-logout", authHandler.LocalLogout)
+	base.POST("/auth/backchannel-logout", crmauth.NewBackchannelLogoutHandler(oidcClient, authRepository, config.OIDCIssuer, config.OIDCClientID, config.OIDCBackchannelLogoutTTL).Handle)
 	machineAuth, machineErr := crmauth.NewMachineAuthenticator(context.Background(), db, crmauth.MachineOptions{Issuer: config.MachineTokenIssuer, Audience: config.MachineTokenAudience, PublicKeyPath: config.MachineTokenPublicKeyPath, TenantID: config.OIDCTenantID})
 	if machineErr != nil {
 		return nil, machineErr
@@ -204,6 +209,8 @@ func New(config Config) (*App, error) {
 		customerService.UseProjectHistoryReader(projectHistoryReader)
 	}
 	customer.RegisterRoutes(api, customer.NewHandler(customerService))
+	creditHandler := credit.NewHandler(credit.NewService(db))
+	credit.RegisterRoutes(api, creditHandler)
 	var portalInviteHandler *portalinvite.Handler
 	if config.PortalInviteEnabled {
 		// 邀请流程跨越平台用户、应用角色和 Portal 映射三个资源域。各动作使用不同的最小
@@ -350,10 +357,11 @@ func New(config Config) (*App, error) {
 		attachmentStore = s3Store
 		attachmentScanner = opportunity.NewCodeAttachmentScanner(s3Store)
 	case config.AttachmentLocalEnabled:
-		localStore, storeErr := opportunity.NewLocalAttachmentObjectStore(config.AttachmentLocalRoot)
+		gatewayClient, storeErr := filegateway.NewLocalClient(config.AttachmentLocalRoot)
 		if storeErr != nil {
 			return nil, storeErr
 		}
+		localStore := opportunity.NewLocalFileGatewayStore(gatewayClient)
 		attachmentStore = localStore
 		attachmentScanner = opportunity.NewCodeAttachmentScanner(localStore)
 	}
@@ -367,6 +375,17 @@ func New(config Config) (*App, error) {
 		attachmentScanner = clamScanner
 	}
 	attachmentService := opportunity.NewAttachmentService(opportunity.NewGORMAttachmentRepository(db), opportunityRepo, auditWriter, attachmentStore, attachmentScanner, 0)
+	if config.AttachmentFileGatewayMode != "legacy" {
+		gatewayHTTPClient, gatewayErr := newAttachmentFileGatewayClient(config)
+		if gatewayErr != nil {
+			return nil, gatewayErr
+		}
+		migration, migrationErr := opportunity.NewHTTPAttachmentGatewayMigration(gatewayHTTPClient, config.AttachmentFileGatewayApplication, opportunity.AttachmentGatewayMode(config.AttachmentFileGatewayMode))
+		if migrationErr != nil {
+			return nil, migrationErr
+		}
+		attachmentService.UseFileGatewayMigration(migration)
+	}
 	opportunityHandler := opportunity.NewHandler(opportunityService).UseStageAlerts(opportunity.NewStageAlertService(db)).UseAttachments(attachmentService)
 	opportunity.RegisterRoutes(api, opportunityHandler)
 	notification.RegisterRoutes(api, notification.NewHandler(notification.NewService(db)))
@@ -391,6 +410,7 @@ func New(config Config) (*App, error) {
 	}
 	opportunity.RegisterIntegrationRoutes(internal, opportunityHandler)
 	presale.RegisterInternalRoutes(internal, presaleHandler)
+	credit.RegisterInternalRoutes(internal, creditHandler)
 	server := &http.Server{Addr: config.Address, Handler: router, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second}
 	auditContext, auditCancel := context.WithCancel(context.Background())
 	auditDone := make(chan struct{})

@@ -67,6 +67,21 @@ type Repository interface {
 
 type GORMRepository struct{ db *gorm.DB }
 
+type requestListRow struct {
+	ID                  uint64
+	RequestNo           string
+	OpportunityID       uint64
+	OpportunityNo       string
+	ApplicantID         string
+	ApplicantName       string
+	Status              RequestStatus
+	CurrentApprovalNode uint8
+	Venue               Venue
+	Urgency             Urgency
+	ExpectedEnd         time.Time
+	CreatedAt           time.Time
+}
+
 func NewGORMRepository(db *gorm.DB) *GORMRepository { return &GORMRepository{db: db} }
 
 func (r *GORMRepository) tx(ctx context.Context) *gorm.DB { return database.FromContext(ctx, r.db) }
@@ -229,57 +244,13 @@ func (r *GORMRepository) ListRequests(ctx context.Context, scope RequestQuerySco
 		direction = "ASC"
 	}
 	idDirection := direction
-	type requestListRow struct {
-		ID                  uint64
-		RequestNo           string
-		OpportunityID       uint64
-		OpportunityNo       string
-		OpportunityName     string
-		ApplicantID         string
-		ApplicantName       string
-		Status              RequestStatus
-		CurrentApprovalNode uint8
-		Venue               Venue
-		Urgency             Urgency
-		ExpectedEnd         time.Time
-		CreatedAt           time.Time
-		TotalWorkHours      string
-		PushExceptionCount  int64
-		AlertLevel          string
-		AlertDueAt          *time.Time
-		AlertBasisAt        *time.Time
-	}
 	var rows []requestListRow
 	err := db.Select(`crm_presale_requests.id, crm_presale_requests.request_no,
 		crm_presale_requests.opportunity_id, crm_presale_requests.opportunity_no_snapshot AS opportunity_no,
-		COALESCE((SELECT o.name FROM crm_opportunities o WHERE o.tenant_id=crm_presale_requests.tenant_id
-			AND o.id=crm_presale_requests.opportunity_id AND o.deleted_at IS NULL LIMIT 1), '') AS opportunity_name,
 		crm_presale_requests.applicant_id, crm_presale_requests.applicant_name_snapshot AS applicant_name,
 		crm_presale_requests.status, crm_presale_requests.current_approval_node,
 		crm_presale_requests.venue, crm_presale_requests.urgency,
-		crm_presale_requests.expected_end, crm_presale_requests.created_at,
-		COALESCE((SELECT CAST(SUM(w.work_hours) AS CHAR) FROM crm_presale_worklogs w
-		 WHERE w.tenant_id=crm_presale_requests.tenant_id AND w.request_id=crm_presale_requests.id
-		 AND w.deleted_at IS NULL AND w.voided_at IS NULL), '0.00') AS total_work_hours,
-		(SELECT COUNT(*) FROM crm_presale_worklogs ew
-		 WHERE ew.tenant_id=crm_presale_requests.tenant_id AND ew.request_id=crm_presale_requests.id
-		 AND ew.deleted_at IS NULL AND ew.voided_at IS NULL
-		 AND ew.push_status IN ('RETRY_WAIT','DEAD_LETTER')) AS push_exception_count,
-		COALESCE((SELECT CASE
-		 WHEN SUM(a.alert_type IN ('APPROVAL_NODE_1_OVERDUE','APPROVAL_NODE_2_OVERDUE','ASSIGNMENT_OVERDUE','EXECUTION_OVERDUE')) > 0 THEN 'OVERDUE'
-		 WHEN SUM(a.alert_type='EXECUTION_DUE_SOON') > 0 THEN 'DUE_SOON' ELSE 'NONE' END
-		 FROM crm_presale_alerts a WHERE a.tenant_id=crm_presale_requests.tenant_id
-		 AND a.request_id=crm_presale_requests.id AND a.status='UNREAD' AND a.deleted_at IS NULL
-		 AND ((crm_presale_requests.status='PENDING_APPROVAL' AND crm_presale_requests.current_approval_node=1 AND a.alert_type='APPROVAL_NODE_1_OVERDUE')
-		   OR (crm_presale_requests.status='PENDING_APPROVAL' AND crm_presale_requests.current_approval_node=2 AND a.alert_type='APPROVAL_NODE_2_OVERDUE')
-		   OR (crm_presale_requests.status='APPROVED_PENDING_ASSIGNMENT' AND a.alert_type='ASSIGNMENT_OVERDUE')
-		   OR (crm_presale_requests.status='EXECUTING' AND a.alert_type IN ('EXECUTION_DUE_SOON','EXECUTION_OVERDUE')))), 'NONE') AS alert_level,
-		(SELECT MIN(a.due_at) FROM crm_presale_alerts a WHERE a.tenant_id=crm_presale_requests.tenant_id
-		 AND a.request_id=crm_presale_requests.id AND a.status='UNREAD' AND a.deleted_at IS NULL
-		 AND ((crm_presale_requests.status='PENDING_APPROVAL' AND a.alert_type LIKE 'APPROVAL_NODE_%') OR (crm_presale_requests.status='APPROVED_PENDING_ASSIGNMENT' AND a.alert_type='ASSIGNMENT_OVERDUE') OR (crm_presale_requests.status='EXECUTING' AND a.alert_type LIKE 'EXECUTION_%'))) AS alert_due_at,
-		(SELECT MIN(a.basis_at) FROM crm_presale_alerts a WHERE a.tenant_id=crm_presale_requests.tenant_id
-		 AND a.request_id=crm_presale_requests.id AND a.status='UNREAD' AND a.deleted_at IS NULL
-		 AND ((crm_presale_requests.status='PENDING_APPROVAL' AND a.alert_type LIKE 'APPROVAL_NODE_%') OR (crm_presale_requests.status='APPROVED_PENDING_ASSIGNMENT' AND a.alert_type='ASSIGNMENT_OVERDUE') OR (crm_presale_requests.status='EXECUTING' AND a.alert_type LIKE 'EXECUTION_%'))) AS alert_basis_at`).
+		crm_presale_requests.expected_end, crm_presale_requests.created_at`).
 		Order(sortField + " " + direction).Order("crm_presale_requests.id " + idDirection).
 		Offset((query.Page - 1) * query.PageSize).Limit(query.PageSize).Scan(&rows).Error
 	if err != nil {
@@ -289,6 +260,10 @@ func (r *GORMRepository) ListRequests(ctx context.Context, scope RequestQuerySco
 	for _, row := range rows {
 		ids = append(ids, row.ID)
 	}
+	enrichment, err := r.loadRequestListEnrichment(ctx, scope.TenantID, rows)
+	if err != nil {
+		return RequestListPage{}, err
+	}
 	assignments, err := r.ListCurrentAssignments(ctx, scope.TenantID, ids)
 	if err != nil {
 		return RequestListPage{}, err
@@ -297,16 +272,151 @@ func (r *GORMRepository) ListRequests(ctx context.Context, scope RequestQuerySco
 	for _, row := range rows {
 		items = append(items, RequestListItem{
 			ID: row.ID, RequestNo: row.RequestNo, OpportunityID: row.OpportunityID,
-			OpportunityNo: row.OpportunityNo, OpportunityName: row.OpportunityName, ApplicantID: row.ApplicantID,
+			OpportunityNo: row.OpportunityNo, OpportunityName: enrichment.opportunityNames[row.OpportunityID], ApplicantID: row.ApplicantID,
 			ApplicantName: row.ApplicantName, CurrentAssignees: assigneeSummaries(assignments[row.ID]),
 			Status: row.Status, CurrentApprovalNode: row.CurrentApprovalNode, Venue: row.Venue, Urgency: row.Urgency,
 			ExpectedEnd: row.ExpectedEnd, CreatedAt: row.CreatedAt,
-			Overdue: isOverdue(row.Status, row.ExpectedEnd, now), TotalWorkHours: row.TotalWorkHours,
-			PushExceptionCount: row.PushExceptionCount, AlertLevel: row.AlertLevel,
-			AlertDueAt: row.AlertDueAt, AlertBasisAt: row.AlertBasisAt,
+			Overdue: isOverdue(row.Status, row.ExpectedEnd, now), TotalWorkHours: enrichment.worklogs[row.ID].totalWorkHours,
+			PushExceptionCount: enrichment.worklogs[row.ID].pushExceptionCount, AlertLevel: enrichment.alerts[row.ID].level,
+			AlertDueAt: enrichment.alerts[row.ID].dueAt, AlertBasisAt: enrichment.alerts[row.ID].basisAt,
 		})
 	}
 	return RequestListPage{Items: items, Page: query.Page, PageSize: query.PageSize, Total: total}, nil
+}
+
+type requestListEnrichment struct {
+	opportunityNames map[uint64]string
+	worklogs         map[uint64]requestWorklogSummary
+	alerts           map[uint64]requestAlertSummary
+}
+
+type requestWorklogSummary struct {
+	totalWorkHours     string
+	pushExceptionCount int64
+}
+
+type requestAlertSummary struct {
+	level   string
+	dueAt   *time.Time
+	basisAt *time.Time
+}
+
+// loadRequestListEnrichment replaces the former per-row correlated subqueries
+// with bounded, page-scoped batch queries. The list response still reports
+// exactly the same active opportunity, worklog and unread-alert state.
+func (r *GORMRepository) loadRequestListEnrichment(ctx context.Context, tenant string, requests []requestListRow) (requestListEnrichment, error) {
+	result := requestListEnrichment{
+		opportunityNames: make(map[uint64]string),
+		worklogs:         make(map[uint64]requestWorklogSummary),
+		alerts:           make(map[uint64]requestAlertSummary, len(requests)),
+	}
+	if len(requests) == 0 {
+		return result, nil
+	}
+	requestIDs := make([]uint64, 0, len(requests))
+	opportunityIDs := make([]uint64, 0, len(requests))
+	seenOpportunities := make(map[uint64]struct{}, len(requests))
+	for _, request := range requests {
+		requestIDs = append(requestIDs, request.ID)
+		result.alerts[request.ID] = requestAlertSummary{level: "NONE"}
+		result.worklogs[request.ID] = requestWorklogSummary{totalWorkHours: "0.00"}
+		if _, exists := seenOpportunities[request.OpportunityID]; !exists {
+			seenOpportunities[request.OpportunityID] = struct{}{}
+			opportunityIDs = append(opportunityIDs, request.OpportunityID)
+		}
+	}
+
+	type opportunityRow struct {
+		ID   uint64
+		Name string
+	}
+	var opportunities []opportunityRow
+	if err := r.tx(ctx).Table("crm_opportunities").Select("id,name").
+		Where("tenant_id=? AND id IN ? AND deleted_at IS NULL", tenant, opportunityIDs).Scan(&opportunities).Error; err != nil {
+		return requestListEnrichment{}, err
+	}
+	for _, opportunity := range opportunities {
+		result.opportunityNames[opportunity.ID] = opportunity.Name
+	}
+
+	type worklogRow struct {
+		RequestID          uint64
+		TotalWorkHours     string
+		PushExceptionCount int64
+	}
+	var worklogs []worklogRow
+	if err := r.tx(ctx).Table("crm_presale_worklogs").
+		Select("request_id, COALESCE(CAST(SUM(work_hours) AS CHAR), '0.00') AS total_work_hours, COALESCE(SUM(CASE WHEN push_status IN ('RETRY_WAIT','DEAD_LETTER') THEN 1 ELSE 0 END), 0) AS push_exception_count").
+		Where("tenant_id=? AND request_id IN ? AND deleted_at IS NULL AND voided_at IS NULL", tenant, requestIDs).
+		Group("request_id").Scan(&worklogs).Error; err != nil {
+		return requestListEnrichment{}, err
+	}
+	for _, worklog := range worklogs {
+		result.worklogs[worklog.RequestID] = requestWorklogSummary{totalWorkHours: worklog.TotalWorkHours, pushExceptionCount: worklog.PushExceptionCount}
+	}
+
+	type alertRow struct {
+		RequestID uint64
+		AlertType AlertType
+		DueAt     *time.Time
+		BasisAt   *time.Time
+	}
+	var alerts []alertRow
+	if err := r.tx(ctx).Table("crm_presale_alerts").Select("request_id,alert_type,due_at,basis_at").
+		Where("tenant_id=? AND request_id IN ? AND status='UNREAD' AND deleted_at IS NULL", tenant, requestIDs).Scan(&alerts).Error; err != nil {
+		return requestListEnrichment{}, err
+	}
+	byID := make(map[uint64]requestListRow, len(requests))
+	for _, request := range requests {
+		byID[request.ID] = request
+	}
+	for _, alert := range alerts {
+		request := byID[alert.RequestID]
+		if !alertAppliesToListRequestDates(alert.AlertType, request) {
+			continue
+		}
+		summary := result.alerts[alert.RequestID]
+		if alertAppliesToListRequestLevel(alert.AlertType, request) && (alert.AlertType == AlertApprovalNode1Overdue || alert.AlertType == AlertApprovalNode2Overdue || alert.AlertType == AlertAssignmentOverdue || alert.AlertType == AlertExecutionOverdue) {
+			summary.level = "OVERDUE"
+		} else if alertAppliesToListRequestLevel(alert.AlertType, request) && alert.AlertType == AlertExecutionDueSoon && summary.level != "OVERDUE" {
+			summary.level = "DUE_SOON"
+		}
+		if summary.dueAt == nil || (alert.DueAt != nil && alert.DueAt.Before(*summary.dueAt)) {
+			summary.dueAt = alert.DueAt
+		}
+		if summary.basisAt == nil || (alert.BasisAt != nil && alert.BasisAt.Before(*summary.basisAt)) {
+			summary.basisAt = alert.BasisAt
+		}
+		result.alerts[alert.RequestID] = summary
+	}
+	return result, nil
+}
+
+func alertAppliesToListRequestLevel(alertType AlertType, request requestListRow) bool {
+	switch request.Status {
+	case StatusPendingApproval:
+		return (request.CurrentApprovalNode == 1 && alertType == AlertApprovalNode1Overdue) ||
+			(request.CurrentApprovalNode == 2 && alertType == AlertApprovalNode2Overdue)
+	case StatusApprovedPendingAssignment:
+		return alertType == AlertAssignmentOverdue
+	case StatusExecuting:
+		return alertType == AlertExecutionDueSoon || alertType == AlertExecutionOverdue
+	default:
+		return false
+	}
+}
+
+func alertAppliesToListRequestDates(alertType AlertType, request requestListRow) bool {
+	switch request.Status {
+	case StatusPendingApproval:
+		return alertType == AlertApprovalNode1Overdue || alertType == AlertApprovalNode2Overdue
+	case StatusApprovedPendingAssignment:
+		return alertType == AlertAssignmentOverdue
+	case StatusExecuting:
+		return alertType == AlertExecutionDueSoon || alertType == AlertExecutionOverdue
+	default:
+		return false
+	}
 }
 
 // 每个筛选维度都从与列表相同的“已授权且已过滤”关系派生；只多取一条判断是否截断，

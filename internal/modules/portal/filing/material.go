@@ -1,6 +1,7 @@
 package filing
 
 import (
+	"bufio"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -23,9 +24,10 @@ const filingMaterialMaxBytes = uint64(20 << 20)
 const filingMaterialFinalizeLease = 30 * time.Second
 
 var (
-	ErrMaterialNotFound    = apperror.New(http.StatusNotFound, "PORTAL_FILING_MATERIAL_NOT_FOUND", "filing material not found")
-	ErrMaterialUnavailable = apperror.New(http.StatusServiceUnavailable, "PORTAL_FILING_MATERIAL_DEPENDENCY_UNAVAILABLE", "filing material storage or scanning is unavailable")
-	ErrMaterialNotReady    = apperror.New(http.StatusConflict, "PORTAL_FILING_MATERIAL_NOT_READY", "filing material is not ready")
+	ErrMaterialNotFound       = apperror.New(http.StatusNotFound, "PORTAL_FILING_MATERIAL_NOT_FOUND", "filing material not found")
+	ErrMaterialUnavailable    = apperror.New(http.StatusServiceUnavailable, "PORTAL_FILING_MATERIAL_DEPENDENCY_UNAVAILABLE", "filing material storage or scanning is unavailable")
+	ErrMaterialNotReady       = apperror.New(http.StatusConflict, "PORTAL_FILING_MATERIAL_NOT_READY", "filing material is not ready")
+	ErrMaterialContentInvalid = apperror.New(http.StatusUnprocessableEntity, "PORTAL_FILING_MATERIAL_CONTENT_INVALID", "filing material content does not match the declared metadata")
 )
 
 var materialMIMEByExtension = map[string]string{
@@ -44,9 +46,10 @@ type MaterialUploadCommand struct {
 }
 
 type MaterialUploadGrant struct {
-	Material  MaterialView `json:"material"`
-	UploadURL string       `json:"upload_url"`
-	ExpiresAt time.Time    `json:"expires_at"`
+	Material   MaterialView `json:"material"`
+	UploadURL  string       `json:"upload_url"`
+	UploadMode string       `json:"upload_mode"`
+	ExpiresAt  time.Time    `json:"expires_at"`
 }
 
 type MaterialObjectMetadata struct {
@@ -62,9 +65,19 @@ type MaterialObjectStore interface {
 	OpenVerified(context.Context, string, string, string, uint64) (io.ReadCloser, error)
 }
 
+// InternalMaterialContentStore 表示文件内容必须通过 Portal 受控代理写入，而不是由浏览器
+// 直接访问对象存储。实现必须验证大小、摘要和媒体类型，并保证不会覆盖既有对象。
+type InternalMaterialContentStore interface {
+	PutVerified(context.Context, string, io.Reader, uint64, string, string) error
+}
+
 type MaterialScanner interface {
 	Available() bool
 	Submit(context.Context, string, string, string, string, uint64, string) (string, error)
+}
+
+type immediateMaterialScanner interface {
+	ImmediateStatus(string) (string, bool)
 }
 
 type MaterialObjectProtector interface {
@@ -182,7 +195,83 @@ func (s *MaterialService) CreateUpload(ctx context.Context, actor Actor, filingP
 	if err != nil || strings.TrimSpace(uploadURL) == "" || !expiresAt.After(now) {
 		return nil, ErrMaterialUnavailable
 	}
-	return &MaterialUploadGrant{Material: materialView(material), UploadURL: uploadURL, ExpiresAt: expiresAt}, nil
+	uploadMode := "DIRECT"
+	if _, ok := s.store.(InternalMaterialContentStore); ok {
+		uploadMode = "INTERNAL"
+		uploadURL = "/filings/" + filing.PublicID + "/materials/" + material.PublicID + "/content"
+	}
+	return &MaterialUploadGrant{Material: materialView(material), UploadURL: uploadURL, UploadMode: uploadMode, ExpiresAt: expiresAt}, nil
+}
+
+// UploadContent 只允许备案所有者把与预登记元数据完全一致的内容写入内部文件网关。
+// 上传前使用版本号和短租约串行化并发请求；存储写入成功后再记录 uploaded_at，重复写入、
+// 跨租户材料、错误 MIME/大小/摘要或非 PENDING_UPLOAD 状态均不会覆盖对象。
+func (s *MaterialService) UploadContent(ctx context.Context, actor Actor, filingPublicID, materialPublicID string, expectedVersion uint64, body io.Reader, contentType string, contentLength int64) (*MaterialView, error) {
+	filingPublicID, materialPublicID = strings.TrimSpace(filingPublicID), strings.TrimSpace(materialPublicID)
+	if !validActor(actor) || !validPublicID(filingPublicID) || !validPublicID(materialPublicID) || expectedVersion == 0 || body == nil {
+		return nil, ErrValidation
+	}
+	filing, err := s.repo.FindOwned(ctx, actor, filingPublicID)
+	if err != nil {
+		return nil, err
+	}
+	if filing.Status != StatusDraft {
+		return nil, ErrLocked
+	}
+	store, ok := s.store.(InternalMaterialContentStore)
+	if !ok || !s.store.Available() || s.protector == nil {
+		return nil, ErrMaterialUnavailable
+	}
+	material, err := s.repo.FindMaterialByPublicIDForUpdate(ctx, actor.TenantID, filing.ID, materialPublicID)
+	if err != nil {
+		return nil, err
+	}
+	now := s.clock.Now().UTC()
+	if material.CreateActorID != actor.AccountID || material.ScanStatus != MaterialPendingUpload || material.UploadedAt != nil || material.Version != expectedVersion || material.FinalizeLeaseUntil != nil && material.FinalizeLeaseUntil.After(now) {
+		return nil, ErrMaterialNotReady
+	}
+	if contentLength < 0 || uint64(contentLength) != material.SizeBytes || canonicalMaterialMIME(contentType) != material.MIMEType {
+		return nil, ErrMaterialContentInvalid
+	}
+
+	reader := bufio.NewReader(io.LimitReader(body, int64(material.SizeBytes)+1))
+	peekSize := int(material.SizeBytes)
+	if peekSize > 512 {
+		peekSize = 512
+	}
+	header, peekErr := reader.Peek(peekSize)
+	if peekErr != nil || canonicalMaterialMIME(http.DetectContentType(header)) != material.MIMEType {
+		return nil, ErrMaterialContentInvalid
+	}
+
+	leaseUntil := now.Add(filingMaterialFinalizeLease)
+	if err = s.repo.UpdateMaterial(ctx, material, material.Version, map[string]any{"finalize_lease_until": leaseUntil, "updated_by": actor.AccountID, "updated_at": now}); err != nil {
+		return nil, err
+	}
+	material.FinalizeLeaseUntil = &leaseUntil
+	plainObjectKey, err := s.protector.Decrypt(ctx, material.ObjectKeyCipher)
+	if err != nil || !validMaterialObjectKey(string(plainObjectKey), actor.TenantID, filing.PublicID, material.PublicID) {
+		s.releaseContentUpload(ctx, material, actor.AccountID)
+		return nil, ErrMaterialUnavailable
+	}
+	if err = store.PutVerified(ctx, string(plainObjectKey), reader, material.SizeBytes, material.SHA256, material.MIMEType); err != nil {
+		s.releaseContentUpload(ctx, material, actor.AccountID)
+		if errors.Is(err, ErrMaterialContentInvalid) || errors.Is(err, ErrValidation) {
+			return nil, ErrMaterialContentInvalid
+		}
+		return nil, ErrMaterialUnavailable
+	}
+	uploadedAt := s.clock.Now().UTC()
+	if err = s.repo.UpdateMaterial(ctx, material, material.Version, map[string]any{"uploaded_at": uploadedAt, "finalize_lease_until": nil, "updated_by": actor.AccountID, "updated_at": uploadedAt}); err != nil {
+		return nil, err
+	}
+	material.UploadedAt, material.FinalizeLeaseUntil, material.UpdatedAt = &uploadedAt, nil, uploadedAt
+	view := materialView(material)
+	return &view, nil
+}
+
+func (s *MaterialService) releaseContentUpload(ctx context.Context, material *Material, actorID string) {
+	_ = s.repo.UpdateMaterial(ctx, material, material.Version, map[string]any{"finalize_lease_until": nil, "updated_by": actorID, "updated_at": s.clock.Now().UTC()})
 }
 
 func (s *MaterialService) recoverDuplicateMaterialCreate(ctx context.Context, actor Actor, filingID uint64, command MaterialUploadCommand, name, mediaType, digest, createKeyHash, requestHash string) (*Material, error) {
@@ -246,7 +335,7 @@ func (s *MaterialService) CompleteUpload(ctx context.Context, actor Actor, filin
 	if material.ScanStatus == MaterialFinalizing && (material.FinalizeLeaseUntil == nil || material.FinalizeLeaseUntil.After(now)) {
 		return nil, ErrMaterialNotReady
 	}
-	if material.ScanStatus != MaterialPendingUpload && material.ScanStatus != MaterialFinalizing || material.ScanStatus == MaterialPendingUpload && material.Version != expectedVersion {
+	if material.ScanStatus != MaterialPendingUpload && material.ScanStatus != MaterialFinalizing || material.ScanStatus == MaterialPendingUpload && (material.Version != expectedVersion || material.UploadedAt == nil || material.FinalizeLeaseUntil != nil && material.FinalizeLeaseUntil.After(now)) {
 		return nil, ErrMaterialNotReady
 	}
 	leaseUntil := now.Add(filingMaterialFinalizeLease)
@@ -270,10 +359,21 @@ func (s *MaterialService) CompleteUpload(ctx context.Context, actor Actor, filin
 		return nil, ErrMaterialUnavailable
 	}
 	now = s.clock.Now().UTC()
-	if err = s.repo.UpdateMaterial(ctx, material, material.Version, map[string]any{"object_version": metadata.ObjectVersion, "scan_reference": strings.TrimSpace(scanReference), "scan_status": MaterialScanning, "uploaded_at": now, "finalize_lease_until": nil, "updated_by": actor.AccountID, "updated_at": now}); err != nil {
+	scanStatus := MaterialScanning
+	fields := map[string]any{"object_version": metadata.ObjectVersion, "scan_reference": strings.TrimSpace(scanReference), "scan_status": scanStatus, "uploaded_at": now, "finalize_lease_until": nil, "updated_by": actor.AccountID, "updated_at": now}
+	var scannedAt *time.Time
+	if immediate, ok := s.scanner.(immediateMaterialScanner); ok {
+		if status, complete := immediate.ImmediateStatus(scanReference); complete {
+			scanStatus = status
+			fields["scan_status"] = status
+			fields["scanned_at"] = now
+			scannedAt = &now
+		}
+	}
+	if err = s.repo.UpdateMaterial(ctx, material, material.Version, fields); err != nil {
 		return nil, err
 	}
-	material.ObjectVersion, material.ScanReference, material.ScanStatus, material.UploadedAt, material.UpdatedAt = metadata.ObjectVersion, strings.TrimSpace(scanReference), MaterialScanning, &now, now
+	material.ObjectVersion, material.ScanReference, material.ScanStatus, material.UploadedAt, material.ScannedAt, material.UpdatedAt = metadata.ObjectVersion, strings.TrimSpace(scanReference), scanStatus, &now, scannedAt, now
 	view := materialView(material)
 	return &view, nil
 }

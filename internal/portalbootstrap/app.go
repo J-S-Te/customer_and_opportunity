@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/filegateway"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/middleware"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/portal/account"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/portal/capability"
@@ -90,7 +91,8 @@ func New(ctx context.Context, config Config) (*App, error) {
 		// 客户边界；邀请链路与回退仍使用本地 portal_identity_links。
 		accountServiceOptions = append(accountServiceOptions, account.WithPlatformBinding())
 	}
-	accountService := account.NewServiceWithOptions(account.NewGORMRepository(db), oidcAdapter, inviteClient, protector, account.SystemClock{}, account.CryptoRandom{}, config.RoleConfigHash, config.SessionTTL, config.PlatformEnvironmentCode, accountServiceOptions...)
+	accountRepository := account.NewGORMRepository(db)
+	accountService := account.NewServiceWithOptions(accountRepository, oidcAdapter, inviteClient, protector, account.SystemClock{}, account.CryptoRandom{}, config.RoleConfigHash, config.SessionTTL, config.PlatformEnvironmentCode, accountServiceOptions...)
 	// 登录事务、访问令牌和会话均保存在数据库并加密；账号服务通过 UserInfo 周期性重验当前
 	// 权限，避免仅依赖首次登录时的 ID Token 快照。
 	projectService := project.NewService(project.NewGORMRepository(db), unavailableProjectSource{})
@@ -111,15 +113,31 @@ func New(ctx context.Context, config Config) (*App, error) {
 	}
 	reportService := report.NewService(report.NewGORMRepository(db), projectAccess{projects: projectService}, emailProtector{codec: codec}, reportDescriptorProtector, systemClock{}, requestIDGenerator{}).
 		UseWorkerReadiness(workerReadiness, workerruntime.HeartbeatMaxAge)
-	reportDownloadService := report.NewDownloadService(report.NewGORMRepository(db), unavailableReportFileReader{}, nil, systemClock{}, requestIDGenerator{}, report.CryptoTokenGenerator{}, 72*time.Hour).RequireProductionSecurity(nil)
+	var reportFileReader report.FileReader = unavailableReportFileReader{}
+	var portalFileClient *filegateway.LocalClient
+	if config.FileGatewayLocalEnabled {
+		fileClient, gatewayErr := filegateway.NewLocalClient(config.FileGatewayLocalRoot)
+		if gatewayErr != nil {
+			return nil, fmt.Errorf("initialize Portal file gateway: %w", gatewayErr)
+		}
+		portalFileClient = fileClient
+		reportFileReader = report.NewLocalFileGatewayReader(fileClient, reportDescriptorProtector)
+	}
+	reportDownloadService := report.NewDownloadService(report.NewGORMRepository(db), reportFileReader, nil, systemClock{}, requestIDGenerator{}, report.CryptoTokenGenerator{}, 72*time.Hour).RequireProductionSecurity(nil)
 	feedbackService := feedback.NewService(feedback.NewGORMRepository(db), projectAccess{projects: projectService}, contactProtector{codec: codec}, systemClock{}, requestIDGenerator{})
 	evaluationService := evaluation.NewService(evaluation.NewGORMRepository(db), projectAccess{projects: projectService}, systemClock{}, requestIDGenerator{})
 	filingRepository := filing.NewGORMRepository(db)
 	filingService := filing.NewService(filingRepository, filingProtector{codec: codec}, projectAccess{projects: projectService}, systemClock{}, requestIDGenerator{})
-	filingMaterialService := filing.NewMaterialService(filingRepository, filingProtector{codec: codec}, filing.UnavailableMaterialObjectStore{}, filing.UnavailableMaterialScanner{}, systemClock{}, requestIDGenerator{})
+	var filingMaterialStore filing.MaterialObjectStore = filing.UnavailableMaterialObjectStore{}
+	var filingMaterialScanner filing.MaterialScanner = filing.UnavailableMaterialScanner{}
+	if portalFileClient != nil {
+		filingMaterialStore = filing.NewLocalFileGatewayStore(portalFileClient)
+		filingMaterialScanner = filing.NewLocalMaterialScanner(filingMaterialStore)
+	}
+	filingMaterialService := filing.NewMaterialService(filingRepository, filingProtector{codec: codec}, filingMaterialStore, filingMaterialScanner, systemClock{}, requestIDGenerator{})
 	router := NewRouter(RouterDependencies{Config: config, RequestAudit: middleware.RequestAudit(auditStore, middleware.RequestAuditOptions{
 		TenantID: config.TenantID, ApplicationCode: config.PlatformApplicationCode, EnvironmentCode: config.PlatformEnvironmentCode,
-	}), Account: accountService, Projects: projectService, ProjectExports: projectExportService, ProjectMessages: projectMessageService, Reports: reportService, ReportDownloads: reportDownloadService, WorkerReadiness: workerReadiness, WorkerHeartbeatMaxAge: workerruntime.HeartbeatMaxAge, ReportDownloadError: func(ctx context.Context, err error) {
+	}), Account: accountService, BackchannelLogout: newPortalBackchannelLogoutHandler(oidcAdapter, accountRepository, config.OIDCIssuer, config.OIDCClientID, config.BackchannelLogoutTTL).Handle, Projects: projectService, ProjectExports: projectExportService, ProjectMessages: projectMessageService, Reports: reportService, ReportDownloads: reportDownloadService, WorkerReadiness: workerReadiness, WorkerHeartbeatMaxAge: workerruntime.HeartbeatMaxAge, ReportDownloadError: func(ctx context.Context, err error) {
 		slog.Default().ErrorContext(ctx, "Portal report download completion audit failed", "error", err)
 	}, Feedback: feedbackService, Evaluations: evaluationService, Filings: filingService, FilingMaterials: filingMaterialService, MachineAuthenticator: machineAuthenticator, CustomerCapabilities: customerCapabilities, DatabaseHealthy: func() bool {
 		pingCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)

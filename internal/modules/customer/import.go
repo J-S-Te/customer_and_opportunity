@@ -509,7 +509,7 @@ func (s *Service) commitImportRow(ctx context.Context, principal auth.Principal,
 		value := s.codec.HMAC(command.UnifiedCreditCode)
 		creditHMAC = &value
 	}
-	model := &Customer{Name: command.Name, NormalizedName: normalizeName(command.Name), UnifiedCreditCodeCipher: creditCipher, UnifiedCreditCodeHMAC: creditHMAC, CustomerType: command.CustomerType, Industry: command.Industry, Region: command.Region, OwnerUserID: command.OwnerUserID, OwnerOrgID: command.OwnerOrgID, Status: StatusActive}
+	model := &Customer{Name: command.Name, NormalizedName: normalizeName(command.Name), UnifiedCreditCodeCipher: creditCipher, UnifiedCreditCodeHMAC: creditHMAC, CustomerType: command.CustomerType, Industry: command.Industry, Region: command.Region, OwnerUserID: command.OwnerUserID, OwnerOrgID: command.OwnerOrgID, Status: StatusActive, CreditLevel: "B", CreditChangeSource: "INITIAL"}
 	model.TenantID, model.CreatedBy, model.UpdatedBy, model.Version = principal.TenantID, principal.UserID, principal.UserID, 1
 	model.Contacts = []Contact{{Model: database.Model{TenantID: principal.TenantID, CreatedBy: principal.UserID, UpdatedBy: principal.UserID, Version: 1}, Name: command.ContactName, PhoneCipher: phoneCipher, PhoneMasked: security.MaskPhone(command.ContactPhone), EmailCipher: emailCipher, EmailMasked: maskEmail(command.ContactEmail), IsRegistration: true}}
 	if err = s.persistCreatedCustomer(ctx, principal, model, job.Reason); err != nil {

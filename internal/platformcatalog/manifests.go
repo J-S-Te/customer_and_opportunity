@@ -14,6 +14,12 @@ func CRMManifest() Manifest {
 		permission("customer.restore", "恢复客户", "customer", "restore", "HIGH"),
 		permission("customer.export", "导出客户", "customer", "export", "HIGH"),
 		permission("customer.audit.read", "查看客户审计", "customer_audit", "read", "HIGH"),
+		permission("customer.credit.read", "查看客户信用等级", "customer_credit", "read", "LOW"),
+		permission("customer.credit.apply", "申请调整客户信用等级", "customer_credit", "apply", "HIGH"),
+		permission("customer.credit.approve", "审批客户信用等级调整", "customer_credit", "approve", "HIGH"),
+		permission("customer.credit.rule.manage", "管理客户信用规则", "customer_credit_rule", "manage", "CRITICAL"),
+		permission("customer.credit.payment.ingest", "接收结算回款信用事件", "customer_credit", "ingest", "CRITICAL"),
+		permission("customer.credit.internal.read", "内部查询客户信用等级", "customer_credit", "internal_read", "HIGH"),
 		permission("opportunity.read", "查看商机", "opportunity", "read", "LOW"),
 		permission("opportunity.create", "创建商机", "opportunity", "create", "MEDIUM"),
 		permission("opportunity.update", "维护商机", "opportunity", "update", "MEDIUM"),
@@ -47,11 +53,11 @@ func CRMManifest() Manifest {
 	}
 	roles := []Role{
 		role("sales", "销售人员", "维护本人负责的客户和商机并发起售前申请",
-			"customer.read", "customer.create", "customer.update", "customer.void", "customer.restore",
+			"customer.read", "customer.create", "customer.update", "customer.void", "customer.restore", "customer.credit.read", "customer.credit.apply",
 			"opportunity.read", "opportunity.create", "opportunity.update", "opportunity.owner.change", "opportunity.team.manage", "opportunity.stage.change", "opportunity.attachment.read", "opportunity.attachment.upload", "opportunity.attachment.download", "opportunity.void", "opportunity.restore",
 			"presale.read", "presale.create", "portal_account.provision", "portal_account.revoke", "portal_account.disable"),
 		role("sales_director", "销售总监", "管理客户商机并执行售前一级审批",
-			"customer.read", "customer.create", "customer.update", "customer.duplicate.override", "customer.import", "customer.merge", "customer.void", "customer.restore", "customer.export", "customer.audit.read",
+			"customer.read", "customer.create", "customer.update", "customer.duplicate.override", "customer.import", "customer.merge", "customer.void", "customer.restore", "customer.export", "customer.audit.read", "customer.credit.read", "customer.credit.apply", "customer.credit.approve",
 			"opportunity.read", "opportunity.create", "opportunity.update", "opportunity.owner.change", "opportunity.team.manage", "opportunity.stage.change", "opportunity.contract.transfer", "opportunity.attachment.read", "opportunity.attachment.upload", "opportunity.attachment.download", "opportunity.void", "opportunity.restore", "opportunity.alert.config",
 			"presale.read", "presale.contact_phone.read", "presale.create", "presale.approve", "presale.report", "portal_account.provision", "portal_account.revoke", "portal_account.disable"),
 		role("technical_director", "技术总监", "执行售前技术审批并选择执行部门",
@@ -61,16 +67,16 @@ func CRMManifest() Manifest {
 		role("technician", "技术人员", "仅处理本人被指派的售前任务", "presale.read", "presale.progress", "presale.worklog", "presale.complete"),
 		role("project_manager", "项目经理", "管理本人被指派的售前执行任务", "presale.read", "presale.contact_phone.read", "presale.progress", "presale.worklog", "presale.complete"),
 		role("customer_admin", "客户管理员", "执行客户主数据高风险维护",
-			"customer.read", "customer.create", "customer.update", "customer.duplicate.override", "customer.import", "customer.merge", "customer.void", "customer.restore", "customer.export", "customer.audit.read",
+			"customer.read", "customer.create", "customer.update", "customer.duplicate.override", "customer.import", "customer.merge", "customer.void", "customer.restore", "customer.export", "customer.audit.read", "customer.credit.read", "customer.credit.apply", "customer.credit.rule.manage",
 			"opportunity.read", "opportunity.attachment.read", "portal_account.provision", "portal_account.revoke", "portal_account.disable"),
 		role("crm_super_admin", "客户与商机超级管理员", "管理客户、商机、售前审批及审计配置",
-			"customer.read", "customer.create", "customer.update", "customer.duplicate.override", "customer.import", "customer.merge", "customer.void", "customer.restore", "customer.export", "customer.audit.read",
+			"customer.read", "customer.create", "customer.update", "customer.duplicate.override", "customer.import", "customer.merge", "customer.void", "customer.restore", "customer.export", "customer.audit.read", "customer.credit.read", "customer.credit.apply", "customer.credit.rule.manage",
 			"opportunity.read", "opportunity.create", "opportunity.update", "opportunity.owner.change", "opportunity.team.manage", "opportunity.stage.change", "opportunity.contract.transfer", "opportunity.attachment.read", "opportunity.attachment.upload", "opportunity.attachment.download", "opportunity.void", "opportunity.restore", "opportunity.alert.config",
 			"portal_account.provision", "portal_account.revoke", "portal_account.disable",
 			"presale.read", "presale.contact_phone.read", "presale.create", "presale.approve", "presale.approval_rule.manage", "presale.assign", "presale.progress", "presale.worklog", "presale.worklog.retry", "presale.cancel", "presale.engineer.sync", "presale.alert.config", "presale.report"),
-		role("auditor", "审计员", "只读查看经营数据和审计记录", "customer.read", "customer.audit.read", "opportunity.read", "opportunity.attachment.read", "presale.read", "presale.report"),
+		role("auditor", "审计员", "只读查看经营数据和审计记录", "customer.read", "customer.audit.read", "customer.credit.read", "opportunity.read", "opportunity.attachment.read", "presale.read", "presale.report"),
 	}
-	return Manifest{Version: "crm-2026.08.14-v9", Permissions: permissions, Roles: roles, Policy: Policy{MaxEffectiveRoles: 10}}
+	return Manifest{Version: "crm-2026.08.28-v10", Permissions: permissions, Roles: roles, Policy: Policy{MaxEffectiveRoles: 10}}
 }
 
 // Portal 与 CRM 虽由同一仓库交付，授权目录仍相互独立。portal_customer 是外部客户

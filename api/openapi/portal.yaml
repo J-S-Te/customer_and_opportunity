@@ -32,6 +32,8 @@ paths:
     get: {$ref: '#/components/x-operations/portalCallback'}
   /auth/logout:
     post: {$ref: '#/components/x-operations/portalLogout'}
+  /auth/backchannel-logout:
+    post: {$ref: '#/components/x-operations/portalBackchannelLogout'}
   /api/v1/auth/me:
     get: {$ref: '#/components/x-operations/portalMe'}
   /api/v1/capabilities:
@@ -124,6 +126,8 @@ paths:
     post: {$ref: '#/components/x-operations/submitFiling'}
   /api/v1/filings/{id}/material-uploads:
     post: {$ref: '#/components/x-operations/createFilingMaterialUpload'}
+  /api/v1/filings/{id}/materials/{materialID}/content:
+    put: {$ref: '#/components/x-operations/uploadFilingMaterialContent'}
   /api/v1/filings/{id}/materials/{materialID}/complete:
     post: {$ref: '#/components/x-operations/completeFilingMaterialUpload'}
   /api/v1/filings/{id}/exports:
@@ -209,6 +213,12 @@ components:
       deprecated: true
       description: Not consumed as a query parameter. Version fields are in request bodies; this component exists only to explicitly prohibit If-Match substitution.
       schema: {type: integer, format: uint64}
+    IfMatchVersion:
+      name: If-Match
+      in: header
+      required: true
+      description: Material version returned by the upload-session response. Strong and weak quoted integer ETags are accepted.
+      schema: {type: string, pattern: '^(W/)?"?[1-9][0-9]*"?$'}
   schemas:
     Envelope:
       type: object
@@ -287,6 +297,7 @@ components:
     portalActivate: {operationId: portalActivate, tags: [Authentication], security: [], parameters: [{name: token, in: query, required: true, schema: {type: string}}], responses: {'302': {description: Validate invite and redirect to platform OIDC}, '400': {$ref: '#/components/responses/Error'}}}
     portalCallback: {operationId: portalCallback, tags: [Authentication], security: [], responses: {'302': {description: Establish server session after sub-to-customer binding}, '401': {$ref: '#/components/responses/Error'}}}
     portalLogout: {operationId: portalLogout, tags: [Authentication], security: [{portalSession: []}], responses: {'200': {$ref: '#/components/responses/OK'}, '401': {$ref: '#/components/responses/Error'}}}
+    portalBackchannelLogout: {operationId: portalBackchannelLogout, tags: [Authentication], security: [], requestBody: {required: true, content: {application/x-www-form-urlencoded: {schema: {type: object, required: [logout_token], additionalProperties: false, properties: {logout_token: {type: string, maxLength: 16384}}}}}}, responses: {'204': {description: Logout token accepted or already processed}, '400': {description: Invalid logout token}, '503': {description: Logout transaction unavailable}}}
     portalMe: &portalRead {operationId: portalMe, tags: [Account], security: [{portalSession: []}], responses: {'200': {$ref: '#/components/responses/OK'}, '400': {$ref: '#/components/responses/Error'}, '401': {$ref: '#/components/responses/Error'}, '403': {$ref: '#/components/responses/Error'}, '404': {$ref: '#/components/responses/Error'}, '409': {$ref: '#/components/responses/Error'}, '422': {$ref: '#/components/responses/Error'}, '503': {$ref: '#/components/responses/Error'}}}
     portalCapabilities:
       operationId: portalCapabilities
@@ -345,7 +356,22 @@ components:
     saveFilingMatrix: {<<: *filingRead, operationId: saveFilingMatrix, x-permission: filing.update, parameters: [{$ref: '#/components/parameters/ID'}, {name: code, in: path, required: true, schema: {type: string}}, {$ref: '#/components/parameters/IdempotencyKey'}], requestBody: {$ref: '#/components/requestBodies/SaveFilingMatrix'}}
     validateFiling: {<<: *filingRead, operationId: validateFiling, parameters: [{$ref: '#/components/parameters/ID'}]}
     submitFiling: {<<: *filingRead, operationId: submitFiling, x-permission: filing.submit, parameters: [{$ref: '#/components/parameters/ID'}, {$ref: '#/components/parameters/IdempotencyKey'}], requestBody: {$ref: '#/components/requestBodies/Version'}, description: Formal 2025 police submission contract remains pending; accepted local work waits for the configured Provider.}
-    createFilingMaterialUpload: {<<: *filingRead, operationId: createFilingMaterialUpload, x-permission: filing.update, parameters: [{$ref: '#/components/parameters/ID'}, {$ref: '#/components/parameters/IdempotencyKey'}], description: Object store and scanner Providers remain pending; unavailable configuration fails closed.}
+    createFilingMaterialUpload: {<<: *filingRead, operationId: createFilingMaterialUpload, x-permission: filing.update, parameters: [{$ref: '#/components/parameters/ID'}, {$ref: '#/components/parameters/IdempotencyKey'}], description: Creates metadata-bound upload authorization. Local gateway mode returns upload_mode INTERNAL and a Portal content endpoint; no direct object-storage credential is exposed.}
+    uploadFilingMaterialContent:
+      <<: *filingRead
+      operationId: uploadFilingMaterialContent
+      x-permission: filing.update
+      parameters:
+        - {$ref: '#/components/parameters/ID'}
+        - {name: materialID, in: path, required: true, schema: {type: string}}
+        - {$ref: '#/components/parameters/IfMatchVersion'}
+      requestBody:
+        required: true
+        content:
+          application/pdf: {schema: {type: string, contentEncoding: binary}}
+          image/png: {schema: {type: string, contentEncoding: binary}}
+          image/jpeg: {schema: {type: string, contentEncoding: binary}}
+      description: Streams content through Portal; declared length, MIME, SHA-256, tenant ownership, material status and optimistic version are verified before an immutable local object can be finalized.
     completeFilingMaterialUpload: {<<: *filingRead, operationId: completeFilingMaterialUpload, x-permission: filing.update, parameters: [{$ref: '#/components/parameters/ID'}, {name: materialID, in: path, required: true, schema: {type: string}}], requestBody: {$ref: '#/components/requestBodies/Version'}}
     requestFilingExport: {<<: *filingRead, operationId: requestFilingExport, parameters: [{$ref: '#/components/parameters/ID'}], description: Current handler intentionally returns PORTAL_FILING_EXPORT_NOT_CONFIGURED.}
     provisionPortalAccount: &machineProvision {operationId: provisionPortalAccount, tags: [Machine integration], security: [{machineJWT: [portal.identity_mapping.provision]}], x-scope: portal.identity_mapping.provision, x-oauth-client-subject-config: PORTAL_CRM_PROVISION_CLIENT_SUBJECT, responses: {'200': {$ref: '#/components/responses/OK'}, '201': {$ref: '#/components/responses/Created'}, '400': {$ref: '#/components/responses/Error'}, '401': {$ref: '#/components/responses/Error'}, '403': {$ref: '#/components/responses/Error'}, '409': {$ref: '#/components/responses/Error'}}}
