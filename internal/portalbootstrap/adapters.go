@@ -66,7 +66,7 @@ func NewOIDCAdapter(ctx context.Context, config Config) (*OIDCAdapter, error) {
 		verifier: provider.Verifier(&oidc.Config{ClientID: config.OIDCClientID}), provider: provider, httpClient: httpClient,
 		platformBaseURL: strings.TrimRight(config.PlatformBaseURL, "/"), roleConfigHash: config.RoleConfigHash,
 		idpHint:         config.OIDCIdentityProviderHint,
-		expectedContext: sharedauthorization.Expectation{ClientID: config.OIDCClientID, ApplicationCode: config.PlatformApplicationCode, EnvironmentCode: config.PlatformEnvironmentCode},
+		expectedContext: sharedauthorization.Expectation{ClientID: config.OIDCClientID, ApplicationCode: config.PlatformApplicationCode, EnvironmentCode: config.PlatformEnvironmentCode, RoleConfigHash: config.RoleConfigHash},
 	}, nil
 }
 
@@ -121,6 +121,7 @@ func (a *OIDCAdapter) ExchangeAndValidate(ctx context.Context, code, verifier, n
 			return account.Claims{}, errors.New("OIDC authorization context identity does not match token")
 		}
 		contextClaims.RoleConfigHash = a.roleConfigHash
+		contextClaims.OIDCSessionID = claims.OIDCSessionID
 		contextClaims.ExpiresAt = earliestExpiry(claims.ExpiresAt, effectiveToken.Expiry)
 		contextClaims.AccessToken = effectiveToken.AccessToken
 		return contextClaims, nil
@@ -131,6 +132,7 @@ func (a *OIDCAdapter) ExchangeAndValidate(ctx context.Context, code, verifier, n
 func compactPortalClaims(raw compactOIDCClaims, roleConfigHash string, expiresAt time.Time, accessToken string) account.Claims {
 	return account.Claims{
 		Subject:        raw.Subject,
+		OIDCSessionID:  strings.TrimSpace(raw.SessionID),
 		IdentityID:     raw.IdentityID,
 		TenantID:       raw.TenantID,
 		RoleConfigHash: roleConfigHash,
@@ -157,6 +159,7 @@ type compactOIDCClaims struct {
 	Nonce      string `json:"nonce"`
 	TenantID   string `json:"tenant_id"`
 	TokenUse   string `json:"token_use"`
+	SessionID  string `json:"sid"`
 }
 
 func validCompactPortalIdentity(raw compactOIDCClaims, nonce, accessToken string) bool {

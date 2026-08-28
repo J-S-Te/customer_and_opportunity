@@ -17,6 +17,11 @@ func setValidConfig(t *testing.T) {
 	t.Setenv("PMS_CLIENT_ID", "pms-client")
 	t.Setenv("PMS_CLIENT_SECRET", "secret")
 	t.Setenv("PMS_WORKLOG_URL", "https://pms.example/worklogs")
+	t.Setenv("TEMPORAL_WORKER_DEPLOYMENT_NAME", "customer-opportunity-presale")
+	t.Setenv("TEMPORAL_WORKER_BUILD_ID", "presale-worker-v1")
+	t.Setenv("TEMPORAL_WORKER_VERSIONING_ENABLED", "true")
+	t.Setenv("TEMPORAL_WORKER_VERSIONING_POLICY", "PINNED")
+	t.Setenv("TEMPORAL_METRICS_ADDRESS", ":9093")
 }
 
 func TestLoadConfigHeartbeatWindowCoversPollTimeoutAndJitter(t *testing.T) {
@@ -72,6 +77,17 @@ func TestLoadConfigAllowsInternalTemporalModeWithoutExternalEndpoints(t *testing
 	}
 	if !config.Temporal.Enabled || !config.Temporal.Internal {
 		t.Fatalf("unexpected Temporal config: %+v", config.Temporal)
+	}
+	if !config.Temporal.Versioning || config.Temporal.DeploymentName != "customer-opportunity-presale" || config.Temporal.BuildID != "presale-worker-v1" || config.Temporal.MetricsAddress != ":9093" {
+		t.Fatalf("unexpected Temporal versioning config: %+v", config.Temporal)
+	}
+}
+
+func TestLoadConfigRejectsInvalidTemporalWorkerPolicy(t *testing.T) {
+	setValidConfig(t)
+	t.Setenv("TEMPORAL_WORKER_VERSIONING_POLICY", "LATEST")
+	if _, err := LoadConfig(); err == nil || !strings.Contains(err.Error(), "TEMPORAL_WORKER_VERSIONING_POLICY") {
+		t.Fatalf("error=%v", err)
 	}
 }
 

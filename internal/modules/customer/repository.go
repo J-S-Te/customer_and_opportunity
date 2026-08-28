@@ -32,6 +32,12 @@ type Repository interface {
 	ListOpportunityHistory(context.Context, string, uint64, int, int) (pagination.Page[OpportunitySummary], error)
 }
 
+type customerListRow struct {
+	Customer
+	LastFollowupAt       *time.Time      `gorm:"column:last_followup_at"`
+	OpportunityAmountSum decimal.Decimal `gorm:"column:opportunity_amount_sum"`
+}
+
 // CreateRepository 负责交互式创建所需的事务与持久化重放坐标。
 // 将它与通用仓储分离，可避免批量导入的“逐行独立提交”语义被误改成整批事务。
 type CreateRepository interface {
@@ -438,6 +444,7 @@ func (r *GORMRepository) VoidBlockers(ctx context.Context, tenantID string, cust
 func (r *GORMRepository) List(ctx context.Context, principal auth.Principal, query ListQuery) (pagination.Page[Response], error) {
 	query.Page, query.PageSize = pagination.Normalize(query.Page, query.PageSize)
 	db := buildCustomerListQuery(database.FromContext(ctx, r.db), principal, query)
+	usesSummaryJoin := customerListUsesSummaryJoin(query)
 	var total int64
 	if err := db.Count(&total).Error; err != nil {
 		return pagination.Page[Response]{}, err
@@ -451,14 +458,24 @@ func (r *GORMRepository) List(ctx context.Context, principal auth.Principal, que
 	if strings.EqualFold(query.SortOrder, "asc") {
 		order = "ASC"
 	}
-	type listRow struct {
-		Customer
-		LastFollowupAt       *time.Time      `gorm:"column:last_followup_at"`
-		OpportunityAmountSum decimal.Decimal `gorm:"column:opportunity_amount_sum"`
+	var models []customerListRow
+	selectColumns := `crm_customers.id, crm_customers.customer_no, crm_customers.name,
+		crm_customers.customer_type, crm_customers.industry, crm_customers.region,
+		crm_customers.owner_user_id, crm_customers.owner_org_id, crm_customers.status,
+		crm_customers.credit_level, crm_customers.credit_updated_at,
+		crm_customers.end_date, crm_customers.merged_into_id, crm_customers.version,
+		crm_customers.created_at, crm_customers.updated_at`
+	if usesSummaryJoin {
+		selectColumns += `, customer_followup_summary.last_followup_at,
+			COALESCE(customer_opportunity_summary.opportunity_amount_sum, 0) AS opportunity_amount_sum`
 	}
-	var models []listRow
-	if err := db.Select("crm_customers.*, customer_followup_summary.last_followup_at, COALESCE(customer_opportunity_summary.opportunity_amount_sum, 0) AS opportunity_amount_sum").Order(sortField + " " + order).Order("crm_customers.id " + order).Offset((query.Page - 1) * query.PageSize).Limit(query.PageSize).Scan(&models).Error; err != nil {
+	if err := db.Select(selectColumns).Order(sortField + " " + order).Order("crm_customers.id " + order).Offset((query.Page - 1) * query.PageSize).Limit(query.PageSize).Scan(&models).Error; err != nil {
 		return pagination.Page[Response]{}, err
+	}
+	if !usesSummaryJoin {
+		if err := r.loadCustomerListSummaries(ctx, principal.TenantID, models); err != nil {
+			return pagination.Page[Response]{}, err
+		}
 	}
 	items := make([]Response, 0, len(models))
 	for i := range models {
@@ -470,9 +487,80 @@ func (r *GORMRepository) List(ctx context.Context, principal auth.Principal, que
 	return pagination.Page[Response]{Items: items, Page: query.Page, PageSize: query.PageSize, Total: total}, nil
 }
 
+// customerListUsesSummaryJoin keeps aggregate filtering and aggregate sorting
+// in SQL, while the common list path enriches only the current page below.
+// This avoids scanning every follow-up and opportunity in a tenant merely to
+// render the first page of customers.
+func customerListUsesSummaryJoin(query ListQuery) bool {
+	return query.LastFollowupFrom != nil || query.LastFollowupTo != nil ||
+		query.SortBy == "last_followup_at" || query.SortBy == "opportunity_amount_sum"
+}
+
+func (r *GORMRepository) loadCustomerListSummaries(ctx context.Context, tenantID string, rows []customerListRow) error {
+	if len(rows) == 0 {
+		return nil
+	}
+	ids := make([]uint64, 0, len(rows))
+	for index := range rows {
+		ids = append(ids, rows[index].ID)
+	}
+	type followupRow struct {
+		CustomerID     uint64
+		LastFollowupAt time.Time
+	}
+	var followups []followupRow
+	if err := database.FromContext(ctx, r.db).Raw(`SELECT customer_id, MAX(followed_at) AS last_followup_at
+		FROM (
+			SELECT customer_id, followed_at
+			FROM crm_customer_followups
+			WHERE tenant_id=? AND customer_id IN ? AND deleted_at IS NULL
+			UNION ALL
+			SELECT opportunity.customer_id, followup.followed_at
+			FROM crm_opportunity_followups AS followup
+			JOIN crm_opportunities AS opportunity
+			  ON opportunity.tenant_id=followup.tenant_id
+			 AND opportunity.id=followup.opportunity_id
+			 AND opportunity.deleted_at IS NULL
+			WHERE followup.tenant_id=? AND opportunity.customer_id IN ? AND followup.deleted_at IS NULL
+		) AS page_followups
+		GROUP BY customer_id`, tenantID, ids, tenantID, ids).Scan(&followups).Error; err != nil {
+		return err
+	}
+	lastFollowup := make(map[uint64]time.Time, len(followups))
+	for _, followup := range followups {
+		lastFollowup[followup.CustomerID] = followup.LastFollowupAt
+	}
+	type opportunityRow struct {
+		CustomerID uint64
+		Amount     decimal.Decimal
+	}
+	var opportunities []opportunityRow
+	if err := database.FromContext(ctx, r.db).Table("crm_opportunities").
+		Select("customer_id, COALESCE(SUM(expected_amount), 0) AS amount").
+		Where("tenant_id=? AND customer_id IN ? AND deleted_at IS NULL AND opp_status <> 'VOID'", tenantID, ids).
+		Group("customer_id").Scan(&opportunities).Error; err != nil {
+		return err
+	}
+	amountByCustomer := make(map[uint64]decimal.Decimal, len(opportunities))
+	for _, opportunity := range opportunities {
+		amountByCustomer[opportunity.CustomerID] = opportunity.Amount
+	}
+	for index := range rows {
+		if value, ok := lastFollowup[rows[index].ID]; ok {
+			rows[index].LastFollowupAt = &value
+		}
+		if value, ok := amountByCustomer[rows[index].ID]; ok {
+			rows[index].OpportunityAmountSum = value
+		}
+	}
+	return nil
+}
+
 func buildCustomerListQuery(db *gorm.DB, principal auth.Principal, query ListQuery) *gorm.DB {
-	db = scopedCustomer(db.Model(&Customer{}), principal).
-		Joins(`LEFT JOIN (
+	db = scopedCustomer(db.Model(&Customer{}), principal)
+	if customerListUsesSummaryJoin(query) {
+		db = db.
+			Joins(`LEFT JOIN (
 			SELECT tenant_id, customer_id, MAX(followed_at) AS last_followup_at
 			FROM (
 				SELECT tenant_id, customer_id, followed_at FROM crm_customer_followups WHERE tenant_id = ? AND deleted_at IS NULL
@@ -484,10 +572,11 @@ func buildCustomerListQuery(db *gorm.DB, principal auth.Principal, query ListQue
 			) AS all_followups
 			GROUP BY tenant_id, customer_id
 		) AS customer_followup_summary ON customer_followup_summary.tenant_id = crm_customers.tenant_id AND customer_followup_summary.customer_id = crm_customers.id`, principal.TenantID, principal.TenantID).
-		Joins(`LEFT JOIN (
+			Joins(`LEFT JOIN (
 			SELECT tenant_id, customer_id, SUM(expected_amount) AS opportunity_amount_sum
 			FROM crm_opportunities WHERE tenant_id = ? AND deleted_at IS NULL AND opp_status <> 'VOID' GROUP BY tenant_id, customer_id
-		) AS customer_opportunity_summary ON customer_opportunity_summary.tenant_id = crm_customers.tenant_id AND customer_opportunity_summary.customer_id = crm_customers.id`, principal.TenantID)
+			) AS customer_opportunity_summary ON customer_opportunity_summary.tenant_id = crm_customers.tenant_id AND customer_opportunity_summary.customer_id = crm_customers.id`, principal.TenantID)
+	}
 	if keyword := strings.TrimSpace(query.Keyword); keyword != "" {
 		normalized := normalizeName(keyword)
 		pattern := "%" + keyword + "%"
@@ -509,6 +598,9 @@ func buildCustomerListQuery(db *gorm.DB, principal auth.Principal, query ListQue
 	}
 	if query.Status != "" {
 		db = db.Where("status = ?", query.Status)
+	}
+	if query.CreditLevel != "" {
+		db = db.Where("crm_customers.credit_level = ?", query.CreditLevel)
 	}
 	if query.OwnerID != "" {
 		db = db.Where("owner_user_id = ?", query.OwnerID)
@@ -565,5 +657,5 @@ func toResponse(model *Customer) Response {
 		value := model.EndDate.UTC().Format("2006-01-02")
 		endDate = &value
 	}
-	return Response{ID: model.ID, CustomerNo: model.CustomerNo, Name: model.Name, CustomerType: model.CustomerType, Industry: model.Industry, Region: model.Region, OwnerUserID: model.OwnerUserID, OwnerOrgID: model.OwnerOrgID, Status: model.Status, EndDate: endDate, MergedIntoID: model.MergedIntoID, Contacts: contacts, Version: model.Version, CreatedAt: model.CreatedAt, UpdatedAt: model.UpdatedAt, OpportunityAmountSum: "0.00"}
+	return Response{ID: model.ID, CustomerNo: model.CustomerNo, Name: model.Name, CustomerType: model.CustomerType, Industry: model.Industry, Region: model.Region, OwnerUserID: model.OwnerUserID, OwnerOrgID: model.OwnerOrgID, Status: model.Status, CreditLevel: model.CreditLevel, CreditUpdatedAt: model.CreditUpdatedAt, EndDate: endDate, MergedIntoID: model.MergedIntoID, Contacts: contacts, Version: model.Version, CreatedAt: model.CreatedAt, UpdatedAt: model.UpdatedAt, OpportunityAmountSum: "0.00"}
 }

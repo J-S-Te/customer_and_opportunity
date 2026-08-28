@@ -42,6 +42,7 @@ type RouterDependencies struct {
 	Config                Config
 	RequestAudit          gin.HandlerFunc
 	Account               *account.Service
+	BackchannelLogout     gin.HandlerFunc
 	ProvisionAccount      func(context.Context, account.ProvisionCommand) (account.ProvisionResult, error)
 	DisableAccount        func(context.Context, account.DisableCommand) (account.DisableResult, error)
 	ReconcileAccounts     func(context.Context, string, []string) ([]account.ReconciliationSnapshot, error)
@@ -151,6 +152,9 @@ func NewRouter(deps RouterDependencies) *gin.Engine {
 	})
 	base.GET("/auth/callback", completeLogin(deps))
 	base.POST("/auth/logout", authenticate(deps), originAndCSRF(deps.Config), logout(deps))
+	if deps.BackchannelLogout != nil {
+		base.POST("/auth/backchannel-logout", deps.BackchannelLogout)
+	}
 	internal := base.Group("/internal", machineAuth(deps.MachineAuthenticator))
 	internal.POST("/accounts/provision", requireMachineScope("portal.identity_mapping.provision"), requireMachineClientSubject(deps.Config.CRMProvisionClientSubject), provision(deps))
 	internal.POST("/accounts/reconciliation-snapshot", requireMachineScope("portal.identity_mapping.provision"), requireMachineClientSubject(deps.Config.CRMProvisionClientSubject), reconciliationSnapshot(deps))
@@ -225,6 +229,7 @@ func NewRouter(deps RouterDependencies) *gin.Engine {
 	api.POST("/filings/:id/submit", requirePermission("filing.submit"), originAndCSRF(deps.Config), submitFiling(deps))
 	api.DELETE("/filings/:id", requirePermission("filing.delete"), originAndCSRF(deps.Config), deleteFiling(deps))
 	api.POST("/filings/:id/material-uploads", requirePermission("filing.update"), originAndCSRF(deps.Config), createFilingMaterialUpload(deps))
+	api.PUT("/filings/:id/materials/:materialID/content", requirePermission("filing.update"), originAndCSRF(deps.Config), uploadFilingMaterialContent(deps))
 	api.POST("/filings/:id/materials/:materialID/complete", requirePermission("filing.update"), originAndCSRF(deps.Config), completeFilingMaterialUpload(deps))
 	api.POST("/filings/:id/exports", requirePermission("filing.read"), originAndCSRF(deps.Config), unsupported("PORTAL_FILING_EXPORT_NOT_CONFIGURED"))
 	return router
@@ -1519,6 +1524,39 @@ func completeFilingMaterialUpload(deps RouterDependencies) gin.HandlerFunc {
 		}
 		response.OK(c, value)
 	}
+}
+
+func uploadFilingMaterialContent(deps RouterDependencies) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if deps.FilingMaterials == nil {
+			response.Error(c, filing.ErrMaterialUnavailable)
+			return
+		}
+		expectedVersion, err := parseIfMatchVersion(c.GetHeader("If-Match"))
+		if err != nil {
+			response.Error(c, filing.ErrValidation)
+			return
+		}
+		value, err := deps.FilingMaterials.UploadContent(c.Request.Context(), filingActor(c), c.Param("id"), c.Param("materialID"), expectedVersion, c.Request.Body, c.GetHeader("Content-Type"), c.Request.ContentLength)
+		if err != nil {
+			response.Error(c, err)
+			return
+		}
+		response.OK(c, value)
+	}
+}
+
+func parseIfMatchVersion(value string) (uint64, error) {
+	value = strings.TrimSpace(value)
+	if strings.HasPrefix(value, "W/") {
+		value = strings.TrimSpace(strings.TrimPrefix(value, "W/"))
+	}
+	value = strings.Trim(value, `"`)
+	version, err := strconv.ParseUint(value, 10, 64)
+	if err != nil || version == 0 {
+		return 0, filing.ErrValidation
+	}
+	return version, nil
 }
 
 func unlockFiling(deps RouterDependencies) gin.HandlerFunc {

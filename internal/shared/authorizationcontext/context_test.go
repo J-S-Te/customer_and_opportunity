@@ -34,6 +34,7 @@ func TestValidateInterpretsApplicationTenantAndEnvironmentAsAllowAll(t *testing.
 func TestValidateRejectsMalformedOrCrossApplicationScopes(t *testing.T) {
 	expected := Expectation{ClientID: "crm-dev-web", ApplicationCode: "customer_and_opportunity", EnvironmentCode: "dev"}
 	tests := []func(*Response){
+		func(value *Response) { value.SubjectID = "identity-b" },
 		func(value *Response) { value.ClientID = "portal-dev-web" },
 		func(value *Response) { value.ApplicationCode = "customer_portal" },
 		func(value *Response) { value.EnvironmentCode = "prod" },

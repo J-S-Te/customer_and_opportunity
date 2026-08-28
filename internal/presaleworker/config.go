@@ -25,13 +25,20 @@ type Config struct {
 	Temporal          TemporalConfig
 }
 
+// TemporalConfig 描述售前集成 Worker 的 Temporal 连接、指标和版本路由配置。
 type TemporalConfig struct {
-	Enabled   bool
-	Internal  bool
-	Address   string
-	Namespace string
-	TaskQueue string
-	TLS       bool
+	Enabled        bool
+	Internal       bool
+	TLS            bool
+	Versioning     bool
+	Address        string
+	Namespace      string
+	TaskQueue      string
+	APIKey         string
+	DeploymentName string
+	BuildID        string
+	Policy         string
+	MetricsAddress string
 }
 
 type HTTPPortConfig struct {
@@ -70,6 +77,10 @@ func LoadConfig() (Config, error) {
 	if err != nil {
 		return Config{}, fmt.Errorf("PRESALE_TEMPORAL_INTERNAL_MODE: %w", err)
 	}
+	temporalVersioning, err := boolEnv("TEMPORAL_WORKER_VERSIONING_ENABLED", true)
+	if err != nil {
+		return Config{}, fmt.Errorf("TEMPORAL_WORKER_VERSIONING_ENABLED: %w", err)
+	}
 	cfg := Config{
 		MySQLDSN:          os.Getenv("MYSQL_DSN"),
 		WorkerID:          env("PRESALE_WORKER_ID", hostname()),
@@ -84,7 +95,13 @@ func LoadConfig() (Config, error) {
 		PMS: HTTPPortConfig{TokenURL: os.Getenv("PMS_TOKEN_URL"), ClientID: os.Getenv("PMS_CLIENT_ID"), ClientSecret: os.Getenv("PMS_CLIENT_SECRET"), Scope: env("PMS_SCOPE", "presale.worklog.write"), PublishURL: os.Getenv("PMS_WORKLOG_URL"), TLS: integrationhttp.TLSOptions{
 			RootCAFile: os.Getenv("PMS_TLS_ROOT_CA_FILE"), ClientCertFile: os.Getenv("PMS_TLS_CLIENT_CERT_FILE"), ClientKeyFile: os.Getenv("PMS_TLS_CLIENT_KEY_FILE"), ServerName: os.Getenv("PMS_TLS_SERVER_NAME"), RequireMTLS: pmsRequireMTLS,
 		}},
-		Temporal: TemporalConfig{Enabled: temporalEnabled, Internal: temporalInternal, Address: env("TEMPORAL_ADDRESS", "temporal:7233"), Namespace: env("TEMPORAL_NAMESPACE", "default"), TaskQueue: env("TEMPORAL_TASK_QUEUE", "customer-opportunity-presale"), TLS: temporalTLS},
+		Temporal: TemporalConfig{
+			Enabled: temporalEnabled, Internal: temporalInternal, TLS: temporalTLS, Versioning: temporalVersioning,
+			Address: env("TEMPORAL_ADDRESS", "temporal:7233"), Namespace: env("TEMPORAL_NAMESPACE", "default"), TaskQueue: env("TEMPORAL_TASK_QUEUE", "customer-opportunity-presale"),
+			APIKey:         os.Getenv("TEMPORAL_API_KEY"),
+			DeploymentName: env("TEMPORAL_WORKER_DEPLOYMENT_NAME", "customer-opportunity-presale"), BuildID: env("TEMPORAL_WORKER_BUILD_ID", "presale-worker-v1"),
+			Policy: strings.ToUpper(env("TEMPORAL_WORKER_VERSIONING_POLICY", "PINNED")), MetricsAddress: env("TEMPORAL_METRICS_ADDRESS", ":9093"),
+		},
 	}
 	if cfg.MySQLDSN == "" {
 		return Config{}, fmt.Errorf("MYSQL_DSN is required")
@@ -106,8 +123,14 @@ func LoadConfig() (Config, error) {
 	} else if !cfg.Temporal.Enabled {
 		return Config{}, fmt.Errorf("PRESALE_TEMPORAL_INTERNAL_MODE requires PRESALE_TEMPORAL_ENABLED=true")
 	}
-	if cfg.Temporal.Enabled && (strings.TrimSpace(cfg.Temporal.Address) == "" || strings.TrimSpace(cfg.Temporal.Namespace) == "" || strings.TrimSpace(cfg.Temporal.TaskQueue) == "") {
-		return Config{}, fmt.Errorf("Temporal address, namespace and task queue are required when PRESALE_TEMPORAL_ENABLED=true")
+	if cfg.Temporal.Enabled && (strings.TrimSpace(cfg.Temporal.Address) == "" || strings.TrimSpace(cfg.Temporal.Namespace) == "" || strings.TrimSpace(cfg.Temporal.TaskQueue) == "" || strings.TrimSpace(cfg.Temporal.BuildID) == "" || strings.TrimSpace(cfg.Temporal.MetricsAddress) == "") {
+		return Config{}, fmt.Errorf("Temporal address, namespace, task queue, build ID and metrics address are required when PRESALE_TEMPORAL_ENABLED=true")
+	}
+	if cfg.Temporal.Enabled && cfg.Temporal.Versioning && strings.TrimSpace(cfg.Temporal.DeploymentName) == "" {
+		return Config{}, fmt.Errorf("TEMPORAL_WORKER_DEPLOYMENT_NAME is required when versioning is enabled")
+	}
+	if cfg.Temporal.Policy != "PINNED" && cfg.Temporal.Policy != "AUTO_UPGRADE" {
+		return Config{}, fmt.Errorf("TEMPORAL_WORKER_VERSIONING_POLICY must be PINNED or AUTO_UPGRADE")
 	}
 	return cfg, nil
 }

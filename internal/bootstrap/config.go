@@ -35,6 +35,7 @@ type Config struct {
 	OIDCRoleConfigHash        string
 	OIDCSessionCookieName     string
 	OIDCSessionTTL            time.Duration
+	OIDCBackchannelLogoutTTL  time.Duration
 	OIDCSessionSecure         bool
 	OIDCMaxRoles              int
 	// AllowInsecureHTTPSession 仅用于无 HTTPS 的测试服务器：显式开启后允许非回环 HTTP
@@ -127,6 +128,13 @@ type Config struct {
 	AttachmentS3SecretAccessKey      string
 	AttachmentS3PathStyle            bool
 	AttachmentS3Prefix               string
+	AttachmentFileGatewayMode        string
+	AttachmentFileGatewayBaseURL     string
+	AttachmentFileGatewayTokenURL    string
+	AttachmentFileGatewayClientID    string
+	AttachmentFileGatewaySecret      string
+	AttachmentFileGatewayScope       string
+	AttachmentFileGatewayApplication string
 	ClamAVEnabled                    bool
 	ClamAVNetwork                    string
 	ClamAVAddress                    string
@@ -183,6 +191,10 @@ func LoadConfig() (Config, error) {
 	sessionTTL, err := time.ParseDuration(valueOrDefault("OIDC_SESSION_TTL", "15m"))
 	if err != nil {
 		return Config{}, fmt.Errorf("OIDC_SESSION_TTL: %w", err)
+	}
+	backchannelLogoutTTL, err := time.ParseDuration(valueOrDefault("OIDC_BACKCHANNEL_LOGOUT_MAX_TTL", "5m"))
+	if err != nil {
+		return Config{}, fmt.Errorf("OIDC_BACKCHANNEL_LOGOUT_MAX_TTL: %w", err)
 	}
 	maxRoles, err := strconv.Atoi(valueOrDefault("OIDC_MAX_EFFECTIVE_ROLES", "10"))
 	if err != nil {
@@ -284,6 +296,21 @@ func LoadConfig() (Config, error) {
 	if err != nil {
 		return Config{}, fmt.Errorf("ATTACHMENT_S3_PATH_STYLE: %w", err)
 	}
+	attachmentFileGatewayMode := strings.ToLower(strings.TrimSpace(valueOrDefault("ATTACHMENT_FILE_GATEWAY_MODE", "legacy")))
+	if attachmentFileGatewayMode != "legacy" && attachmentFileGatewayMode != "dual" && attachmentFileGatewayMode != "required" {
+		return Config{}, fmt.Errorf("ATTACHMENT_FILE_GATEWAY_MODE must be legacy, dual or required")
+	}
+	if attachmentFileGatewayMode != "legacy" {
+		for _, required := range []struct{ key, value string }{
+			{"ATTACHMENT_FILE_GATEWAY_BASE_URL", os.Getenv("ATTACHMENT_FILE_GATEWAY_BASE_URL")}, {"ATTACHMENT_FILE_GATEWAY_TOKEN_URL", os.Getenv("ATTACHMENT_FILE_GATEWAY_TOKEN_URL")},
+			{"ATTACHMENT_FILE_GATEWAY_CLIENT_ID", os.Getenv("ATTACHMENT_FILE_GATEWAY_CLIENT_ID")}, {"ATTACHMENT_FILE_GATEWAY_CLIENT_SECRET", os.Getenv("ATTACHMENT_FILE_GATEWAY_CLIENT_SECRET")},
+			{"ATTACHMENT_FILE_GATEWAY_APPLICATION_ID", os.Getenv("ATTACHMENT_FILE_GATEWAY_APPLICATION_ID")},
+		} {
+			if strings.TrimSpace(required.value) == "" {
+				return Config{}, fmt.Errorf("%s is required when ATTACHMENT_FILE_GATEWAY_MODE=%s", required.key, attachmentFileGatewayMode)
+			}
+		}
+	}
 	if attachmentS3Enabled {
 		// S3 适配器启用时要求完整的连接参数；缺少任何一项都在启动期失败，
 		// 避免运行中在本地降级与对象存储之间静默切换信任边界。
@@ -311,7 +338,7 @@ func LoadConfig() (Config, error) {
 		OIDCIssuer: os.Getenv("OIDC_ISSUER"), OIDCBackchannelBaseURL: os.Getenv("OIDC_BACKCHANNEL_BASE_URL"),
 		OIDCClientID: os.Getenv("OIDC_CLIENT_ID"), OIDCClientSecret: os.Getenv("OIDC_CLIENT_SECRET"), OIDCIDPHint: strings.TrimSpace(valueOrDefault("OIDC_IDP_HINT", "basic-platform")), OIDCRedirectURI: os.Getenv("OIDC_REDIRECT_URI"), OIDCPostLogoutRedirectURI: os.Getenv("OIDC_POST_LOGOUT_REDIRECT_URI"),
 		OIDCScopes: splitFields(valueOrDefault("OIDC_SCOPES", "openid profile")), OIDCTenantID: os.Getenv("OIDC_TENANT_ID"), OIDCRoleConfigHash: os.Getenv("OIDC_ROLE_CONFIG_HASH"),
-		OIDCSessionCookieName: valueOrDefault("OIDC_SESSION_COOKIE_NAME", "customer_opportunity_session"), OIDCSessionTTL: sessionTTL, OIDCSessionSecure: sessionSecure, OIDCMaxRoles: maxRoles,
+		OIDCSessionCookieName: valueOrDefault("OIDC_SESSION_COOKIE_NAME", "customer_opportunity_session"), OIDCSessionTTL: sessionTTL, OIDCBackchannelLogoutTTL: backchannelLogoutTTL, OIDCSessionSecure: sessionSecure, OIDCMaxRoles: maxRoles,
 		AllowInsecureHTTPSession: allowInsecureHTTPSession,
 		MachineTokenIssuer:       os.Getenv("MACHINE_TOKEN_ISSUER"), MachineTokenAudience: os.Getenv("MACHINE_TOKEN_AUDIENCE"),
 		MachineTokenPublicKeyPath:        os.Getenv("MACHINE_TOKEN_PUBLIC_KEY_PATH"),
@@ -387,29 +414,33 @@ func LoadConfig() (Config, error) {
 		},
 		QBLaunchEnabled: qbLaunchEnabled, QBQuotationPublicURL: os.Getenv("QB_QUOTATION_PUBLIC_URL"),
 		QBBidPublicURL: os.Getenv("QB_BID_PUBLIC_URL"), QBLaunchSigningKey: qbLaunchSigningKey, QBLaunchTTL: qbLaunchTTL,
-		AttachmentLocalEnabled:    attachmentLocalEnabled,
-		AttachmentLocalRoot:       valueOrDefault("ATTACHMENT_LOCAL_ROOT", "/app/data/attachments"),
-		AttachmentS3Enabled:       attachmentS3Enabled,
-		AttachmentS3Endpoint:      strings.TrimSpace(os.Getenv("ATTACHMENT_S3_ENDPOINT")),
-		AttachmentS3Region:        strings.TrimSpace(os.Getenv("ATTACHMENT_S3_REGION")),
-		AttachmentS3Bucket:        strings.TrimSpace(os.Getenv("ATTACHMENT_S3_BUCKET")),
-		AttachmentS3AccessKeyID:   strings.TrimSpace(os.Getenv("ATTACHMENT_S3_ACCESS_KEY_ID")),
+		AttachmentLocalEnabled:      attachmentLocalEnabled,
+		AttachmentLocalRoot:         valueOrDefault("ATTACHMENT_LOCAL_ROOT", "/app/data/attachments"),
+		AttachmentS3Enabled:         attachmentS3Enabled,
+		AttachmentS3Endpoint:        strings.TrimSpace(os.Getenv("ATTACHMENT_S3_ENDPOINT")),
+		AttachmentS3Region:          strings.TrimSpace(os.Getenv("ATTACHMENT_S3_REGION")),
+		AttachmentS3Bucket:          strings.TrimSpace(os.Getenv("ATTACHMENT_S3_BUCKET")),
+		AttachmentS3AccessKeyID:     strings.TrimSpace(os.Getenv("ATTACHMENT_S3_ACCESS_KEY_ID")),
 		AttachmentS3SecretAccessKey: strings.TrimSpace(os.Getenv("ATTACHMENT_S3_SECRET_ACCESS_KEY")),
-		AttachmentS3PathStyle:     attachmentS3PathStyle,
-		AttachmentS3Prefix:        strings.TrimSpace(os.Getenv("ATTACHMENT_S3_PREFIX")),
-		ClamAVEnabled:             clamAVEnabled,
-		ClamAVNetwork:             clamAVNetwork,
-		ClamAVAddress:             strings.TrimSpace(os.Getenv("CLAMAV_ADDRESS")),
-		PlatformBaseURL:           os.Getenv("PLATFORM_BASE_URL"),
-		PlatformApplicationCode:   valueOrDefault("PLATFORM_APPLICATION_CODE", "customer_and_opportunity"),
-		PlatformEnvironmentCode:   valueOrDefault("PLATFORM_ENVIRONMENT_CODE", "dev"),
-		PlatformAuditClientID:     os.Getenv("PLATFORM_AUDIT_CLIENT_ID"),
-		PlatformAuditClientSecret: os.Getenv("PLATFORM_AUDIT_CLIENT_SECRET"),
-		PlatformAuditWorkerID:     valueOrDefault("PLATFORM_AUDIT_WORKER_ID", "crm-api-audit"),
-		PlatformAuditPollInterval: platformAuditPollInterval,
-		PlatformAuditBatchSize:    platformAuditBatchSize,
-		CatalogSyncEnabled:        catalogSyncEnabled,
-		CatalogApplicationID:      os.Getenv("PLATFORM_AUTHORIZATION_CATALOG_APPLICATION_ID"), CatalogClientID: os.Getenv("PLATFORM_AUTHORIZATION_CATALOG_CLIENT_ID"),
+		AttachmentS3PathStyle:       attachmentS3PathStyle,
+		AttachmentS3Prefix:          strings.TrimSpace(os.Getenv("ATTACHMENT_S3_PREFIX")),
+		AttachmentFileGatewayMode:   attachmentFileGatewayMode, AttachmentFileGatewayBaseURL: strings.TrimSpace(os.Getenv("ATTACHMENT_FILE_GATEWAY_BASE_URL")),
+		AttachmentFileGatewayTokenURL: strings.TrimSpace(os.Getenv("ATTACHMENT_FILE_GATEWAY_TOKEN_URL")), AttachmentFileGatewayClientID: strings.TrimSpace(os.Getenv("ATTACHMENT_FILE_GATEWAY_CLIENT_ID")),
+		AttachmentFileGatewaySecret: strings.TrimSpace(os.Getenv("ATTACHMENT_FILE_GATEWAY_CLIENT_SECRET")), AttachmentFileGatewayScope: valueOrDefault("ATTACHMENT_FILE_GATEWAY_SCOPE", "platform:file:upload platform:file:bind"),
+		AttachmentFileGatewayApplication: strings.TrimSpace(os.Getenv("ATTACHMENT_FILE_GATEWAY_APPLICATION_ID")),
+		ClamAVEnabled:                    clamAVEnabled,
+		ClamAVNetwork:                    clamAVNetwork,
+		ClamAVAddress:                    strings.TrimSpace(os.Getenv("CLAMAV_ADDRESS")),
+		PlatformBaseURL:                  os.Getenv("PLATFORM_BASE_URL"),
+		PlatformApplicationCode:          valueOrDefault("PLATFORM_APPLICATION_CODE", "customer_and_opportunity"),
+		PlatformEnvironmentCode:          valueOrDefault("PLATFORM_ENVIRONMENT_CODE", "dev"),
+		PlatformAuditClientID:            os.Getenv("PLATFORM_AUDIT_CLIENT_ID"),
+		PlatformAuditClientSecret:        os.Getenv("PLATFORM_AUDIT_CLIENT_SECRET"),
+		PlatformAuditWorkerID:            valueOrDefault("PLATFORM_AUDIT_WORKER_ID", "crm-api-audit"),
+		PlatformAuditPollInterval:        platformAuditPollInterval,
+		PlatformAuditBatchSize:           platformAuditBatchSize,
+		CatalogSyncEnabled:               catalogSyncEnabled,
+		CatalogApplicationID:             os.Getenv("PLATFORM_AUTHORIZATION_CATALOG_APPLICATION_ID"), CatalogClientID: os.Getenv("PLATFORM_AUTHORIZATION_CATALOG_CLIENT_ID"),
 		CatalogClientSecret:          os.Getenv("PLATFORM_AUTHORIZATION_CATALOG_CLIENT_SECRET"),
 		PresaleWorkerHeartbeatMaxAge: presaleWorkerHeartbeatMaxAge,
 	}
@@ -727,6 +758,9 @@ func (c Config) validateOIDC() error {
 	}
 	if c.OIDCSessionTTL <= 0 || c.OIDCSessionTTL > maxOIDCSessionTTL {
 		return fmt.Errorf("OIDC_SESSION_TTL must be positive and at most %s", maxOIDCSessionTTL)
+	}
+	if c.OIDCBackchannelLogoutTTL != 0 && (c.OIDCBackchannelLogoutTTL < 30*time.Second || c.OIDCBackchannelLogoutTTL > 15*time.Minute) {
+		return fmt.Errorf("OIDC_BACKCHANNEL_LOGOUT_MAX_TTL must be between 30s and 15m")
 	}
 	if c.OIDCMaxRoles <= 0 || c.OIDCMaxRoles > 10 {
 		return fmt.Errorf("OIDC_MAX_EFFECTIVE_ROLES must be between 1 and 10")

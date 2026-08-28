@@ -111,6 +111,27 @@ func (r *queryRepository) LatestProgressByRequest(_ context.Context, _ string, _
 	return map[uint64]string{7: "latest progress"}, nil
 }
 
+func TestRequestListAlertApplicabilityPreservesLevelAndTimestampRules(t *testing.T) {
+	pendingNodeOne := requestListRow{Status: StatusPendingApproval, CurrentApprovalNode: 1}
+	if !alertAppliesToListRequestLevel(AlertApprovalNode1Overdue, pendingNodeOne) {
+		t.Fatal("current approval node alert must affect level")
+	}
+	if alertAppliesToListRequestLevel(AlertApprovalNode2Overdue, pendingNodeOne) {
+		t.Fatal("other approval node alert must not affect level")
+	}
+	if !alertAppliesToListRequestDates(AlertApprovalNode2Overdue, pendingNodeOne) {
+		t.Fatal("pending approval timestamps must retain all approval-node alerts")
+	}
+	executing := requestListRow{Status: StatusExecuting}
+	if !alertAppliesToListRequestLevel(AlertExecutionDueSoon, executing) || !alertAppliesToListRequestDates(AlertExecutionOverdue, executing) {
+		t.Fatal("execution alerts must contribute to both level and timestamps")
+	}
+	terminal := requestListRow{Status: StatusCompleted}
+	if alertAppliesToListRequestLevel(AlertExecutionOverdue, terminal) || alertAppliesToListRequestDates(AlertExecutionOverdue, terminal) {
+		t.Fatal("terminal requests must not expose active alert state")
+	}
+}
+
 func TestListRequestsDerivesRoleScope(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

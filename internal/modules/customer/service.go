@@ -141,7 +141,7 @@ func (s *Service) Create(ctx context.Context, request CreateRequest) (*Response,
 		value := s.codec.HMAC(request.UnifiedCreditCode)
 		creditHMAC = &value
 	}
-	model := &Customer{Name: strings.TrimSpace(request.Name), NormalizedName: normalizeName(request.Name), UnifiedCreditCodeCipher: creditCipher, UnifiedCreditCodeHMAC: creditHMAC, CustomerType: request.CustomerType, Industry: request.Industry, Region: request.Region, OwnerUserID: request.OwnerUserID, OwnerOrgID: request.OwnerOrgID, Status: StatusActive}
+	model := &Customer{Name: strings.TrimSpace(request.Name), NormalizedName: normalizeName(request.Name), UnifiedCreditCodeCipher: creditCipher, UnifiedCreditCodeHMAC: creditHMAC, CustomerType: request.CustomerType, Industry: request.Industry, Region: request.Region, OwnerUserID: request.OwnerUserID, OwnerOrgID: request.OwnerOrgID, Status: StatusActive, CreditLevel: "B", CreditChangeSource: "INITIAL"}
 	model.TenantID, model.CreatedBy, model.UpdatedBy, model.Version = principal.TenantID, principal.UserID, principal.UserID, 1
 	for index, item := range request.Contacts {
 		phoneCipher, encryptErr := s.codec.Encrypt(item.Phone)
@@ -580,6 +580,10 @@ func validateListQuery(query ListQuery, now time.Time) (ListQuery, error) {
 	query.Region = strings.TrimSpace(query.Region)
 	query.OwnerID = strings.TrimSpace(query.OwnerID)
 	query.Status = strings.TrimSpace(query.Status)
+	query.CreditLevel = strings.ToUpper(strings.TrimSpace(query.CreditLevel))
+	if query.CreditLevel != "" && query.CreditLevel != "A" && query.CreditLevel != "B" && query.CreditLevel != "C" && query.CreditLevel != "D" {
+		return ListQuery{}, ErrInvalidQuery
+	}
 	query.QuickFilter = strings.ToUpper(strings.TrimSpace(query.QuickFilter))
 	query.SortBy = strings.ToLower(strings.TrimSpace(query.SortBy))
 	query.SortOrder = strings.ToLower(strings.TrimSpace(query.SortOrder))

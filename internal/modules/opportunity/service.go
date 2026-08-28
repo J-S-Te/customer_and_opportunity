@@ -1170,6 +1170,7 @@ func (s *Service) ContractLinkCallback(ctx context.Context, id uint64, input Con
 		if input.SyncVersion <= model.ContractSyncVersion {
 			return apperror.New(409, "CRM_CONTRACT_LINK_STALE", "contract link callback is stale")
 		}
+		previousSyncVersion := model.ContractSyncVersion
 		model.ContractIntakeID = stringPtr(strings.TrimSpace(input.IntakeID))
 		model.ContractLinkStatus = input.Status
 		model.ContractSyncVersion = input.SyncVersion
@@ -1182,7 +1183,8 @@ func (s *Service) ContractLinkCallback(ctx context.Context, id uint64, input Con
 			model.ContractLinkedAt = nil
 		}
 		model.UpdatedBy = principal.UserID
-		if err = s.repo.UpdateContractLink(txCtx, model, model.ContractSyncVersion-1); err != nil {
+		// CAS 必须比较数据库读取到的旧版本；回调版本允许跨级追赶，不能假设只递增 1。
+		if err = s.repo.UpdateContractLink(txCtx, model, previousSyncVersion); err != nil {
 			return err
 		}
 		result = toResponse(model)

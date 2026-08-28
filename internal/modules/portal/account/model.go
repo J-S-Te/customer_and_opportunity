@@ -39,6 +39,7 @@ type Session struct {
 	PublicID               string      `gorm:"size:64;not null;uniqueIndex"`
 	SessionIDHash          string      `gorm:"size:64;not null;uniqueIndex"`
 	PlatformUserID         string      `gorm:"size:128;not null;index"`
+	OIDCSessionID          string      `gorm:"column:oidc_sid;size:128;not null;index"`
 	LoginIP                string      `gorm:"size:45;not null"`
 	CustomerID             uint64      `gorm:"not null;index"`
 	AuthzRevision          uint64      `gorm:"not null"`
@@ -60,6 +61,16 @@ type Session struct {
 }
 
 func (Session) TableName() string { return "portal_sessions" }
+
+// BackchannelLogoutReplay 是 Portal 自己的注销令牌防重放账本，不与 CRM 的受众或会话混用。
+type BackchannelLogoutReplay struct {
+	JTI       string    `gorm:"primaryKey;size:128"`
+	Issuer    string    `gorm:"size:255;not null"`
+	ExpiresAt time.Time `gorm:"precision:3;not null;index"`
+	CreatedAt time.Time `gorm:"precision:3;not null"`
+}
+
+func (BackchannelLogoutReplay) TableName() string { return "portal_oidc_backchannel_logout_replays" }
 
 type ActivationContext struct {
 	database.Model

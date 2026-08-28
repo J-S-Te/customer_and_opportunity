@@ -31,6 +31,7 @@ type Config struct {
 	SessionCookieName        string
 	SessionCookieSecure      bool
 	SessionTTL               time.Duration
+	BackchannelLogoutTTL     time.Duration
 	AccountSecurityCenterURL string
 	// AllowInsecureHTTPSession 仅用于无 HTTPS 的测试服务器：显式开启后允许非回环 HTTP
 	// 源使用非 Secure 会话 Cookie 和非 HTTPS 安全中心链接。默认关闭，生产必须保持 false。
@@ -64,6 +65,9 @@ type Config struct {
 	// UsePlatformBinding 打开后，非邀请登录以平台 authorization-context 的 customer_ref
 	// 作为客户边界（Phase 4），本地 portal_identity_links 仅作邀请链路与回退。
 	UsePlatformBinding bool
+	// FileGatewayLocalEnabled 启用本地文件网关时，报告文件仅从该根目录读取。
+	FileGatewayLocalEnabled bool
+	FileGatewayLocalRoot    string
 }
 
 func LoadConfig() (Config, error) {
@@ -79,6 +83,10 @@ func LoadConfig() (Config, error) {
 	ttl, err := time.ParseDuration(valueOrDefault("PORTAL_SESSION_TTL", "15m"))
 	if err != nil {
 		return Config{}, fmt.Errorf("PORTAL_SESSION_TTL: %w", err)
+	}
+	backchannelLogoutTTL, err := time.ParseDuration(valueOrDefault("PORTAL_OIDC_BACKCHANNEL_LOGOUT_MAX_TTL", "5m"))
+	if err != nil {
+		return Config{}, fmt.Errorf("PORTAL_OIDC_BACKCHANNEL_LOGOUT_MAX_TTL: %w", err)
 	}
 	projectHistoryStaleAfter, err := time.ParseDuration(valueOrDefault("PORTAL_PROJECT_HISTORY_STALE_AFTER", "10m"))
 	if err != nil {
@@ -112,6 +120,10 @@ func LoadConfig() (Config, error) {
 	if err != nil {
 		return Config{}, fmt.Errorf("PORTAL_USE_PLATFORM_BINDING: %w", err)
 	}
+	fileGatewayLocalEnabled, err := strconv.ParseBool(valueOrDefault("PORTAL_FILE_GATEWAY_LOCAL_ENABLED", "false"))
+	if err != nil {
+		return Config{}, fmt.Errorf("PORTAL_FILE_GATEWAY_LOCAL_ENABLED: %w", err)
+	}
 	config := Config{
 		Address: valueOrDefault("PORTAL_HTTP_ADDRESS", ":8091"), MySQLDSN: os.Getenv("PORTAL_MYSQL_DSN"),
 		PathPrefix: valueOrDefault("PORTAL_PATH_PREFIX", "/customer-portal"), PublicOrigin: os.Getenv("PORTAL_PUBLIC_ORIGIN"),
@@ -120,7 +132,7 @@ func LoadConfig() (Config, error) {
 		OIDCClientID: os.Getenv("PORTAL_OIDC_CLIENT_ID"), OIDCClientSecret: os.Getenv("PORTAL_OIDC_CLIENT_SECRET"),
 		OIDCRedirectURI: os.Getenv("PORTAL_OIDC_REDIRECT_URI"), OIDCScopes: fields(valueOrDefault("PORTAL_OIDC_SCOPES", "openid profile")),
 		OIDCIdentityProviderHint: portalOIDCIdentityProviderHint(),
-		SessionCookieName:        valueOrDefault("PORTAL_SESSION_COOKIE_NAME", "customer_portal_session"), SessionCookieSecure: secure, SessionTTL: ttl,
+		SessionCookieName:        valueOrDefault("PORTAL_SESSION_COOKIE_NAME", "customer_portal_session"), SessionCookieSecure: secure, SessionTTL: ttl, BackchannelLogoutTTL: backchannelLogoutTTL,
 		AllowInsecureHTTPSession: allowInsecureHTTPSession,
 		AccountSecurityCenterURL: os.Getenv("PORTAL_ACCOUNT_SECURITY_CENTER_URL"),
 		MachineTokenIssuer:       os.Getenv("PORTAL_MACHINE_TOKEN_ISSUER"), MachineTokenAudience: os.Getenv("PORTAL_MACHINE_TOKEN_AUDIENCE"),
@@ -140,6 +152,8 @@ func LoadConfig() (Config, error) {
 		PlatformAuditBatchSize:    platformAuditBatchSize,
 		CatalogSyncEnabled:        catalogSyncEnabled,
 		UsePlatformBinding:        usePlatformBinding,
+		FileGatewayLocalEnabled:   fileGatewayLocalEnabled,
+		FileGatewayLocalRoot:      valueOrDefault("PORTAL_FILE_GATEWAY_LOCAL_ROOT", "/app/data/file-gateway"),
 		CatalogApplicationID:      os.Getenv("PORTAL_AUTHORIZATION_CATALOG_APPLICATION_ID"), CatalogClientID: os.Getenv("PORTAL_AUTHORIZATION_CATALOG_CLIENT_ID"),
 		CatalogClientSecret: os.Getenv("PORTAL_AUTHORIZATION_CATALOG_CLIENT_SECRET"),
 	}
@@ -228,6 +242,9 @@ func (c Config) validate() error {
 	}
 	if c.SessionTTL <= 0 || c.SessionTTL > maxSessionTTL {
 		return fmt.Errorf("PORTAL_SESSION_TTL must be positive and at most %s", maxSessionTTL)
+	}
+	if c.BackchannelLogoutTTL != 0 && (c.BackchannelLogoutTTL < 30*time.Second || c.BackchannelLogoutTTL > 15*time.Minute) {
+		return fmt.Errorf("PORTAL_OIDC_BACKCHANNEL_LOGOUT_MAX_TTL must be between 30s and 15m")
 	}
 	if c.PathPrefix == "/" || !strings.HasPrefix(c.PathPrefix, "/") || strings.HasSuffix(c.PathPrefix, "/") {
 		return fmt.Errorf("PORTAL_PATH_PREFIX must be a non-root absolute path without trailing slash")

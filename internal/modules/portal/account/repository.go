@@ -273,6 +273,29 @@ func (r *GORMRepository) RevokeSessionsForSubject(ctx context.Context, tenantID,
 		Where("tenant_id = ? AND platform_user_id = ? AND revoked_at IS NULL", tenantID, subject).
 		Update("revoked_at", now).Error
 }
+
+// ApplyBackchannelLogout 原子登记 Portal 防重放 JTI 并撤销 Portal 自己的会话。
+func (r *GORMRepository) ApplyBackchannelLogout(ctx context.Context, jti, issuer, subject, sid string, expiresAt, now time.Time) (replayed bool, err error) {
+	err = r.tx(ctx).Transaction(func(tx *gorm.DB) error {
+		entry := BackchannelLogoutReplay{JTI: jti, Issuer: issuer, ExpiresAt: expiresAt, CreatedAt: now}
+		created := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&entry)
+		if created.Error != nil {
+			return created.Error
+		}
+		if created.RowsAffected == 0 {
+			replayed = true
+			return nil
+		}
+		query := tx.Model(&Session{}).Where("revoked_at IS NULL AND deleted_at IS NULL")
+		if sid != "" {
+			query = query.Where("oidc_sid = ?", sid)
+		} else {
+			query = query.Where("platform_user_id = ?", subject)
+		}
+		return query.Updates(map[string]any{"revoked_at": now, "updated_at": now}).Error
+	})
+	return replayed, err
+}
 func (r *GORMRepository) TouchSession(ctx context.Context, tenantID, sessionHash string, seenAt, checkedAt time.Time) error {
 	updates := map[string]any{"last_seen_at": seenAt, "updated_at": seenAt}
 	if !checkedAt.IsZero() {

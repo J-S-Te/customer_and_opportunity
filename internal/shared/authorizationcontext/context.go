@@ -28,23 +28,29 @@ var (
 // identity is validated independently from user identity so a valid token for
 // another subsystem can never be promoted into the current subsystem session.
 type Response struct {
-	Subject               string                 `json:"sub"`
-	IdentityID            string                 `json:"identity_id"`
-	TenantID              string                 `json:"tenant_id"`
-	PersonID              string                 `json:"person_id"`
-	ClientID              string                 `json:"client_id"`
-	ApplicationCode       string                 `json:"application_code"`
-	EnvironmentCode       string                 `json:"environment_code"`
-	Roles                 []string               `json:"roles"`
-	Permissions           []string               `json:"permissions"`
-	DataScopes            []sharedauth.DataScope `json:"data_scopes"`
-	AuthorizationRevision uint64                 `json:"authorization_revision"`
-	CustomerRef           string                 `json:"customer_ref,omitempty"`
-	UserLoginIP           string                 `json:"user_login_ip,omitempty"`
+	Subject                    string                 `json:"sub"`
+	SubjectID                  string                 `json:"subject_id"`
+	IdentityID                 string                 `json:"identity_id"`
+	TenantID                   string                 `json:"tenant_id"`
+	PersonID                   string                 `json:"person_id"`
+	ClientID                   string                 `json:"client_id"`
+	ApplicationCode            string                 `json:"application_code"`
+	EnvironmentCode            string                 `json:"environment_code"`
+	Roles                      []string               `json:"roles"`
+	Permissions                []string               `json:"permissions"`
+	DataScopes                 []sharedauth.DataScope `json:"data_scopes"`
+	CatalogVersion             string                 `json:"catalog_version"`
+	CompatibleCatalogVersions  []string               `json:"compatible_catalog_versions"`
+	RoleConfigHash             string                 `json:"role_config_hash"`
+	CompatibleRoleConfigHashes []string               `json:"compatible_role_config_hashes"`
+	AuthorizationRevision      uint64                 `json:"authorization_revision"`
+	CustomerRef                string                 `json:"customer_ref,omitempty"`
+	UserLoginIP                string                 `json:"user_login_ip,omitempty"`
 }
 
 type Expectation struct {
 	ClientID, ApplicationCode, EnvironmentCode string
+	RoleConfigHash                             string
 }
 
 type ScopeDecision struct {
@@ -64,17 +70,65 @@ func Validate(response Response, expected Expectation) ([]sharedauth.DataScope, 
 		response.TenantID != strings.TrimSpace(response.TenantID) || response.AuthorizationRevision == 0 {
 		return nil, ScopeDecision{}, errors.New("authorization context identity or revision is invalid")
 	}
+	canonicalSubjectID := strings.TrimSpace(response.SubjectID)
+	if canonicalSubjectID == "" {
+		// 兼容尚未发布 subject_id 的 N-1 平台。
+		canonicalSubjectID = response.IdentityID
+	}
+	if canonicalSubjectID != response.IdentityID {
+		return nil, ScopeDecision{}, errors.New("authorization context subject_id and identity_id do not match")
+	}
 	if strings.TrimSpace(expected.ClientID) == "" || strings.TrimSpace(expected.ApplicationCode) == "" || strings.TrimSpace(expected.EnvironmentCode) == "" {
 		return nil, ScopeDecision{}, errors.New("authorization context expectation is incomplete")
 	}
 	if response.ClientID != expected.ClientID || response.ApplicationCode != expected.ApplicationCode || response.EnvironmentCode != expected.EnvironmentCode {
 		return nil, ScopeDecision{}, errors.New("authorization context application boundary does not match the current subsystem")
 	}
-	canonical, decision, err := ValidateScopes(response.DataScopes, response.Roles, expected.EnvironmentCode, response.IdentityID, response.PersonID)
+	if err := validateRoleConfigCompatibility(response, expected.RoleConfigHash); err != nil {
+		return nil, ScopeDecision{}, err
+	}
+	canonical, decision, err := ValidateScopes(response.DataScopes, response.Roles, expected.EnvironmentCode, canonicalSubjectID, response.PersonID)
 	if err != nil {
 		return nil, ScopeDecision{}, err
 	}
 	return canonical, decision, nil
+}
+
+func validateRoleConfigCompatibility(response Response, expectedHash string) error {
+	expectedHash = strings.TrimSpace(expectedHash)
+	allMissing := strings.TrimSpace(response.CatalogVersion) == "" && len(response.CompatibleCatalogVersions) == 0 &&
+		strings.TrimSpace(response.RoleConfigHash) == "" && len(response.CompatibleRoleConfigHashes) == 0
+	if allMissing {
+		// N-1 平台尚未返回兼容窗口，滚动升级期间沿用既有本地目录校验。
+		return nil
+	}
+	if expectedHash == "" || response.CatalogVersion == "" || response.RoleConfigHash == "" ||
+		len(response.CompatibleCatalogVersions) == 0 || len(response.CompatibleCatalogVersions) > 2 ||
+		len(response.CompatibleRoleConfigHashes) == 0 || len(response.CompatibleRoleConfigHashes) > 2 {
+		return errors.New("authorization catalog compatibility window is incomplete")
+	}
+	if !containsCanonical(response.CompatibleCatalogVersions, response.CatalogVersion) ||
+		!containsCanonical(response.CompatibleRoleConfigHashes, response.RoleConfigHash) ||
+		!containsCanonical(response.CompatibleRoleConfigHashes, expectedHash) {
+		return errors.New("local role configuration is outside the N/N-1 compatibility window")
+	}
+	return nil
+}
+
+func containsCanonical(values []string, expected string) bool {
+	found := false
+	seen := map[string]struct{}{}
+	for _, value := range values {
+		if value == "" || value != strings.TrimSpace(value) {
+			return false
+		}
+		if _, duplicate := seen[value]; duplicate {
+			return false
+		}
+		seen[value] = struct{}{}
+		found = found || value == expected
+	}
+	return found
 }
 
 // ValidateScopes can be reused at the service boundary after an adapter has

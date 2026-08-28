@@ -64,7 +64,7 @@ func TestCustomerListSQLContainsQuickFiltersAndWhitelistedStableSort(t *testing.
 	for _, test := range []struct{ quick, fragment string }{
 		{QuickFilterNew, "crm_customers.created_at >="}, {QuickFilterWon, "current_stage = '已签约'"}, {QuickFilterFollowupDue, "next_follow_at <="},
 	} {
-		db := buildCustomerListQuery(customerDryRunDB(t), principal, ListQuery{QuickFilter: test.quick, Now: time.Now().UTC()})
+		db := buildCustomerListQuery(customerDryRunDB(t), principal, ListQuery{QuickFilter: test.quick, SortBy: "opportunity_amount_sum", Now: time.Now().UTC()})
 		statement := db.Order("customer_opportunity_summary.opportunity_amount_sum ASC").Order("crm_customers.id ASC").Find(&[]Customer{}).Statement
 		sql := statement.SQL.String()
 		if !strings.Contains(sql, test.fragment) || !strings.Contains(sql, "customer_opportunity_summary.opportunity_amount_sum ASC") || !strings.Contains(sql, "crm_customers.id ASC") {
@@ -82,6 +82,19 @@ func TestCustomerListSQLContainsQuickFiltersAndWhitelistedStableSort(t *testing.
 		if tenantBindings != 4 {
 			t.Fatalf("outer scope and all aggregate sources must be tenant-bound: vars=%#v", statement.Vars)
 		}
+	}
+}
+
+func TestCustomerListSkipsTenantWideSummariesWhenNeitherFilteringNorSortingByThem(t *testing.T) {
+	principal := auth.Principal{TenantID: "tenant-a", UserID: "sales-a", ScopeMode: auth.ScopeSelf}
+	db := buildCustomerListQuery(customerDryRunDB(t), principal, ListQuery{SortBy: "updated_at", Now: time.Now().UTC()})
+	statement := db.Order("crm_customers.updated_at DESC").Limit(20).Find(&[]Customer{}).Statement
+	sql := statement.SQL.String()
+	if strings.Contains(sql, "customer_followup_summary") || strings.Contains(sql, "customer_opportunity_summary") {
+		t.Fatalf("ordinary customer list must not build tenant-wide summaries: %q", sql)
+	}
+	if customerListUsesSummaryJoin(ListQuery{SortBy: "updated_at"}) {
+		t.Fatal("updated_at sort must use page-scoped summary enrichment")
 	}
 }
 

@@ -63,6 +63,25 @@ func TestLoadConfigPresaleWorkerHeartbeatFreshnessWindow(t *testing.T) {
 	}
 }
 
+func TestLoadConfigAttachmentFileGatewayMigrationModes(t *testing.T) {
+	setBaseConfig(t)
+	t.Setenv("ATTACHMENT_FILE_GATEWAY_MODE", "invalid")
+	if _, err := LoadConfig(); err == nil || !strings.Contains(err.Error(), "legacy, dual or required") {
+		t.Fatalf("invalid mode error=%v", err)
+	}
+	t.Setenv("ATTACHMENT_FILE_GATEWAY_MODE", "dual")
+	if _, err := LoadConfig(); err == nil || !strings.Contains(err.Error(), "is required when ATTACHMENT_FILE_GATEWAY_MODE=dual") {
+		t.Fatalf("incomplete dual config error=%v", err)
+	}
+	for key, value := range map[string]string{"ATTACHMENT_FILE_GATEWAY_BASE_URL": "https://files.example.com", "ATTACHMENT_FILE_GATEWAY_TOKEN_URL": "https://identity.example.com/oauth2/token", "ATTACHMENT_FILE_GATEWAY_CLIENT_ID": "crm-files", "ATTACHMENT_FILE_GATEWAY_CLIENT_SECRET": "secret", "ATTACHMENT_FILE_GATEWAY_APPLICATION_ID": "application-id"} {
+		t.Setenv(key, value)
+	}
+	config, err := LoadConfig()
+	if err != nil || config.AttachmentFileGatewayMode != "dual" {
+		t.Fatalf("dual config=%+v err=%v", config, err)
+	}
+}
+
 func TestLoadConfigProductionRequiresCompleteOIDC(t *testing.T) {
 	setBaseConfig(t)
 	t.Setenv("OIDC_CLIENT_SECRET", "")

@@ -52,6 +52,8 @@ var baseFiles = map[Schema][]string{
 		"000084_presale_workflow_notifications.up.sql", "000085_presale_approval_notifications.up.sql", "000094_add_user_login_ip_to_request_audit_outbox.up.sql", "000096_add_login_ip_to_crm_oidc_sessions.up.sql",
 		"000098_add_platform_delivered_at_to_crm_notifications.up.sql", "000099_widen_crm_notification_source_event_id.up.sql",
 		"000100_track_platform_notification_delivery_failures.up.sql", "000101_retry_numeric_platform_notification_events.up.sql",
+		"000103_crm_oidc_backchannel_logout.up.sql",
+		"000105_customer_credit.up.sql",
 	},
 	Portal: {
 		"000008_create_portal_core.up.sql", "000011_portal_session_claims.up.sql", "000016_portal_project_sync.up.sql",
@@ -66,6 +68,7 @@ var baseFiles = map[Schema][]string{
 		"000073_portal_worker_heartbeats.up.sql", "000076_portal_request_audit_outbox.up.sql", "000077_portal_customer_service_options.up.sql",
 		"000079_portal_session_data_scopes.up.sql",
 		"000095_add_user_login_ip_to_portal_request_audit_outbox.up.sql", "000097_add_login_ip_to_portal_sessions.up.sql", "000102_portal_project_account_bindings.up.sql",
+		"000104_portal_oidc_backchannel_logout.up.sql",
 	},
 }
 

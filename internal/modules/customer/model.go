@@ -27,7 +27,13 @@ type Customer struct {
 	Status                  string     `gorm:"size:32;not null;index"`
 	EndDate                 *time.Time `gorm:"type:date"`
 	MergedIntoID            *uint64
-	Contacts                []Contact `gorm:"foreignKey:CustomerID"`
+	CreditLevel             string     `gorm:"size:1;not null;default:'B';index:idx_customer_credit_level"`
+	CreditUpdatedAt         *time.Time `gorm:"precision:3"`
+	CreditChangeSource      string     `gorm:"size:16;not null;default:'INITIAL'"`
+	ConsecutiveOntimeCount  uint32     `gorm:"not null;default:0"`
+	ConsecutiveLateCount    uint32     `gorm:"not null;default:0"`
+	LastPaymentEvalAt       *time.Time `gorm:"precision:3"`
+	Contacts                []Contact  `gorm:"foreignKey:CustomerID"`
 }
 
 func (Customer) TableName() string { return "crm_customers" }
