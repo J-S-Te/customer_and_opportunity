@@ -20,6 +20,7 @@ type Response struct {
 	ID              uint64     `json:"id"`
 	Type            string     `json:"type"`
 	OpportunityID   uint64     `json:"opportunity_id"`
+	CustomerID      uint64     `json:"customer_id,omitempty"`
 	OpportunityNo   string     `json:"opportunity_no"`
 	OpportunityName string     `json:"opportunity_name"`
 	RequestID       uint64     `json:"request_id,omitempty"`
@@ -63,7 +64,7 @@ func (s *Service) ListMine(ctx context.Context, unreadOnly bool, page, pageSize 
 		return Page{}, err
 	}
 	var items []Response
-	err = query.Select("id,type,opportunity_id,opportunity_no,opportunity_name,request_id,request_no,assignment_id,progress_id,recipient_kind,title,body,target_path,status,created_at,read_at").
+	err = query.Select("id,type,opportunity_id,customer_id,opportunity_no,opportunity_name,request_id,request_no,assignment_id,progress_id,recipient_kind,title,body,target_path,status,created_at,read_at").
 		Order("created_at DESC,id DESC").Offset((page - 1) * pageSize).Limit(pageSize).Scan(&items).Error
 	return Page{Items: items, Page: page, PageSize: pageSize, Total: total}, err
 }
@@ -118,6 +119,10 @@ func personalInboxQuery(db *gorm.DB, principal auth.Principal) *gorm.DB {
 		scopes = append(scopes, "(type=? AND recipient_id=?)")
 		args = append(args, TypeOpportunityOwnerChanged, principal.UserID)
 	}
+	if principal.HasPermission("customer.credit.read") {
+		scopes = append(scopes, "(type IN (?,?,?,?,?,?) AND recipient_id=?)")
+		args = append(args, TypeCreditRuleChanged, TypeCreditRuleCapReached, TypeCreditApplicationPending, TypeCreditApplicationApproved, TypeCreditApplicationRejected, TypeCreditApplicationInvalidated, principal.UserID)
+	}
 	if principal.HasPermission("presale.read") && principal.PersonID != "" {
 		scopes = append(scopes, "(type IN (?,?,?) AND recipient_id=?)")
 		args = append(args, TypePresaleAssigneeAdded, TypePresaleAssigneeRemoved, TypePresaleProgressAssignee, principal.PersonID)
@@ -141,7 +146,7 @@ func requirePrincipal(ctx context.Context) (auth.Principal, error) {
 	if !ok || principal.TenantID == "" || principal.UserID == "" {
 		return auth.Principal{}, apperror.ErrUnauthenticated
 	}
-	if !principal.HasPermission("opportunity.read") && !principal.HasPermission("presale.read") {
+	if !principal.HasPermission("opportunity.read") && !principal.HasPermission("presale.read") && !principal.HasPermission("customer.credit.read") {
 		return auth.Principal{}, apperror.ErrForbidden
 	}
 	return principal, nil

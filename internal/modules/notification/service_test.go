@@ -43,6 +43,10 @@ func TestNotificationPrincipalRequiresReadPermission(t *testing.T) {
 	if principal, err := requirePrincipal(ctx); err != nil || principal.UserID != "user-a" {
 		t.Fatalf("principal=%#v err=%v", principal, err)
 	}
+	ctx = auth.WithPrincipal(context.Background(), auth.Principal{TenantID: "tenant-a", UserID: "user-a", ScopeMode: auth.ScopeAll, Permissions: map[string]struct{}{"customer.credit.read": {}}})
+	if principal, err := requirePrincipal(ctx); err != nil || principal.UserID != "user-a" {
+		t.Fatalf("credit principal=%#v err=%v", principal, err)
+	}
 }
 
 func TestNotificationResponseDoesNotExposeTenantOrSourceEvent(t *testing.T) {

@@ -123,6 +123,13 @@ func TestReferenceForRejectsMissingReference(t *testing.T) {
 	}
 }
 
+func TestReferenceForCustomerCreditNotification(t *testing.T) {
+	typeName, id, err := referenceFor(notification.Notification{CustomerID: 23})
+	if err != nil || typeName != "CUSTOMER" || id != "23" {
+		t.Fatalf("reference=%s/%s err=%v", typeName, id, err)
+	}
+}
+
 func TestPermanentDeliveryErrorOnlyClassifiesUnprocessableEntity(t *testing.T) {
 	if !isPermanentDeliveryError(&platformAPIError{statusCode: http.StatusUnprocessableEntity}) {
 		t.Fatal("HTTP 422 must be treated as a permanent payload or recipient validation failure")

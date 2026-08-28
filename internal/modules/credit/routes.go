@@ -14,6 +14,9 @@ func RegisterRoutes(api *gin.RouterGroup, h *Handler) {
 	api.GET("/credit/applications/pending", middleware.RequirePermission("customer.credit.approve"), h.Pending)
 	api.POST("/credit/applications/:applicationID/approve", middleware.RequirePermission("customer.credit.approve"), h.Approve)
 	api.POST("/credit/applications/:applicationID/reject", middleware.RequirePermission("customer.credit.approve"), h.Reject)
+	api.GET("/credit/rule-settings", middleware.RequirePermission("customer.credit.rule.manage"), h.RuleSettings)
+	api.PUT("/credit/rule-settings", middleware.RequirePermission("customer.credit.rule.manage"), h.UpdateRuleSettings)
+	api.GET("/credit/statistics", middleware.RequirePermission("customer.credit.read"), h.Statistics)
 }
 
 func RegisterInternalRoutes(internal *gin.RouterGroup, h *Handler) {
