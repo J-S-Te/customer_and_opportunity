@@ -6,6 +6,8 @@
 > 前端：Vue 3 + Vite + Vue Router，沿用统一前端 JavaScript/原生 fetch 工程  
 > 依据：根目录 README、ISSUES、两个 HTML 原型及《新子系统开发对接交付清单》
 
+> 当前实现同步（2026-08-27）：Portal 邀请链接有效期为 24 小时；登录使用基础平台 OIDC Code + PKCE。具体实现以 CM-004、CP-001 和 `DEVELOPMENT.md` 为准。
+
 ## 1. 阅读顺序
 
 1. 先读 [总体架构](00-公共设计/00-总体架构.md)、[API 与后端规范](00-公共设计/01-后端与API规范.md)、[前端规范](00-公共设计/02-前端工程规范.md)。
