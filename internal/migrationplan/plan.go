@@ -56,6 +56,7 @@ var baseFiles = map[Schema][]string{
 		"000105_customer_credit.up.sql",
 		"000106_complete_customer_credit_workflow.up.sql",
 		"000107_credit_approval_history_and_queries.up.sql",
+		"000108_unbounded_credit_application_reason.up.sql",
 	},
 	Portal: {
 		"000008_create_portal_core.up.sql", "000011_portal_session_claims.up.sql", "000016_portal_project_sync.up.sql",
