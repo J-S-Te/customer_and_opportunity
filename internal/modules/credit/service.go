@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
+	"github.com/go-sql-driver/mysql"
 	"github.com/shopspring/decimal"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/ownerdirectory"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/apperror"
@@ -141,6 +143,56 @@ func defaultRuleSettings(tenant string, now time.Time) RuleSettings {
 	return RuleSettings{TenantID: tenant, GraceDays: 7, OnTimeThreshold: 2, LateThreshold: 2, LevelStep: 1, Enabled: true, UpdatedAt: now}
 }
 
+var creditReferencePattern = regexp.MustCompile(`^[A-Za-z0-9._/-]+$`)
+
+var allowedCreditSources = map[string]struct{}{
+	"settlement": {}, "erp": {}, "finance": {}, "manual": {},
+}
+
+func validatePaymentEvent(event PaymentEvent, due, paid decimal.Decimal) error {
+	if strings.TrimSpace(event.EventID) == "" || strings.TrimSpace(event.PaymentID) == "" || event.CustomerID == 0 || event.DueDate.IsZero() {
+		return apperror.New(400, "CRM_CREDIT_EVENT_INVALID", "event_id, payment_id, customer_id and due_date are required")
+	}
+	source := strings.ToLower(strings.TrimSpace(event.SourceSystem))
+	if _, ok := allowedCreditSources[source]; !ok {
+		return apperror.New(400, "CRM_CREDIT_EVENT_INVALID", "source_system is not allowed")
+	}
+	if event.PaidDate != nil && event.PaidDate.Before(event.DueDate) {
+		return apperror.New(400, "CRM_CREDIT_EVENT_INVALID", "paid_date cannot be earlier than due_date")
+	}
+	for name, value := range map[string]decimal.Decimal{"due_amount": due, "paid_amount": paid} {
+		if value.Exponent() < -2 || value.GreaterThan(decimal.NewFromFloat(999999999999999.99)) {
+			return apperror.New(400, "CRM_CREDIT_EVENT_INVALID", name+" exceeds the supported precision or range")
+		}
+	}
+	for name, value := range map[string]string{"contract_no": event.ContractNo, "period_no": event.PeriodNo} {
+		if value != "" && !creditReferencePattern.MatchString(value) {
+			return apperror.New(400, "CRM_CREDIT_EVENT_INVALID", name+" has an invalid format")
+		}
+	}
+	return nil
+}
+
+func samePaymentPayload(existing creditPaymentRecord, event PaymentEvent) bool {
+	if existing.EventID != event.EventID || existing.PaymentID != event.PaymentID || existing.CustomerID != event.CustomerID ||
+		existing.ContractNo != event.ContractNo || existing.PeriodNo != event.PeriodNo || existing.SourceSystem != event.SourceSystem ||
+		existing.DueAmount != event.DueAmount || existing.PaidAmount != event.PaidAmount {
+		return false
+	}
+	if existing.DueDate == nil || !existing.DueDate.Equal(event.DueDate) {
+		return false
+	}
+	if existing.PaidDate == nil || event.PaidDate == nil {
+		return existing.PaidDate == nil && event.PaidDate == nil
+	}
+	return existing.PaidDate.Equal(*event.PaidDate)
+}
+
+func isDuplicateKeyError(err error) bool {
+	var mysqlErr *mysql.MySQLError
+	return errors.As(err, &mysqlErr) && mysqlErr.Number == 1062
+}
+
 func validRuleSettings(v RuleSettings) bool {
 	return v.GraceDays >= 0 && v.GraceDays <= 90 && v.OnTimeThreshold >= 1 && v.OnTimeThreshold <= 100 && v.LateThreshold >= 1 && v.LateThreshold <= 100 && v.LevelStep >= 1 && v.LevelStep <= 3
 }
@@ -168,8 +220,27 @@ func (s *Service) UpdateRuleSettings(ctx context.Context, in UpdateRuleSettingsR
 		return RuleSettings{}, apperror.New(400, "CRM_CREDIT_RULE_INVALID", "credit rule settings are invalid")
 	}
 	err := database.FromContext(ctx, s.db).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "tenant_id"}}, DoUpdates: clause.AssignmentColumns([]string{"grace_days", "on_time_threshold", "late_threshold", "level_step", "enabled", "updated_at"})}).Create(&value).Error; err != nil {
-			return err
+		var current RuleSettings
+		lookupErr := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("tenant_id=?", p.TenantID).Take(&current).Error
+		if lookupErr == nil {
+			if in.UpdatedAt == nil || !current.UpdatedAt.Equal(*in.UpdatedAt) {
+				return apperror.New(409, "CRM_CREDIT_RULE_VERSION_CONFLICT", "credit rule settings changed; refresh and retry")
+			}
+			if err := tx.Model(&RuleSettings{}).Where("tenant_id=? AND updated_at=?", p.TenantID, current.UpdatedAt).Updates(map[string]any{
+				"grace_days": value.GraceDays, "on_time_threshold": value.OnTimeThreshold, "late_threshold": value.LateThreshold,
+				"level_step": value.LevelStep, "enabled": value.Enabled, "updated_at": value.UpdatedAt,
+			}).Error; err != nil {
+				return err
+			}
+		} else if errors.Is(lookupErr, gorm.ErrRecordNotFound) {
+			if err := tx.Create(&value).Error; err != nil {
+				if isDuplicateKeyError(err) {
+					return apperror.New(409, "CRM_CREDIT_RULE_VERSION_CONFLICT", "credit rule settings changed; refresh and retry")
+				}
+				return err
+			}
+		} else {
+			return lookupErr
 		}
 		return tx.Create(&RuleSettingsVersion{TenantID: p.TenantID, GraceDays: value.GraceDays, OnTimeThreshold: value.OnTimeThreshold, LateThreshold: value.LateThreshold, LevelStep: value.LevelStep, Enabled: value.Enabled, ChangedBy: p.UserID, Reason: strings.TrimSpace(in.Reason), ChangedAt: value.UpdatedAt}).Error
 	})
@@ -190,9 +261,11 @@ func (s *Service) ProcessPayment(ctx context.Context, event PaymentEvent) (Payme
 	if !ok {
 		return PaymentRecord{}, apperror.ErrUnauthenticated
 	}
-	if event.EventID == "" || event.PaymentID == "" || event.CustomerID == 0 {
-		return PaymentRecord{}, apperror.New(400, "CRM_CREDIT_EVENT_INVALID", "event_id, payment_id and customer_id are required")
-	}
+	event.EventID = strings.TrimSpace(event.EventID)
+	event.PaymentID = strings.TrimSpace(event.PaymentID)
+	event.ContractNo = strings.TrimSpace(event.ContractNo)
+	event.PeriodNo = strings.TrimSpace(event.PeriodNo)
+	event.SourceSystem = strings.ToLower(strings.TrimSpace(event.SourceSystem))
 	due, err := decimal.NewFromString(event.DueAmount)
 	if err != nil || due.IsNegative() {
 		return PaymentRecord{}, apperror.New(400, "CRM_CREDIT_EVENT_INVALID", "due_amount is invalid")
@@ -200,6 +273,9 @@ func (s *Service) ProcessPayment(ctx context.Context, event PaymentEvent) (Payme
 	paid, err := decimal.NewFromString(event.PaidAmount)
 	if err != nil || paid.IsNegative() {
 		return PaymentRecord{}, apperror.New(400, "CRM_CREDIT_EVENT_INVALID", "paid_amount is invalid")
+	}
+	if err := validatePaymentEvent(event, due, paid); err != nil {
+		return PaymentRecord{}, err
 	}
 	now := s.now()
 	var result PaymentRecord
@@ -210,6 +286,9 @@ func (s *Service) ProcessPayment(ctx context.Context, event PaymentEvent) (Payme
 		}
 		var existing creditPaymentRecord
 		if err := tx.Where("tenant_id=? AND (event_id=? OR payment_id=?)", p.TenantID, event.EventID, event.PaymentID).First(&existing).Error; err == nil {
+			if !samePaymentPayload(existing, event) {
+				return apperror.New(409, "CRM_CREDIT_EVENT_IDEMPOTENCY_CONFLICT", "event id or payment id is already bound to different payment data")
+			}
 			result = toPaymentRecord(existing)
 			return nil
 		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
@@ -374,7 +453,10 @@ func (s *Service) Apply(ctx context.Context, customerID uint64, in ApplyRequest)
 		pending := customerID
 		out = Application{TenantID: p.TenantID, CustomerID: customerID, ApplicantID: p.UserID, IdempotencyKey: idempotencyKey, FromLevel: customer.CreditLevel, TargetLevel: in.TargetLevel, Reason: in.Reason, Status: "PENDING", CreatedAt: now, UpdatedAt: now, Version: 1, PendingCustomerID: &pending}
 		if err := tx.Create(&out).Error; err != nil {
-			return apperror.New(409, "CRM_CREDIT_APPLICATION_PENDING_EXISTS", "a pending credit application already exists")
+			if isDuplicateKeyError(err) {
+				return apperror.New(409, "CRM_CREDIT_APPLICATION_PENDING_EXISTS", "a pending credit application already exists")
+			}
+			return err
 		}
 		instance := ApprovalInstance{TenantID: p.TenantID, BizType: "CREDIT_ADJUSTMENT", BusinessID: out.ID, Status: "PENDING", CreatedBy: p.UserID, CreatedAt: now, UpdatedAt: now, Version: 1}
 		if err := tx.Create(&instance).Error; err != nil {
@@ -407,14 +489,18 @@ func (s *Service) Decide(ctx context.Context, applicationID uint64, approve bool
 	if !hasRole(p, "sales_director") {
 		return nil, apperror.ErrForbidden
 	}
-	if !approve && len([]rune(in.Opinion)) == 0 {
+	in.Opinion = strings.TrimSpace(in.Opinion)
+	if !approve && len([]rune(in.Opinion)) < 2 {
 		return nil, apperror.New(400, "CRM_CREDIT_REJECTION_OPINION_REQUIRED", "rejection opinion is required")
 	}
 	now := s.now()
 	var out Application
 	err := database.FromContext(ctx, s.db).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("tenant_id=? AND id=?", p.TenantID, applicationID).Take(&out).Error; err != nil {
-			return apperror.New(404, "CRM_CREDIT_APPLICATION_NOT_FOUND", "credit application not found")
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return apperror.New(404, "CRM_CREDIT_APPLICATION_NOT_FOUND", "credit application not found")
+			}
+			return err
 		}
 		if out.Status != "PENDING" {
 			return apperror.New(409, "CRM_CREDIT_APPLICATION_NOT_PENDING", "credit application is not pending")
@@ -487,11 +573,14 @@ func (s *Service) Withdraw(ctx context.Context, customerID, applicationID uint64
 	}
 	var out Application
 	err := database.FromContext(ctx, s.db).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("tenant_id=? AND id=? AND customer_id=?", p.TenantID, applicationID, customerID).Take(&out).Error; err != nil {
-			return apperror.New(404, "CRM_CREDIT_APPLICATION_NOT_FOUND", "credit application not found")
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("tenant_id=? AND id=? AND customer_id=? AND applicant_id=?", p.TenantID, applicationID, customerID, p.UserID).Take(&out).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return apperror.New(404, "CRM_CREDIT_APPLICATION_NOT_FOUND", "credit application not found")
+			}
+			return err
 		}
-		if out.Status != "PENDING" || out.ApplicantID != p.UserID {
-			return apperror.ErrForbidden
+		if out.Status != "PENDING" {
+			return apperror.New(409, "CRM_CREDIT_APPLICATION_NOT_PENDING", "credit application is not pending")
 		}
 		out.Status = "WITHDRAWN"
 		out.PendingCustomerID = nil
