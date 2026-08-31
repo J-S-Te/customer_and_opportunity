@@ -1,6 +1,7 @@
 package credit
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,6 +10,24 @@ import (
 
 	"github.com/shopspring/decimal"
 )
+
+func TestApplicationJSONUsesStableSnakeCaseAPIFields(t *testing.T) {
+	payload, err := json.Marshal(Application{ID: 7, CustomerID: 11, ApplicantID: "sales-1", FromLevel: LevelC, TargetLevel: LevelB, CreatedAt: time.Date(2026, 8, 31, 8, 0, 0, 0, time.UTC), Version: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(payload)
+	for _, field := range []string{`"id":7`, `"customer_id":11`, `"applicant_id":"sales-1"`, `"from_level":"C"`, `"target_level":"B"`, `"created_at"`, `"version":1`} {
+		if !strings.Contains(got, field) {
+			t.Fatalf("JSON missing %s: %s", field, got)
+		}
+	}
+	for _, field := range []string{`"CustomerID"`, `"CreatedAt"`, `"ApplicantID"`} {
+		if strings.Contains(got, field) {
+			t.Fatalf("JSON leaked Go field %s: %s", field, got)
+		}
+	}
+}
 
 func TestAutomaticRuleThresholdMovesOneLevelAndCaps(t *testing.T) {
 	if got := stepLevel("B", -1); got != LevelA {
