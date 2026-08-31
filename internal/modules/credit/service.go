@@ -600,7 +600,7 @@ func (s *Service) Withdraw(ctx context.Context, customerID, applicationID uint64
 	return &out, nil
 }
 
-func (s *Service) Pending(ctx context.Context) ([]Application, error) {
+func (s *Service) Pending(ctx context.Context) ([]PendingApplication, error) {
 	p, ok := auth.FromContext(ctx)
 	if !ok {
 		return nil, apperror.ErrUnauthenticated
@@ -608,8 +608,14 @@ func (s *Service) Pending(ctx context.Context) ([]Application, error) {
 	if !p.HasPermission("customer.credit.approve") {
 		return nil, apperror.ErrForbidden
 	}
-	var items []Application
-	err := database.FromContext(ctx, s.db).Where("tenant_id=? AND status='PENDING'", p.TenantID).Order("created_at ASC").Find(&items).Error
+	var items []PendingApplication
+	err := database.FromContext(ctx, s.db).
+		Table("crm_customer_credit_applications AS application").
+		Select("application.id, application.customer_id, customer.customer_no, customer.name AS customer_name, application.applicant_id, application.from_level, application.target_level, application.reason, application.status, application.approval_instance_id, application.created_at, application.updated_at, application.version").
+		Joins("LEFT JOIN crm_customers AS customer ON customer.tenant_id = application.tenant_id AND customer.id = application.customer_id").
+		Where("application.tenant_id=? AND application.status='PENDING'", p.TenantID).
+		Order("application.created_at ASC").
+		Scan(&items).Error
 	return items, err
 }
 func (s *Service) History(ctx context.Context, customerID uint64, page, pageSize int) (pagination.Page[CreditLog], error) {

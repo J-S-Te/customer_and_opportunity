@@ -75,17 +75,45 @@ type CreditLog struct {
 func (CreditLog) TableName() string { return "crm_customer_credit_logs" }
 
 type Application struct {
-	ID                                                                                                uint64 `gorm:"primaryKey"`
-	TenantID, ApplicantID, IdempotencyKey, FromLevel, TargetLevel, Reason, Status, Opinion, DecidedBy string
-	CustomerID                                                                                        uint64
-	ApprovalInstanceID                                                                                uint64 `json:"approval_instance_id"`
-	DecidedAt                                                                                         *time.Time
-	CreatedAt, UpdatedAt                                                                              time.Time
-	Version                                                                                           uint64
-	PendingCustomerID                                                                                 *uint64
+	ID                 uint64     `gorm:"primaryKey" json:"id"`
+	TenantID           string     `json:"-"`
+	ApplicantID        string     `json:"applicant_id"`
+	IdempotencyKey     string     `json:"-"`
+	FromLevel          string     `json:"from_level"`
+	TargetLevel        string     `json:"target_level"`
+	Reason             string     `json:"reason"`
+	Status             string     `json:"status"`
+	Opinion            string     `json:"opinion,omitempty"`
+	DecidedBy          string     `json:"decided_by,omitempty"`
+	CustomerID         uint64     `json:"customer_id"`
+	ApprovalInstanceID uint64     `json:"approval_instance_id"`
+	DecidedAt          *time.Time `json:"decided_at,omitempty"`
+	CreatedAt          time.Time  `json:"created_at"`
+	UpdatedAt          time.Time  `json:"updated_at"`
+	Version            uint64     `json:"version"`
+	PendingCustomerID  *uint64    `json:"-"`
 }
 
 func (Application) TableName() string { return "crm_customer_credit_applications" }
+
+// PendingApplication 是销售总监审批待办的稳定 API 投影。
+// 申请表只保存客户 ID，待办查询额外投影客户名称和编号，避免前端只能显示
+// “客户 #ID”，也避免把 GORM 内部字段名直接暴露给浏览器。
+type PendingApplication struct {
+	ID                 uint64    `json:"id"`
+	CustomerID         uint64    `json:"customer_id"`
+	CustomerNo         string    `json:"customer_no,omitempty"`
+	CustomerName       string    `json:"customer_name,omitempty"`
+	ApplicantID        string    `json:"applicant_id"`
+	FromLevel          string    `json:"from_level"`
+	TargetLevel        string    `json:"target_level"`
+	Reason             string    `json:"reason"`
+	Status             string    `json:"status"`
+	ApprovalInstanceID uint64    `json:"approval_instance_id"`
+	CreatedAt          time.Time `json:"created_at"`
+	UpdatedAt          time.Time `json:"updated_at"`
+	Version            uint64    `json:"version"`
+}
 
 type ApplyRequest struct {
 	TargetLevel    string `json:"target_level"`
