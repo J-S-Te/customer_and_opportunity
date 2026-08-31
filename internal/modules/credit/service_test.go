@@ -5,6 +5,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/shopspring/decimal"
 )
 
 func TestAutomaticRuleThresholdMovesOneLevelAndCaps(t *testing.T) {
@@ -51,5 +54,40 @@ func TestCreditApplicationRequiresDurableIdempotencyKey(t *testing.T) {
 	}
 	if !strings.Contains(string(contents), "UNIQUE KEY uq_credit_apply_idempotency (tenant_id,applicant_id,idempotency_key)") {
 		t.Fatal("credit applications must have a durable tenant/applicant idempotency constraint")
+	}
+}
+
+func TestPaymentEventValidationRejectsUnsafeOrInconsistentFacts(t *testing.T) {
+	dueDate := time.Date(2026, 8, 31, 0, 0, 0, 0, time.UTC)
+	valid := PaymentEvent{EventID: "evt-1", PaymentID: "pay-1", CustomerID: 1, DueDate: dueDate, PaidDate: func() *time.Time { v := dueDate; return &v }(), DueAmount: "100.00", PaidAmount: "100.00", SourceSystem: "settlement"}
+	due, _ := decimal.NewFromString(valid.DueAmount)
+	paid, _ := decimal.NewFromString(valid.PaidAmount)
+	if err := validatePaymentEvent(valid, due, paid); err != nil {
+		t.Fatalf("valid payment rejected: %v", err)
+	}
+	for name, event := range map[string]PaymentEvent{
+		"missing source":   func() PaymentEvent { v := valid; v.SourceSystem = ""; return v }(),
+		"early paid date":  func() PaymentEvent { v := valid; d := dueDate.Add(-time.Hour); v.PaidDate = &d; return v }(),
+		"excess precision": func() PaymentEvent { v := valid; v.PaidAmount = "1.001"; return v }(),
+		"invalid contract": func() PaymentEvent { v := valid; v.ContractNo = "bad value"; return v }(),
+	} {
+		amountDue, _ := decimal.NewFromString(event.DueAmount)
+		amountPaid, _ := decimal.NewFromString(event.PaidAmount)
+		if err := validatePaymentEvent(event, amountDue, amountPaid); err == nil {
+			t.Errorf("%s: invalid payment accepted", name)
+		}
+	}
+}
+
+func TestPaymentIdempotencyComparesFullPayload(t *testing.T) {
+	dueDate := time.Date(2026, 8, 31, 0, 0, 0, 0, time.UTC)
+	event := PaymentEvent{EventID: "evt-1", PaymentID: "pay-1", CustomerID: 1, DueDate: dueDate, DueAmount: "100.00", PaidAmount: "100.00", SourceSystem: "settlement"}
+	record := creditPaymentRecord{EventID: event.EventID, PaymentID: event.PaymentID, CustomerID: event.CustomerID, DueDate: &dueDate, DueAmount: event.DueAmount, PaidAmount: event.PaidAmount, SourceSystem: event.SourceSystem}
+	if !samePaymentPayload(record, event) {
+		t.Fatal("identical payment payload must be replayable")
+	}
+	event.PaidAmount = "101.00"
+	if samePaymentPayload(record, event) {
+		t.Fatal("changed payment amount must produce an idempotency conflict")
 	}
 }

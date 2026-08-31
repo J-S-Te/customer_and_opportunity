@@ -111,6 +111,9 @@ type UpdateRuleSettingsRequest struct {
 	LevelStep       int    `json:"level_step"`
 	Enabled         bool   `json:"enabled"`
 	Reason          string `json:"reason"`
+	// UpdatedAt is the snapshot timestamp returned by GET. It is required when
+	// replacing an existing rule so concurrent administrator edits fail closed.
+	UpdatedAt *time.Time `json:"updated_at"`
 }
 type Statistics struct {
 	AttentionCustomers int64 `json:"attention_customers"`
