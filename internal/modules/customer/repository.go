@@ -32,6 +32,13 @@ type Repository interface {
 	ListOpportunityHistory(context.Context, string, uint64, int, int) (pagination.Page[OpportunitySummary], error)
 }
 
+// ScopedDuplicateRepository 是客户重复检查的可见性扩展点。
+// 交互式重复检查会把候选客户摘要返回给前端，因此销售必须限定在本人创建的数据内；
+// 创建/导入流程仍使用 Repository.FindDuplicates 做租户级唯一性校验，避免绕过重复约束。
+type ScopedDuplicateRepository interface {
+	FindDuplicatesScoped(context.Context, auth.Principal, string, string, uint64) ([]DuplicateCandidate, error)
+}
+
 type customerListRow struct {
 	Customer
 	LastFollowupAt       *time.Time      `gorm:"column:last_followup_at"`
@@ -314,6 +321,13 @@ func scopedCustomer(db *gorm.DB, principal auth.Principal) *gorm.DB {
 	// 租户条件始终存在；组织范围必须使用令牌中经平台确认的组织集合，空集合按无权限处理，
 	// 不能退化为租户全量或信任请求参数中的组织标识。
 	db = db.Where("crm_customers.tenant_id = ? AND crm_customers.deleted_at IS NULL", principal.TenantID)
+	// 销售角色的客户归属是“创建人本人”，即使平台授权上下文带有
+	// application/tenant 级数据范围，也不能因此放大 CRM 客户可见范围。
+	// 只有明确的管理角色才可查看全租户客户；这样既保持平台范围语义，
+	// 又满足 CRM 的销售隔离业务规则。
+	if salesOnlyPrincipal(principal) {
+		return db.Where("crm_customers.created_by = ?", principal.UserID)
+	}
 	switch principal.ScopeMode {
 	case auth.ScopeAll:
 		return db
@@ -325,6 +339,26 @@ func scopedCustomer(db *gorm.DB, principal auth.Principal) *gorm.DB {
 	default:
 		return db.Where("crm_customers.owner_user_id = ?", principal.UserID)
 	}
+}
+
+func salesOnlyPrincipal(principal auth.Principal) bool {
+	hasSales := false
+	for _, role := range principal.Roles {
+		if role == "sales" {
+			hasSales = true
+			break
+		}
+	}
+	if !hasSales {
+		return false
+	}
+	for _, role := range principal.Roles {
+		switch role {
+		case "sales_director", "customer_admin", "crm_super_admin", "auditor", "admin":
+			return false
+		}
+	}
+	return true
 }
 
 func (r *GORMRepository) FindByID(ctx context.Context, principal auth.Principal, id uint64, preload bool) (*Customer, error) {
@@ -343,11 +377,27 @@ func (r *GORMRepository) FindByID(ctx context.Context, principal auth.Principal,
 }
 
 func (r *GORMRepository) FindDuplicates(ctx context.Context, tenantID, normalizedName, creditHMAC string, excludeID uint64) ([]DuplicateCandidate, error) {
+	return r.findDuplicates(ctx, tenantID, normalizedName, creditHMAC, excludeID, "")
+}
+
+// FindDuplicatesScoped 仅返回当前主体有权看到的重复候选，避免销售通过重复检查接口枚举其他销售的客户。
+func (r *GORMRepository) FindDuplicatesScoped(ctx context.Context, principal auth.Principal, normalizedName, creditHMAC string, excludeID uint64) ([]DuplicateCandidate, error) {
+	createdBy := ""
+	if salesOnlyPrincipal(principal) {
+		createdBy = principal.UserID
+	}
+	return r.findDuplicates(ctx, principal.TenantID, normalizedName, creditHMAC, excludeID, createdBy)
+}
+
+func (r *GORMRepository) findDuplicates(ctx context.Context, tenantID, normalizedName, creditHMAC string, excludeID uint64, createdBy string) ([]DuplicateCandidate, error) {
 	type row struct {
 		ID                                              uint64
 		CustomerNo, Name, Status, UnifiedCreditCodeHMAC string
 	}
 	query := database.FromContext(ctx, r.db).Table("crm_customers").Select("id,customer_no,name,status,unified_credit_code_hmac").Where("tenant_id = ? AND deleted_at IS NULL", tenantID)
+	if createdBy != "" {
+		query = query.Where("created_by = ?", createdBy)
+	}
 	if excludeID != 0 {
 		query = query.Where("id <> ?", excludeID)
 	}

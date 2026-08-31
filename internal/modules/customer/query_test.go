@@ -59,6 +59,25 @@ func TestScopedCustomerSelfAndOwnerFilterCannotExpandVisibility(t *testing.T) {
 	}
 }
 
+func TestScopedCustomerSalesRoleRemainsSelfScopedWhenPlatformScopeIsAll(t *testing.T) {
+	principal := auth.Principal{TenantID: "tenant-a", UserID: "sales-a", Roles: []string{"sales"}, ScopeMode: auth.ScopeAll}
+	statement := scopedCustomer(customerDryRunDB(t).Model(&Customer{}), principal).Find(&[]Customer{}).Statement
+	if !strings.Contains(statement.SQL.String(), "crm_customers.created_by = ?") {
+		t.Fatalf("sales scope missing creator predicate: %q", statement.SQL.String())
+	}
+	if len(statement.Vars) < 2 || statement.Vars[1] != "sales-a" {
+		t.Fatalf("vars=%#v", statement.Vars)
+	}
+}
+
+func TestScopedCustomerManagerKeepsExistingOrganizationScope(t *testing.T) {
+	principal := auth.Principal{TenantID: "tenant-a", UserID: "director", Roles: []string{"sales", "sales_director"}, ScopeMode: auth.ScopeOrg, OrganizationIDs: []string{"org-a"}}
+	statement := scopedCustomer(customerDryRunDB(t).Model(&Customer{}), principal).Find(&[]Customer{}).Statement
+	if !strings.Contains(statement.SQL.String(), "crm_customers.owner_org_id IN") || strings.Contains(statement.SQL.String(), "crm_customers.owner_user_id = ?") {
+		t.Fatalf("manager scope changed unexpectedly: %q", statement.SQL.String())
+	}
+}
+
 func TestCustomerListSQLContainsQuickFiltersAndWhitelistedStableSort(t *testing.T) {
 	principal := auth.Principal{TenantID: "tenant-a", UserID: "sales-a", ScopeMode: auth.ScopeSelf}
 	for _, test := range []struct{ quick, fragment string }{

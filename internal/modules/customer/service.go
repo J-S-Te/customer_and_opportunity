@@ -85,6 +85,11 @@ func (s *Service) CheckDuplicate(ctx context.Context, request DuplicateCheckRequ
 	if err != nil {
 		return nil, err
 	}
+	// 重复检查会直接返回客户名称和编号；销售只能枚举自己创建的候选，
+	// 而创建/导入时仍保留租户级校验，避免因可见性收窄破坏唯一性约束。
+	if scopedRepo, ok := s.repo.(ScopedDuplicateRepository); ok {
+		return scopedRepo.FindDuplicatesScoped(ctx, principal, normalizeName(request.Name), s.codec.HMAC(request.UnifiedCreditCode), 0)
+	}
 	return s.repo.FindDuplicates(ctx, principal.TenantID, normalizeName(request.Name), s.codec.HMAC(request.UnifiedCreditCode), 0)
 }
 
