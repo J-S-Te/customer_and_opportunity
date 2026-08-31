@@ -25,12 +25,17 @@ func TestRuntimeCapabilitiesFailClosedWithoutOptionalAdapters(t *testing.T) {
 	values := runtimeCapabilities(Config{})
 	for _, key := range []string{
 		"owner_directory", "portal_account_provision", "portal_access_disable", "approval_task_query",
-		"qb_launch_quotation", "qb_launch_bid", "customer_import_scan",
-		"opportunity_attachment_upload", "opportunity_attachment_download",
+		"qb_launch_quotation", "qb_launch_bid",
 	} {
 		value, ok := values[key]
 		if !ok || value.Available || value.ReasonCode == "" {
 			t.Fatalf("capability %s must fail closed: %#v", key, value)
+		}
+	}
+	for _, key := range []string{"customer_import_scan", "customer_export"} {
+		value := values[key]
+		if !value.Available || value.Mode != capabilityModeReady {
+			t.Fatalf("code-backed capability %s must be ready: %#v", key, value)
 		}
 	}
 	if value := values["presale_request_submission"]; !value.Available || value.Mode != capabilityModeReady {

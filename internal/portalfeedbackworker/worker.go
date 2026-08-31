@@ -132,7 +132,7 @@ ORDER BY f.first_response_due_at,f.id LIMIT ? FOR UPDATE SKIP LOCKED`
 			if result.RowsAffected == 0 {
 				continue
 			}
-			notification := feedback.Notification{TenantID: item.TenantID, FeedbackID: item.ID, Kind: "FEEDBACK_SLA_OVERDUE", Status: "UNREAD", CreatedAt: now}
+			notification := feedback.Notification{TenantID: item.TenantID, AccountID: item.AccountID, FeedbackID: item.ID, EventID: request.NewID(), Kind: "FEEDBACK_SLA_OVERDUE", Title: "客户反馈首次响应已超时", Body: "反馈单 " + item.FeedbackNo + " 尚未完成首次响应，请关注处理进度。", TargetPath: "/customer-portal/feedback", Status: "UNREAD", CreatedAt: now}
 			if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&notification).Error; err != nil {
 				return err
 			}

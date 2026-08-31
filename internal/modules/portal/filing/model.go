@@ -7,9 +7,12 @@ import (
 )
 
 const (
-	FormVersion            = "2025.1"
-	StatusDraft            = "DRAFT"
-	StatusWaitingContract  = "WAITING_CONTRACT"
+	FormVersion = "2025.1"
+	StatusDraft = "DRAFT"
+	// StatusWaitingCRM 使用历史数据库枚举 WAITING_CONTRACT 以兼容既有迁移；
+	// 业务含义是“已由 Portal 提交，等待客户与商机系统人工完善”，不是自动提交公安。
+	StatusWaitingCRM       = "WAITING_CONTRACT"
+	StatusWaitingContract  = StatusWaitingCRM // legacy alias
 	StatusSubmitting       = "SUBMITTING"
 	StatusSubmissionFailed = "SUBMISSION_FAILED"
 	StatusSubmitted        = "SUBMITTED" // reached only with an immutable trusted provider receipt
@@ -100,7 +103,8 @@ type SubmissionSnapshot struct {
 func (SubmissionSnapshot) TableName() string { return "portal_filing_submission_snapshots" }
 
 // SubmissionOutbox 只保存不可变 Portal 快照的稳定引用，不是公安系统线协议载荷。
-// 外部签名契约未配置前，WAITING_CONTRACT 是有意的失败关闭状态，worker 不得领取投递。
+// WAITING_CRM 是有意的人工接管状态；Portal 不直接向公安提交。只有 CRM 人工完善并
+// 明确授权后，才允许由后续人工流程转交公安。旧版 WAITING_CONTRACT 名称仅为数据库兼容保留。
 type SubmissionOutbox struct {
 	ID               uint64     `gorm:"primaryKey;autoIncrement"`
 	EventID          string     `gorm:"size:64;not null;uniqueIndex:uq_portal_filing_submission_event,priority:2"`

@@ -54,14 +54,14 @@ func TestCapabilitiesRequireSessionAndExposeOnlyBoundedRuntimeState(t *testing.T
 		"report_download":           "REPORT_SECURITY_PROVIDERS_NOT_CONFIGURED",
 		"filing_material_upload":    "FILING_MATERIAL_PROVIDERS_NOT_CONFIGURED",
 		"filing_export":             "FILING_EXPORT_NOT_CONFIGURED",
-		"filing_police_submission":  "FILING_POLICE_SUBMISSION_CONTRACT_NOT_CONFIGURED",
+		"filing_police_submission":  "FILING_CRM_REVIEW_REQUIRED",
 	}
 	if len(envelope.Data) != len(want)+1 {
 		t.Fatalf("capabilities=%#v", envelope.Data)
 	}
 	for name, reason := range want {
 		value, ok := envelope.Data[name]
-		if !ok || value.Available || value.ReasonCode != reason || (value.Mode != "UNAVAILABLE" && value.Mode != "LOCAL_ONLY") {
+		if !ok || value.Available || value.ReasonCode != reason || (value.Mode != "UNAVAILABLE" && value.Mode != "LOCAL_ONLY" && value.Mode != "CRM_MANUAL_REVIEW") {
 			t.Fatalf("capability %s=%+v", name, value)
 		}
 	}

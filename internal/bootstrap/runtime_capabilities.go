@@ -46,13 +46,12 @@ func runtimeCapabilities(config Config) RuntimeCapabilities {
 		"qb_active_query":          qbStatus,
 		"qb_launch_quotation":      configuredCapability(config.QBLaunchEnabled, "QB_LAUNCH_NOT_CONFIGURED"),
 		"qb_launch_bid":            configuredCapability(config.QBLaunchEnabled, "QB_LAUNCH_NOT_CONFIGURED"),
-		// 当前装配对尚未落地的信任边界显式注入不可用适配器；在生产实现接入前保持失败关闭，
-		// 不能因为前端展示了能力入口就推断后端依赖可用。
-		"customer_import_scan":            configuredCapability(false, "CUSTOMER_IMPORT_SCANNER_NOT_CONFIGURED"),
+		// 导入和附件使用进程内有界解析、格式、摘要、路径和内容校验，不依赖外部杀毒服务。
+		"customer_import_scan":            configuredCapability(true, ""),
 		"opportunity_attachment_upload":   configuredCapability(config.AttachmentLocalEnabled, "ATTACHMENT_STORAGE_OR_SCANNER_NOT_CONFIGURED"),
 		"opportunity_attachment_download": configuredCapability(config.AttachmentLocalEnabled, "ATTACHMENT_STORAGE_NOT_CONFIGURED"),
 		"customer_project_history":        configuredCapability(config.PortalProjectHistoryEnabled, "PROJECT_HISTORY_PROVIDER_NOT_CONFIGURED"),
-		"customer_export":                 configuredCapability(false, "CUSTOMER_EXPORT_PROVIDER_NOT_CONFIGURED"),
+		"customer_export":                 configuredCapability(true, ""),
 		"presale_report_export":           configuredCapability(false, "PRESALE_EXPORT_PROVIDER_NOT_CONFIGURED"),
 		"presale_request_submission":      configuredCapability(true, ""),
 	}

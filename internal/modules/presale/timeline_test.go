@@ -127,6 +127,15 @@ func TestAvailableActionsFailsClosedWithoutApprovalTaskResolutionContract(t *tes
 	}
 }
 
+func TestLegacyPersonAssignmentAllowsTechnicalDirector(t *testing.T) {
+	t.Parallel()
+	actor := managerActor("technical_director")
+	actor.Permissions["presale.assign"] = true
+	if got := localAvailableActions(actor, StatusApprovedPendingAssignment, "applicant", nil); !timelineContains(got, "ASSIGN") {
+		t.Fatalf("technical director actions=%v, want ASSIGN", got)
+	}
+}
+
 type recordingApprovalTaskResolver struct {
 	query ApprovalTaskQuery
 	task  ApprovalTask

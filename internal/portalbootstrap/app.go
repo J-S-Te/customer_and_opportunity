@@ -216,7 +216,13 @@ type contactProtector struct{ codec *AEADCodec }
 func (p contactProtector) Encrypt(_ context.Context, value string) ([]byte, string, error) {
 	// 密文用于服务端处理，掩码仅供界面展示；空值也加密，从存储形态上不泄露“是否填写”。
 	value = strings.TrimSpace(value)
-	cipher, err := p.codec.Encrypt([]byte(value))
+	plaintext := []byte(value)
+	// AEADCodec 对空明文返回 nil，而 expected_contact_cipher 是数据库非空字段。
+	// 使用固定的不可读哨兵保持“未填写”语义，同时确保数据库中始终保存有效密文。
+	if len(plaintext) == 0 {
+		plaintext = []byte{0}
+	}
+	cipher, err := p.codec.Encrypt(plaintext)
 	if err != nil {
 		return nil, "", err
 	}

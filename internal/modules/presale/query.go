@@ -396,7 +396,7 @@ func isOverdue(status RequestStatus, expectedEnd, now time.Time) bool {
 func localAvailableActions(actor Actor, status RequestStatus, applicantID string, current []AssigneeSummaryView) []string {
 	actions := make([]string, 0, 4)
 	if (status == StatusApprovedPendingAssignment || status == StatusExecuting) &&
-		actor.Can("presale.assign") && (actor.HasRole("team_lead") || actor.HasRole("crm_super_admin")) {
+		actor.Can("presale.assign") && (actor.HasRole("technical_director") || actor.HasRole("team_lead") || actor.HasRole("crm_super_admin")) {
 		actions = append(actions, "ASSIGN")
 	}
 	currentAssignee := false

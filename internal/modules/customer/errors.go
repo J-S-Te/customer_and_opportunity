@@ -28,7 +28,6 @@ var (
 	ErrKeyFilterUnavailable         = apperror.New(http.StatusServiceUnavailable, "CRM_CUSTOMER_KEY_FILTER_NOT_CONFIGURED", "key-customer classification is not configured")
 	ErrProjectHistoryUnavailable    = apperror.New(http.StatusServiceUnavailable, "CRM_CUSTOMER_PROJECT_HISTORY_NOT_CONFIGURED", "project snapshot reader is not configured")
 	ErrProjectHistoryDependency     = apperror.New(http.StatusServiceUnavailable, "CRM_CUSTOMER_PROJECT_HISTORY_UNAVAILABLE", "project snapshot dependency is unavailable")
-	ErrExportUnavailable            = apperror.New(http.StatusServiceUnavailable, "CRM_CUSTOMER_EXPORT_NOT_CONFIGURED", "customer export worker and protected object storage are not configured")
 	ErrInvalidStakeholders          = apperror.New(http.StatusUnprocessableEntity, "CRM_CUSTOMER_STAKEHOLDERS_INVALID", "customer stakeholders are invalid")
 	ErrInvalidSystems               = apperror.New(http.StatusUnprocessableEntity, "CRM_CUSTOMER_SYSTEMS_INVALID", "customer information systems are invalid")
 	ErrProfileUnavailable           = apperror.New(http.StatusServiceUnavailable, "CRM_CUSTOMER_PROFILE_NOT_CONFIGURED", "customer profile repository is not configured")

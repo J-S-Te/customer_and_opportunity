@@ -102,6 +102,12 @@ paths:
     post: {$ref: '#/components/x-operations/createFeedback'}
   /api/v1/feedbacks/{id}:
     get: {$ref: '#/components/x-operations/getFeedback'}
+  /api/v1/feedback-notifications:
+    get: {$ref: '#/components/x-operations/listFeedbackNotifications'}
+  /api/v1/feedback-notifications/unread-count:
+    get: {$ref: '#/components/x-operations/feedbackNotificationUnreadCount'}
+  /api/v1/feedback-notifications/{id}/read:
+    post: {$ref: '#/components/x-operations/readFeedbackNotification'}
   /api/v1/feedbacks/{id}/messages:
     post: {$ref: '#/components/x-operations/addFeedbackMessage'}
   /api/v1/feedbacks/{id}/close:
@@ -346,6 +352,9 @@ components:
     createFeedback: {<<: *feedbackRead, operationId: createFeedback, x-permission: feedback.create, parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]}
     addFeedbackMessage: {<<: *feedbackRead, operationId: addFeedbackMessage, x-permission: feedback.reply, parameters: [{$ref: '#/components/parameters/ID'}, {$ref: '#/components/parameters/IdempotencyKey'}]}
     closeFeedback: {<<: *feedbackRead, operationId: closeFeedback, x-permission: feedback.reply, parameters: [{$ref: '#/components/parameters/ID'}, {$ref: '#/components/parameters/IdempotencyKey'}]}
+    listFeedbackNotifications: {<<: *feedbackRead, operationId: listFeedbackNotifications, tags: [Feedback], x-permission: feedback.read}
+    feedbackNotificationUnreadCount: {<<: *feedbackRead, operationId: feedbackNotificationUnreadCount, tags: [Feedback], x-permission: feedback.read}
+    readFeedbackNotification: {<<: *feedbackRead, operationId: readFeedbackNotification, tags: [Feedback], x-permission: feedback.read, parameters: [{$ref: '#/components/parameters/ID'}]}
     createEvaluation: &evaluationRead {<<: *portalRead, operationId: createEvaluation, tags: [Evaluation], x-permission: evaluation.create, parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]}
     getEvaluation: {<<: *evaluationRead, operationId: getEvaluation, x-permission: evaluation.read, parameters: [{$ref: '#/components/parameters/ID'}]}
     listFilings: &filingRead {<<: *portalRead, operationId: listFilings, tags: [Filing], x-permission: filing.read}

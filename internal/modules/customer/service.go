@@ -3,11 +3,13 @@ package customer
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/csv"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"html"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -40,6 +42,9 @@ type Service struct {
 
 func NewService(db *gorm.DB, repo Repository, auditWriter audit.Writer, codec *security.SensitiveCodec) *Service {
 	service := &Service{db: db, repo: repo, audit: auditWriter, codec: codec, now: func() time.Time { return time.Now().UTC() }}
+	// XLSX 安全边界由进程内的有界 ZIP/OOXML 校验和业务字段校验承担。
+	// 外部杀毒引擎不是客户导入可用性的前置条件。
+	service.scanner = CodeImportScanner{}
 	if create, ok := repo.(CreateRepository); ok {
 		service.create = create
 	}
@@ -55,10 +60,11 @@ func NewService(db *gorm.DB, repo Repository, auditWriter audit.Writer, codec *s
 	return service
 }
 
-// 导入文件必须先经过部署侧恶意内容扫描器；未显式配置该信任边界时保持功能不可用，
-// 不能因为本地解析器能打开文件就把它当作安全输入。
+// UseImportScanner 保留扩展点以兼容已有调用方；默认使用 CodeImportScanner。
 func (s *Service) UseImportScanner(scanner ImportFileScanner) *Service {
-	s.scanner = scanner
+	if scanner != nil {
+		s.scanner = scanner
+	}
 	return s
 }
 
@@ -656,11 +662,51 @@ func (s *Service) ProjectHistory(ctx context.Context, id uint64, page, pageSize 
 	return value, nil
 }
 
-func (s *Service) CreateExport(ctx context.Context) error {
+// CreateExport 在请求生命周期内生成 CSV 临时文件。文件只用于当前响应，调用方必须在
+// response 完成后删除；不依赖 OSS、导出 Worker 或持久化导出任务，也不导出敏感字段。
+func (s *Service) CreateExport(ctx context.Context) (*os.File, error) {
 	if _, err := principalFromContext(ctx); err != nil {
-		return err
+		return nil, err
 	}
-	return ErrExportUnavailable
+	file, err := os.CreateTemp("", "crm-customer-export-*.csv")
+	if err != nil {
+		return nil, err
+	}
+	cleanup := func(cause error) (*os.File, error) {
+		name := file.Name()
+		_ = file.Close()
+		_ = os.Remove(name)
+		return nil, cause
+	}
+	writer := csv.NewWriter(file)
+	if err = writer.Write([]string{"客户编号", "客户名称", "客户类型", "行业", "区域", "负责人用户ID", "负责人组织ID", "状态", "创建时间"}); err != nil {
+		return cleanup(err)
+	}
+	for page := 1; ; page++ {
+		result, listErr := s.List(ctx, ListQuery{Page: page, PageSize: 100, SortBy: "created_at", SortOrder: "asc"})
+		if listErr != nil {
+			return cleanup(listErr)
+		}
+		for _, item := range result.Items {
+			if err = writer.Write([]string{item.CustomerNo, item.Name, item.CustomerType, item.Industry, item.Region, item.OwnerUserID, item.OwnerOrgID, item.Status, item.CreatedAt.UTC().Format(time.RFC3339)}); err != nil {
+				return cleanup(err)
+			}
+		}
+		if len(result.Items) == 0 || int64(page*100) >= result.Total {
+			break
+		}
+	}
+	writer.Flush()
+	if err = writer.Error(); err != nil {
+		return cleanup(err)
+	}
+	if _, err = file.Seek(0, 0); err != nil {
+		return cleanup(err)
+	}
+	if err = file.Chmod(0o600); err != nil {
+		return cleanup(err)
+	}
+	return file, nil
 }
 
 func (s *Service) CreateFollowup(ctx context.Context, id uint64, input FollowupCreateRequest) (*FollowupResponse, error) {

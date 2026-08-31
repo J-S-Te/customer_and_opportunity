@@ -1580,7 +1580,7 @@ func assignmentActionAllowed(actor Actor, instance *ApprovalInstance, action App
 	// were available.
 	if instance == nil || len(instance.NodesJSON) == 0 {
 		return (action == ApprovalNodeDepartment && actor.HasRole("technical_director")) ||
-			(action == ApprovalNodePerson && actor.HasRole("team_lead"))
+			(action == ApprovalNodePerson && (actor.HasRole("technical_director") || actor.HasRole("team_lead")))
 	}
 	var nodes []ApprovalNode
 	if json.Unmarshal(instance.NodesJSON, &nodes) != nil {
