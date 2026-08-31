@@ -328,10 +328,10 @@ func (s *Service) Apply(ctx context.Context, customerID uint64, in ApplyRequest)
 	if !ok {
 		return nil, apperror.ErrUnauthenticated
 	}
-	// 原因用于审批和审计，只要求有实际内容；前端允许简短中文说明，
-	// 不能再使用旧的“至少 20 字”限制阻断合法的信用调整申请。
+	// 原因用于审批和审计，去除首尾空格后至少保留两个字符，
+	// 避免单字符或纯空白内容形成不可追溯的调整记录。
 	in.Reason = strings.TrimSpace(in.Reason)
-	if !validLevel(in.TargetLevel) || in.Reason == "" {
+	if !validLevel(in.TargetLevel) || len([]rune(in.Reason)) < 2 {
 		return nil, apperror.New(400, "CRM_CREDIT_APPLICATION_INVALID", "target level or reason is invalid")
 	}
 	now := s.now()
