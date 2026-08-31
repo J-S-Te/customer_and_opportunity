@@ -44,7 +44,10 @@ func (s *Service) GetLevel(ctx context.Context, customerID uint64) (LevelRespons
 		OnTime, Late        uint32
 		UpdatedAt           *time.Time
 	}
-	err := database.FromContext(ctx, s.db).Table("crm_customers").Select("id,credit_level,credit_change_source,credit_updated_at AS updated_at,consecutive_ontime_count AS on_time,consecutive_late_count AS late").Where("tenant_id=? AND id=? AND deleted_at IS NULL", p.TenantID, customerID).Take(&row).Error
+	err := scopedCreditCustomers(database.FromContext(ctx, s.db), p).
+		Select("customer.id,customer.credit_level,customer.credit_change_source,customer.credit_updated_at AS updated_at,customer.consecutive_ontime_count AS on_time,customer.consecutive_late_count AS late").
+		Where("customer.id=?", customerID).
+		Take(&row).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return LevelResponse{}, apperror.New(404, "CRM_CUSTOMER_NOT_FOUND", "customer not found")
 	}
@@ -73,8 +76,65 @@ func (s *Service) Statistics(ctx context.Context) (Statistics, error) {
 		return Statistics{}, apperror.ErrUnauthenticated
 	}
 	var result Statistics
-	err := database.FromContext(ctx, s.db).Table("crm_customers").Select("COALESCE(SUM(credit_level='C'),0) AS level_c,COALESCE(SUM(credit_level='D'),0) AS level_d,COALESCE(SUM(credit_level IN ('C','D')),0) AS attention_customers").Where("tenant_id=? AND status='ACTIVE' AND merged_into_id IS NULL AND deleted_at IS NULL", p.TenantID).Scan(&result).Error
+	err := scopedCreditCustomers(database.FromContext(ctx, s.db), p).
+		Select("COALESCE(SUM(customer.credit_level='C'),0) AS level_c,COALESCE(SUM(customer.credit_level='D'),0) AS level_d,COALESCE(SUM(customer.credit_level IN ('C','D')),0) AS attention_customers").
+		Where("customer.status='ACTIVE' AND customer.merged_into_id IS NULL").
+		Scan(&result).Error
 	return result, err
+}
+
+// scopedCreditCustomers 将信用子模块收口到与客户主数据一致的数据范围。
+// 销售角色即使获得平台 application/tenant 范围，也只能读取本人创建的客户；
+// 管理角色继续遵循平台下发的 ALL/ORG 范围，未知或个人范围按负责人本人失败收窄。
+func scopedCreditCustomers(db *gorm.DB, principal auth.Principal) *gorm.DB {
+	db = db.Table("crm_customers AS customer").
+		Where("customer.tenant_id=? AND customer.deleted_at IS NULL", principal.TenantID)
+	if creditSalesOnlyPrincipal(principal) {
+		return db.Where("customer.created_by=?", principal.UserID)
+	}
+	switch principal.ScopeMode {
+	case auth.ScopeAll:
+		return db
+	case auth.ScopeOrg:
+		if len(principal.OrganizationIDs) == 0 {
+			return db.Where("1=0")
+		}
+		return db.Where("customer.owner_org_id IN ?", principal.OrganizationIDs)
+	default:
+		return db.Where("customer.owner_user_id=?", principal.UserID)
+	}
+}
+
+func creditSalesOnlyPrincipal(principal auth.Principal) bool {
+	hasSales := false
+	for _, role := range principal.Roles {
+		if role == "sales" {
+			hasSales = true
+			break
+		}
+	}
+	if !hasSales {
+		return false
+	}
+	for _, role := range principal.Roles {
+		switch role {
+		case "sales_director", "customer_admin", "crm_super_admin", "auditor", "admin":
+			return false
+		}
+	}
+	return true
+}
+
+func ensureCreditCustomerVisible(db *gorm.DB, principal auth.Principal, customerID uint64) error {
+	var row struct{ ID uint64 }
+	err := scopedCreditCustomers(db, principal).
+		Select("customer.id").
+		Where("customer.id=?", customerID).
+		Take(&row).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return apperror.New(404, "CRM_CUSTOMER_NOT_FOUND", "customer not found")
+	}
+	return err
 }
 
 func defaultRuleSettings(tenant string, now time.Time) RuleSettings {
@@ -291,17 +351,22 @@ func (s *Service) Apply(ctx context.Context, customerID uint64, in ApplyRequest)
 			}
 		}
 		var customer struct {
-			ID                       uint64
-			OwnerUserID, CreditLevel string
+			ID          uint64
+			CreditLevel string
 		}
-		if err := tx.Table("crm_customers").Clauses(clause.Locking{Strength: "UPDATE"}).Select("id,owner_user_id,credit_level").Where("tenant_id=? AND id=? AND status='ACTIVE' AND merged_into_id IS NULL AND deleted_at IS NULL", p.TenantID, customerID).Take(&customer).Error; err != nil {
+		customerErr := scopedCreditCustomers(tx, p).
+			Clauses(clause.Locking{Strength: "UPDATE"}).
+			Select("customer.id,customer.credit_level").
+			Where("customer.id=? AND customer.status='ACTIVE' AND customer.merged_into_id IS NULL", customerID).
+			Take(&customer).Error
+		if errors.Is(customerErr, gorm.ErrRecordNotFound) {
 			return apperror.New(404, "CRM_CUSTOMER_NOT_FOUND", "customer not found")
+		}
+		if customerErr != nil {
+			return customerErr
 		}
 		if customer.CreditLevel == in.TargetLevel {
 			return apperror.New(409, "CRM_CREDIT_APPLICATION_SAME_LEVEL", "target level equals current level")
-		}
-		if customer.OwnerUserID != p.UserID && !hasRole(p, "sales_director") && !hasRole(p, "customer_admin") && !hasRole(p, "crm_super_admin") {
-			return apperror.ErrForbidden
 		}
 		pending := customerID
 		out = Application{TenantID: p.TenantID, CustomerID: customerID, ApplicantID: p.UserID, IdempotencyKey: idempotencyKey, FromLevel: customer.CreditLevel, TargetLevel: in.TargetLevel, Reason: in.Reason, Status: "PENDING", CreatedAt: now, UpdatedAt: now, Version: 1, PendingCustomerID: &pending}
@@ -460,8 +525,17 @@ func (s *Service) History(ctx context.Context, customerID uint64, page, pageSize
 	if !ok {
 		return pagination.Page[CreditLog]{}, apperror.ErrUnauthenticated
 	}
+	if err := ensureCreditCustomerVisible(database.FromContext(ctx, s.db), p, customerID); err != nil {
+		return pagination.Page[CreditLog]{}, err
+	}
 	page, pageSize = pagination.Normalize(page, pageSize)
-	query := database.FromContext(ctx, s.db).Where("tenant_id=? AND customer_id=?", p.TenantID, customerID)
+	db := database.FromContext(ctx, s.db)
+	visibleCustomer := scopedCreditCustomers(db.Session(&gorm.Session{NewDB: true}), p).
+		Select("customer.id").
+		Where("customer.id=?", customerID)
+	// 将可见性子查询保留在实际数据读取中，避免客户组织归属在授权检查与分页查询之间变化时
+	// 泄露已经移出当前范围的信用历史。
+	query := db.Where("tenant_id=? AND customer_id=? AND customer_id IN (?)", p.TenantID, customerID, visibleCustomer)
 	var total int64
 	if err := query.Model(&CreditLog{}).Count(&total).Error; err != nil {
 		return pagination.Page[CreditLog]{}, err
@@ -475,8 +549,15 @@ func (s *Service) Payments(ctx context.Context, customerID uint64, page, pageSiz
 	if !ok {
 		return pagination.Page[PaymentRecord]{}, apperror.ErrUnauthenticated
 	}
+	if err := ensureCreditCustomerVisible(database.FromContext(ctx, s.db), p, customerID); err != nil {
+		return pagination.Page[PaymentRecord]{}, err
+	}
 	page, pageSize = pagination.Normalize(page, pageSize)
-	query := database.FromContext(ctx, s.db).Where("tenant_id=? AND customer_id=?", p.TenantID, customerID)
+	db := database.FromContext(ctx, s.db)
+	visibleCustomer := scopedCreditCustomers(db.Session(&gorm.Session{NewDB: true}), p).
+		Select("customer.id").
+		Where("customer.id=?", customerID)
+	query := db.Where("tenant_id=? AND customer_id=? AND customer_id IN (?)", p.TenantID, customerID, visibleCustomer)
 	var total int64
 	if err := query.Model(&creditPaymentRecord{}).Count(&total).Error; err != nil {
 		return pagination.Page[PaymentRecord]{}, err
