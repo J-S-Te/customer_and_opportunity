@@ -5,6 +5,7 @@ import (
 	"mime"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -308,7 +309,20 @@ func validProjectHistoryKeys(c *gin.Context) bool {
 }
 
 func (h *Handler) CreateExport(c *gin.Context) {
-	response.Error(c, h.service.CreateExport(c.Request.Context()))
+	file, err := h.service.CreateExport(c.Request.Context())
+	if err != nil {
+		response.Error(c, err)
+		return
+	}
+	name := file.Name()
+	defer func() {
+		_ = file.Close()
+		_ = os.Remove(name)
+	}()
+	c.Header("Cache-Control", "no-store, private")
+	c.Header("Content-Type", "text/csv; charset=utf-8")
+	c.Header("Content-Disposition", `attachment; filename="customers.csv"`)
+	c.File(name)
 }
 
 func (h *Handler) PreviewImport(c *gin.Context) {

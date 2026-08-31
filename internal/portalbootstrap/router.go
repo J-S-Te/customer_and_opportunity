@@ -215,6 +215,9 @@ func NewRouter(deps RouterDependencies) *gin.Engine {
 	api.GET("/report-risk-alerts", requirePermission("report.read"), listOwnedReportRiskAlerts(deps))
 	api.GET("/feedbacks", requirePermission("feedback.read"), listFeedback(deps))
 	api.GET("/feedbacks/:id", requirePermission("feedback.read"), getFeedback(deps))
+	api.GET("/feedback-notifications", requirePermission("feedback.read"), listFeedbackNotifications(deps))
+	api.GET("/feedback-notifications/unread-count", requirePermission("feedback.read"), countFeedbackNotifications(deps))
+	api.POST("/feedback-notifications/:id/read", requirePermission("feedback.read"), originAndCSRF(deps.Config), readFeedbackNotification(deps))
 	api.POST("/feedbacks", requirePermission("feedback.create"), originAndCSRF(deps.Config), createFeedback(deps))
 	api.POST("/feedbacks/:id/messages", requirePermission("feedback.reply"), originAndCSRF(deps.Config), addFeedbackMessage(deps))
 	api.POST("/feedbacks/:id/close", requirePermission("feedback.reply"), originAndCSRF(deps.Config), closeFeedback(deps))
@@ -244,7 +247,7 @@ func capabilities(deps RouterDependencies) gin.HandlerFunc {
 			ReportDownload:          unavailableCapability("REPORT_SECURITY_PROVIDERS_NOT_CONFIGURED"),
 			FilingMaterialUpload:    unavailableCapability("FILING_MATERIAL_PROVIDERS_NOT_CONFIGURED"),
 			FilingExport:            unavailableCapability("FILING_EXPORT_NOT_CONFIGURED"),
-			FilingPoliceSubmission:  runtimeCapability{Available: false, Mode: "LOCAL_ONLY", ReasonCode: "FILING_POLICE_SUBMISSION_CONTRACT_NOT_CONFIGURED"},
+			FilingPoliceSubmission:  runtimeCapability{Available: false, Mode: "CRM_MANUAL_REVIEW", ReasonCode: "FILING_CRM_REVIEW_REQUIRED"},
 		}
 		maxAge := deps.WorkerHeartbeatMaxAge
 		if maxAge <= 0 {
@@ -1638,6 +1641,45 @@ func getFeedback(deps RouterDependencies) gin.HandlerFunc {
 			return
 		}
 		response.OK(c, value)
+	}
+}
+
+func listFeedbackNotifications(deps RouterDependencies) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		page, size, ok := bindProjectPagination(c, "unread_only")
+		if !ok {
+			return
+		}
+		value, err := deps.Feedback.ListCustomerNotifications(c.Request.Context(), feedbackActor(c), c.Query("unread_only") == "true", page, size)
+		if err != nil {
+			response.Error(c, err)
+			return
+		}
+		response.OK(c, value)
+	}
+}
+func countFeedbackNotifications(deps RouterDependencies) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		value, err := deps.Feedback.UnreadCustomerNotificationCount(c.Request.Context(), feedbackActor(c))
+		if err != nil {
+			response.Error(c, err)
+			return
+		}
+		response.OK(c, gin.H{"count": value})
+	}
+}
+func readFeedbackNotification(deps RouterDependencies) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+		if err != nil || id == 0 {
+			response.Error(c, feedback.ErrNotFound)
+			return
+		}
+		if err = deps.Feedback.ReadCustomerNotification(c.Request.Context(), feedbackActor(c), id); err != nil {
+			response.Error(c, err)
+			return
+		}
+		response.OK(c, gin.H{"read": true})
 	}
 }
 

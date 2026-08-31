@@ -42,6 +42,9 @@ func TestApplicationManifestsAreCompleteAndIndependent(t *testing.T) {
 		if !roleHasPermission(crm, roleCode, "presale.contact_phone.read") {
 			t.Fatalf("CRM role %s cannot enter the separately authorized contact-phone workflow", roleCode)
 		}
+		if !roleHasPermission(crm, roleCode, "customer.void") || !roleHasPermission(crm, roleCode, "customer.restore") {
+			t.Fatalf("CRM role %s cannot void and restore customers", roleCode)
+		}
 	}
 	for _, retired := range []string{"implementation_engineer", "technical_lead"} {
 		if HasRole(crm, retired) {

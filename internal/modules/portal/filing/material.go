@@ -25,7 +25,7 @@ const filingMaterialFinalizeLease = 30 * time.Second
 
 var (
 	ErrMaterialNotFound       = apperror.New(http.StatusNotFound, "PORTAL_FILING_MATERIAL_NOT_FOUND", "filing material not found")
-	ErrMaterialUnavailable    = apperror.New(http.StatusServiceUnavailable, "PORTAL_FILING_MATERIAL_DEPENDENCY_UNAVAILABLE", "filing material storage or scanning is unavailable")
+	ErrMaterialUnavailable    = apperror.New(http.StatusServiceUnavailable, "PORTAL_FILING_MATERIAL_DEPENDENCY_UNAVAILABLE", "filing material storage is unavailable")
 	ErrMaterialNotReady       = apperror.New(http.StatusConflict, "PORTAL_FILING_MATERIAL_NOT_READY", "filing material is not ready")
 	ErrMaterialContentInvalid = apperror.New(http.StatusUnprocessableEntity, "PORTAL_FILING_MATERIAL_CONTENT_INVALID", "filing material content does not match the declared metadata")
 )

@@ -3,6 +3,7 @@ package feedback
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/apperror"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/database"
@@ -118,6 +119,37 @@ func (r *GORMRepository) CreateStatusLog(ctx context.Context, value *StatusLog) 
 }
 func (r *GORMRepository) CreateOutbox(ctx context.Context, value *Outbox) error {
 	return r.tx(ctx).Create(value).Error
+}
+func (r *GORMRepository) CreateNotification(ctx context.Context, value *Notification) error {
+	return r.tx(ctx).Create(value).Error
+}
+func (r *GORMRepository) ListCustomerNotifications(ctx context.Context, actor CustomerActor, unreadOnly bool, pageNo, pageSize int) (pagination.Page[Notification], error) {
+	page := pagination.Page[Notification]{Items: []Notification{}, Page: pageNo, PageSize: pageSize}
+	db := r.tx(ctx).Table("portal_feedback_notifications n").Select("n.*, f.public_id, f.feedback_no").Joins("JOIN portal_feedbacks f ON f.id=n.feedback_id AND f.tenant_id=n.tenant_id").Where("n.tenant_id=? AND n.account_id=? AND f.customer_id=? AND f.deleted_at IS NULL", actor.TenantID, actor.AccountID, actor.CustomerID)
+	if unreadOnly {
+		db = db.Where("n.status=?", "UNREAD")
+	}
+	if err := db.Count(&page.Total).Error; err != nil {
+		return page, err
+	}
+	err := db.Order("n.created_at DESC,n.id DESC").Offset((pageNo - 1) * pageSize).Limit(pageSize).Find(&page.Items).Error
+	return page, err
+}
+func (r *GORMRepository) CountUnreadCustomerNotifications(ctx context.Context, actor CustomerActor) (int64, error) {
+	var count int64
+	err := r.tx(ctx).Table("portal_feedback_notifications n").Joins("JOIN portal_feedbacks f ON f.id=n.feedback_id AND f.tenant_id=n.tenant_id").Where("n.tenant_id=? AND n.account_id=? AND f.customer_id=? AND f.deleted_at IS NULL AND n.status=?", actor.TenantID, actor.AccountID, actor.CustomerID, "UNREAD").Count(&count).Error
+	return count, err
+}
+func (r *GORMRepository) FindCustomerNotificationForUpdate(ctx context.Context, actor CustomerActor, id uint64) (*Notification, error) {
+	var value Notification
+	err := r.tx(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).Table("portal_feedback_notifications n").Select("n.*").Joins("JOIN portal_feedbacks f ON f.id=n.feedback_id AND f.tenant_id=n.tenant_id").Where("n.id=? AND n.tenant_id=? AND n.account_id=? AND f.customer_id=? AND f.deleted_at IS NULL", id, actor.TenantID, actor.AccountID, actor.CustomerID).Take(&value).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, ErrNotFound
+	}
+	return &value, err
+}
+func (r *GORMRepository) MarkCustomerNotificationRead(ctx context.Context, value *Notification, at time.Time) error {
+	return r.tx(ctx).Model(&Notification{}).Where("id=? AND tenant_id=? AND account_id=? AND status=?", value.ID, value.TenantID, value.AccountID, "UNREAD").Updates(map[string]any{"status": "READ", "read_at": &at}).Error
 }
 
 func feedbackResult(value *Feedback, err error) (*Feedback, error) {

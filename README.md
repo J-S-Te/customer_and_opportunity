@@ -4,7 +4,7 @@
 
 CRM 与 Portal 已按两个独立应用内嵌浏览器授权目录，并可使用各自独立的 `authorization.catalog.sync` 机器 Client 发布至基础平台；生产启动会核验 OIDC `role_config_hash` 与当前二进制目录映射，避免平台授权与本地鉴权漂移。部署配置与 hash 查询命令见 [`DEVELOPMENT.md`](DEVELOPMENT.md)。Portal 邀请生成已在首次远程写前建立加密、可恢复的幂等 saga；平台预置、角色分配与 Portal mapping 使用每步稳定键，响应丢失后续跑同一操作，最终邀请和审计原子提交。基础平台已提供外部客户预置、Portal 角色分配/回收 Provider 和 OpenAPI；预置会创建稳定 OIDC `sub` 及一个没有初始密码的 HUMAN/LOCAL 登录账号。平台管理员通过现有账号生命周期显式初始化一次性临时密码，CRM 仅展示登录账号而不接触密码。本地 `customer_portal/dev` 可由平台部署 Agent 自动创建独立数据库、OIDC Client、角色目录和六组最小权限服务 Client；生产仍必须替换为 HTTPS、Secret 管理、生产数据库和正式网络策略。
 
-> 现行实现同步（2026-08-27）：CRM/Portal 邀请链接有效期为 24 小时（由 `internal/modules/portalinvite` 的 `inviteTTL` 统一控制），不是历史 PRD 中的 2 小时；历史 PRD 的 2 小时条款仅作为待修订基线保留。商机附件已具备本地/对象存储适配、ClamAV 扫描状态机和失败关闭边界；生产启用前仍需完成真实对象存储、扫描服务和 CI/CD 联调。
+> 现行实现同步（2026-08-31）：CRM/Portal 邀请链接有效期为 24 小时（由 `internal/modules/portalinvite` 的 `inviteTTL` 统一控制）。客户 XLSX 导入、商机附件和 Portal 备案材料上传均使用进程内有界解析、格式/MIME/大小/摘要、路径和内容安全校验，不依赖外部杀毒服务；文件内容只在请求或受控本地存储生命周期内处理。客户导出在请求内生成临时 CSV，响应结束立即删除，不使用 OSS。通知统一采用现有站内通知 outbox/个人收件箱链路，不承诺邮件、短信或 IM 送达。
 
 ### Keycloak 灰度切换与回滚
 
@@ -51,6 +51,8 @@ Keycloak Protocol Mapper 必须让 ID Token 和 UserInfo 保留以下平台 Clai
 BM-001 的可信报价/投标回调已保存本地只读快照并提供详情查询；主动查询适配器使用独立 Client Credentials、精确 `opportunity.status.read`、严格 envelope 校验及可选私有 CA/mTLS，短效调起只返回服务端固定报价/投标地址和最长 5 分钟的 HMAC 上下文，不接受浏览器指定跳转地址，前端入口已经接通。正式 OAuth Client、mTLS 证书、外部验签/防重放和环境仍待联调。已签约且合同引用已验证、无终态待办的商机可生成 `OPPORTUNITY_SIGNED` 待投递 outbox。合同端把事件持久写入签单关联核对队列；`LINK_CONFIRMED` 会原子保存既有合同与 CRM 客户、商机的唯一权威关联和不可变证据，`LINK_EXCEPTION` 只保存异常证据，两者都不创建合同、不修改合同状态或启动审批。合同端以精确 `contract.summary.read` 提供最小摘要查询，CRM 已实现可选的独立 Client Credentials 适配器；默认关闭且正式 OAuth Client、scope、网关仍待联调。商机团队已有独立分页任期账本，上线后的加入、移出、重新加入和角色变化均与当前团队替换原子记录；迁移前成员只以 `snapshot_at` 和 `active_at_snapshot` 表达账本启用时的观察事实，不把可复用成员行的创建/更新时间伪造为任期边界。商机附件已实现对象引用元数据、上传会话、扫描状态机、独立权限、租户/商机数据范围、审计和受控下载纵切面，CRM MySQL 不保存文件内容。正式对象存储与病毒扫描适配器尚未联调，生产默认适配器会在写入上传会话前返回 503，未扫描文件绝不能下载。
 
 当前实现口径：CM-001 客户创建和 BM-001 商机创建已强制使用操作人绑定的持久幂等键，首次公共响应与编号、主记录、审计原子提交，前端对结果不明确的同一规范载荷只在当前页面生命周期复用同一键；CP-004-b 客户确认关闭及处理端状态动作也采用资源/账号/动作/载荷绑定的租户级键，精确重放不重复状态日志或 outbox。TS-004/TS-007 已贯通核心纵切面，并在列表、看板、筛选、详情和时间线统一按权限、权威 `person_id` 与真实指派关系执行数据域；基础平台现已支持显式维护 `pms_person_id` 并在 Access Token、ID Token 与 UserInfo 签发 `person_id`，CRM 通过 `000058` 持久化且授权变化会撤销旧会话，绝不从 `sub` 或员工编号推导。TS-008 预警也已显式区分 CRM `USER/user_id` 与 PMS `PERSON/person_id`，个人列表/已读只做 actor 两种已认证身份的精确并集，不受 SELF/ORG/ALL 扩大；销售总监和团队负责人从本地有效 CRM OIDC 角色会话解析，不再当作 PMS 人员角色，无法取得外部实际当前审批人时仍失败关闭。TS-002 的独立 `available-actions` 和动作命令会按实例、节点和当前认证审批人实时解析审批引擎待办，浏览器不再提交内部 `engine_task_id`。TS-001/TS-002/TS-003/TS-004/TS-005 的关键人工写操作已用服务端持久记录绑定操作人、父资源和规范载荷。CP-002 已有项目详情、动态真分页、评价权限/失败隔离、不可变快照异步 PDF、15 分钟账号绑定下载授权，以及以权威 `manager_portal_account_id` 绑定的项目经理站内会话。CP-003 已增加对象版本、AES-256-GCM、扫描凭证、异步 Ingest、风险策略和逐次水印的生产端口；正式对象 reader、解密、水印和风险 Provider 未配置时严格失败关闭。CUS-004 已实现受控材料上传、公安提交 Worker 边界、稳定事件、提交中/失败状态和加密回执证据；没有正式公安 Provider 时保持未确认状态，绝不伪造 `SUBMITTED`。准确逐项状态以 [`开发状态.md`](开发状态.md) 为准。
+
+Portal 备案提交完成后先流转至客户与商机系统的人工处理队列；CRM 人员核验和完善后，才允许人工转交公安系统。Portal 不直接对接公安，也不把“已提交 CRM”伪装成公安已受理。
 
 当前原型中的客户、项目、商机、人员、报告和备案数据均为虚构样例，不得直接用作生产初始化数据。
 

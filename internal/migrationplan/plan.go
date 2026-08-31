@@ -64,7 +64,7 @@ var baseFiles = map[Schema][]string{
 		"000031_portal_filing.up.sql", "000038_portal_report_status_events.up.sql", "000039_portal_report_download_grants.up.sql",
 		"000041_portal_report_actor_columns.up.sql", "000043_portal_report_issued_notifications.up.sql", "000046_portal_project_exports.up.sql",
 		"000050_portal_project_messages.up.sql", "000052_portal_project_message_read_receipts.up.sql", "000054_portal_project_message_keyset_reads.up.sql",
-		"000056_portal_filing_materials_and_submission_outbox.up.sql", "000057_portal_report_file_security_evidence.up.sql", "000059_portal_report_scan_status_evidence.up.sql", "000061_portal_report_watermark_tracking.up.sql", "000062_portal_filing_waiting_contract_status.up.sql", "000063_portal_report_async_ingest.up.sql", "000066_portal_filing_submission_receipts.up.sql",
+		"000056_portal_filing_materials_and_submission_outbox.up.sql", "000057_portal_report_file_security_evidence.up.sql", "000059_portal_report_scan_status_evidence.up.sql", "000061_portal_report_watermark_tracking.up.sql", "000062_portal_filing_waiting_contract_status.up.sql", "000063_portal_report_async_ingest.up.sql", "000066_portal_filing_submission_receipts.up.sql", "000067_portal_feedback_customer_notifications.up.sql",
 		"000068_portal_report_risk_operations.up.sql",
 		"000070_portal_identity_disable_idempotency.up.sql",
 		"000073_portal_worker_heartbeats.up.sql", "000076_portal_request_audit_outbox.up.sql", "000077_portal_customer_service_options.up.sql",

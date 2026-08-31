@@ -1,4 +1,5 @@
-// Package portalfilingworker 只提交已经在本地锁定的备案快照；部署必须提供实现签名及验签协议的正式安全适配器。
+// Package portalfilingworker 保留为历史公安 Provider 边界；当前备案提交先停留在
+// 客户与商机系统人工处理队列，不应自动领取 WAITING_CRM 事件。
 package portalfilingworker
 
 import (
@@ -17,6 +18,7 @@ import (
 )
 
 const (
+	// 旧 Worker 只识别历史 Provider 合约，避免把当前 CRM 人工队列自动送往公安。
 	contractVersion = "portal.filing.submission-reference.v1"
 	maxAttempts     = 7
 )

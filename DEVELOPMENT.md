@@ -133,7 +133,7 @@ CRM 的客户、商机、售前和 Portal 邀请 JSON 写入口，以及 Portal 
 
 ## 客户 Excel 导入
 
-`POST /api/v1/customers/imports/preview` 只接收 `file` 和 `reason` 两个 multipart part，总请求和文件分别有硬上限。Handler 逐 part 有界读取，不调用会把大文件落到临时目录的 `ParseMultipartForm`。工作簿必须先经过部署注入的 `ImportFileScanner`；未注入或扫描服务故障返回 503，扫描器明确判定不安全时返回 422。当前启动入口故意不注入占位扫描器，因此实际部署在接入可信扫描适配器前会安全返回 `CRM_CUSTOMER_IMPORT_SCANNER_UNAVAILABLE`。
+`POST /api/v1/customers/imports/preview` 只接收 `file` 和 `reason` 两个 multipart part，总请求和文件分别有硬上限。Handler 逐 part 有界读取，不调用会把大文件落到临时目录的 `ParseMultipartForm`。工作簿默认经过进程内 `CodeImportScanner` 和 `safexlsx.ParseWorkbook` 的双重有界校验：固定 XLSX ZIP 容器、成员数量/展开体积/压缩比、路径穿越、可执行脚本成员、表头、公式、单元格和行列上限均失败关闭；不依赖外部杀毒服务。`ImportFileScanner` 仍可作为受控扩展点注入，但不是默认可用条件。
 
 扫描通过后，服务端仅解析真实 `.xlsx` OOXML：限制 10 MiB、1000 数据行、压缩展开量、条目数、列数和单元格长度，拒绝加密包、宏、外部关系、危险 ZIP 路径、DTD、公式和 CSV 注入前缀。表头固定为开发需求中的 10 个中文字段。原始工作簿不入库；可提交命令使用客户敏感字段的 AES-256-GCM 密钥加密，预览 DTO、审计和错误 CSV 不包含电话、邮箱或统一社会信用代码明文。
 

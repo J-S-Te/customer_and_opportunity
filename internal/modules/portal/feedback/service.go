@@ -71,6 +71,76 @@ type Repository interface {
 	CreateOutbox(context.Context, *Outbox) error
 }
 
+type customerNotificationRepository interface {
+	ListCustomerNotifications(context.Context, CustomerActor, bool, int, int) (pagination.Page[Notification], error)
+	CountUnreadCustomerNotifications(context.Context, CustomerActor) (int64, error)
+	FindCustomerNotificationForUpdate(context.Context, CustomerActor, uint64) (*Notification, error)
+	MarkCustomerNotificationRead(context.Context, *Notification, time.Time) error
+	CreateNotification(context.Context, *Notification) error
+}
+
+type CustomerNotificationView struct {
+	ID         uint64    `json:"id"`
+	FeedbackID string    `json:"feedback_id"`
+	FeedbackNo string    `json:"feedback_no"`
+	Kind       string    `json:"kind"`
+	Title      string    `json:"title"`
+	Body       string    `json:"body"`
+	TargetPath string    `json:"target_path"`
+	Status     string    `json:"status"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
+func (s *Service) ListCustomerNotifications(ctx context.Context, actor CustomerActor, unreadOnly bool, page, pageSize int) (pagination.Page[CustomerNotificationView], error) {
+	if !validCustomer(actor) {
+		return pagination.Page[CustomerNotificationView]{}, ErrNotFound
+	}
+	repo, ok := s.repo.(customerNotificationRepository)
+	if !ok {
+		return pagination.Page[CustomerNotificationView]{}, ErrNotFound
+	}
+	items, err := repo.ListCustomerNotifications(ctx, actor, unreadOnly, page, pageSize)
+	result := pagination.Page[CustomerNotificationView]{Items: make([]CustomerNotificationView, 0, len(items.Items)), Page: items.Page, PageSize: items.PageSize, Total: items.Total}
+	for _, item := range items.Items {
+		result.Items = append(result.Items, CustomerNotificationView{ID: item.ID, FeedbackID: item.PublicID, FeedbackNo: item.FeedbackNo, Kind: item.Kind, Title: item.Title, Body: item.Body, TargetPath: item.TargetPath, Status: item.Status, CreatedAt: item.CreatedAt})
+	}
+	return result, err
+}
+
+func (s *Service) UnreadCustomerNotificationCount(ctx context.Context, actor CustomerActor) (int64, error) {
+	if !validCustomer(actor) {
+		return 0, ErrNotFound
+	}
+	repo, ok := s.repo.(customerNotificationRepository)
+	if !ok {
+		return 0, ErrNotFound
+	}
+	return repo.CountUnreadCustomerNotifications(ctx, actor)
+}
+
+func (s *Service) ReadCustomerNotification(ctx context.Context, actor CustomerActor, id uint64) error {
+	if !validCustomer(actor) || id == 0 {
+		return ErrNotFound
+	}
+	repo, ok := s.repo.(customerNotificationRepository)
+	if !ok {
+		return ErrNotFound
+	}
+	return s.repo.WithTransaction(ctx, func(tx context.Context) error {
+		value, err := repo.FindCustomerNotificationForUpdate(tx, actor, id)
+		if err != nil {
+			return err
+		}
+		if value.Status == "READ" {
+			return nil
+		}
+		if err := repo.MarkCustomerNotificationRead(tx, value, s.clock.Now().UTC()); err != nil {
+			return err
+		}
+		return nil
+	})
+}
+
 type Service struct {
 	repo     Repository
 	projects ProjectAccess
@@ -429,6 +499,13 @@ func (s *Service) operatorMessage(tx, ctx context.Context, value *Feedback, acto
 			value.Version++
 		}
 	}
+	if visibility == "CUSTOMER" {
+		if repo, ok := s.repo.(customerNotificationRepository); ok {
+			if err := repo.CreateNotification(tx, &Notification{TenantID: value.TenantID, AccountID: value.AccountID, FeedbackID: value.ID, EventID: s.ids.NewID(), Kind: "FEEDBACK_OPERATOR_MESSAGE", Title: "客户反馈有新的服务回复", Body: truncateNotification(command.Content), TargetPath: "/customer-portal/feedback", Status: "UNREAD", CreatedAt: now}); err != nil {
+				return err
+			}
+		}
+	}
 	return s.emit(tx, value, "PORTAL_FEEDBACK_OPERATOR_MESSAGE", now)
 }
 
@@ -466,7 +543,23 @@ func (s *Service) transitionWithKey(tx, ctx context.Context, value *Feedback, to
 	if err := s.repo.CreateStatusLog(tx, log); err != nil {
 		return err
 	}
+	if actorType == "OPERATOR" {
+		if repo, ok := s.repo.(customerNotificationRepository); ok {
+			if err := repo.CreateNotification(tx, &Notification{TenantID: value.TenantID, AccountID: value.AccountID, FeedbackID: value.ID, EventID: s.ids.NewID(), Kind: "FEEDBACK_STATUS_CHANGED", Title: "客户反馈状态已更新", Body: "反馈单 " + value.FeedbackNo + " 当前状态：" + string(to), TargetPath: "/customer-portal/feedback", Status: "UNREAD", CreatedAt: now}); err != nil {
+				return err
+			}
+		}
+	}
 	return s.emit(tx, value, "PORTAL_FEEDBACK_STATUS_CHANGED", now)
+}
+
+func truncateNotification(value string) string {
+	value = strings.TrimSpace(value)
+	if utf8.RuneCountInString(value) <= 500 {
+		return value
+	}
+	runes := []rune(value)
+	return string(runes[:500])
 }
 
 func (s *Service) statusActionReplay(ctx context.Context, value *Feedback, actorType, actorID, key, expectedHash string) (bool, error) {

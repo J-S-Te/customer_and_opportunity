@@ -102,11 +102,18 @@ func (Escalation) TableName() string { return "portal_feedback_escalations" }
 type Notification struct {
 	ID         uint64     `gorm:"primaryKey;autoIncrement"`
 	TenantID   string     `gorm:"size:64;not null;index"`
+	AccountID  string     `gorm:"size:128;not null;index"`
 	FeedbackID uint64     `gorm:"not null;uniqueIndex:uq_portal_feedback_notice,priority:1"`
-	Kind       string     `gorm:"size:48;not null;uniqueIndex:uq_portal_feedback_notice,priority:2"`
+	EventID    string     `gorm:"size:64;not null;uniqueIndex:uq_portal_feedback_notice,priority:2"`
+	Kind       string     `gorm:"size:48;not null"`
+	Title      string     `gorm:"size:200;not null"`
+	Body       string     `gorm:"size:500;not null"`
+	TargetPath string     `gorm:"size:500;not null"`
 	Status     string     `gorm:"size:16;not null;index"`
 	CreatedAt  time.Time  `gorm:"precision:3;not null"`
 	ReadAt     *time.Time `gorm:"precision:3"`
+	PublicID   string     `gorm:"column:public_id;->"`
+	FeedbackNo string     `gorm:"column:feedback_no;->"`
 }
 
 func (Notification) TableName() string { return "portal_feedback_notifications" }

@@ -652,6 +652,8 @@ func (s *Service) view(ctx context.Context, value *Filing) (*View, error) {
 		return nil, err
 	}
 	result := basicView(value)
+	// 详情页标题也复用列表摘要，避免名称只存在加密 section 中时退回显示内部备案编号。
+	applyListSummary(ctx, s.protector, &result, sections)
 	materials, err := s.repo.ListMaterials(ctx, value.TenantID, value.ID)
 	if err != nil {
 		return nil, err
