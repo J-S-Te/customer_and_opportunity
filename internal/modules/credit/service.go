@@ -407,6 +407,9 @@ func (s *Service) Apply(ctx context.Context, customerID uint64, in ApplyRequest)
 	if !ok {
 		return nil, apperror.ErrUnauthenticated
 	}
+	if !p.HasPermission("customer.credit.apply") || !creditSalesOnlyPrincipal(p) {
+		return nil, apperror.ErrForbidden
+	}
 	// 原因用于审批和审计，去除首尾空格后至少保留两个字符，
 	// 避免单字符或纯空白内容形成不可追溯的调整记录。
 	in.Reason = strings.TrimSpace(in.Reason)
@@ -570,6 +573,9 @@ func (s *Service) Withdraw(ctx context.Context, customerID, applicationID uint64
 	p, ok := auth.FromContext(ctx)
 	if !ok {
 		return nil, apperror.ErrUnauthenticated
+	}
+	if !p.HasPermission("customer.credit.apply") || !creditSalesOnlyPrincipal(p) {
+		return nil, apperror.ErrForbidden
 	}
 	var out Application
 	err := database.FromContext(ctx, s.db).Transaction(func(tx *gorm.DB) error {
