@@ -32,6 +32,11 @@ func TestApplicationManifestsAreCompleteAndIndependent(t *testing.T) {
 			t.Fatalf("CRM role %s cannot authorize the duplicate override workflow", roleCode)
 		}
 	}
+	for _, roleCode := range []string{"sales_director", "crm_super_admin"} {
+		if !roleHasPermission(crm, roleCode, "customer.credit.approve") {
+			t.Fatalf("CRM role %s cannot authorize the credit approval workflow", roleCode)
+		}
+	}
 	if roleHasPermission(crm, "sales", "customer.duplicate.override") {
 		t.Fatal("ordinary sales role received the high-risk duplicate override permission")
 	}

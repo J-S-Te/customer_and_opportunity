@@ -96,6 +96,27 @@ func RequirePermission(permission string) gin.HandlerFunc {
 	}
 }
 
+// RequirePermissionOrRoles supports a deliberately explicit compatibility
+// path for signed role claims from sessions created before a permission catalog
+// update. It must only be used where the listed roles are independently
+// authorized to perform the exact operation.
+func RequirePermissionOrRoles(permission string, roles ...string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		principal, ok := auth.FromContext(c.Request.Context())
+		if !ok {
+			response.Error(c, apperror.ErrUnauthenticated)
+			c.Abort()
+			return
+		}
+		if !auth.HasPermissionOrRole(principal, permission, roles...) {
+			response.Error(c, apperror.ErrForbidden)
+			c.Abort()
+			return
+		}
+		c.Next()
+	}
+}
+
 // 只读前置接口可在明确列出的能力中满足任意一个；权限含义不同的写操作不能复用“任一满足”，
 // 否则较弱权限可能间接获得较强操作权。
 func RequireAnyPermission(permissions ...string) gin.HandlerFunc {

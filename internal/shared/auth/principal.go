@@ -49,6 +49,25 @@ func (p Principal) HasPermission(permission string) bool {
 	return ok
 }
 
+// HasPermissionOrRole is a narrowly-scoped compatibility check for routes whose
+// signed role is the business authority and whose older sessions may not yet
+// contain the corresponding catalog permission. Callers must provide an
+// explicit allow-list; this is intentionally not a general role-to-permission
+// expansion mechanism.
+func HasPermissionOrRole(p Principal, permission string, roles ...string) bool {
+	if p.HasPermission(permission) {
+		return true
+	}
+	for _, current := range p.Roles {
+		for _, allowed := range roles {
+			if current == allowed {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 type contextKey string
 
 const principalKey contextKey = "principal"
