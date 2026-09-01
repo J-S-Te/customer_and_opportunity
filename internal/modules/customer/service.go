@@ -105,6 +105,9 @@ func (s *Service) Create(ctx context.Context, request CreateRequest) (*Response,
 		return nil, ErrCreateIdempotencyUnavailable
 	}
 	request = inheritCreateOwner(normalizeCreateRequest(request), principal)
+	if err := validateCustomerMasterData(request.Name, request.CustomerType, request.Industry, request.Region, request.Reason); err != nil {
+		return nil, err
+	}
 	if s.owners != nil {
 		if request.OwnerOrgID == "" {
 			page, listErr := s.owners.List(ctx, ownerdirectory.Query{UserID: request.OwnerUserID, Page: 1, PageSize: 1})
@@ -346,15 +349,23 @@ func (s *Service) Update(ctx context.Context, id uint64, request UpdateRequest) 
 	if err != nil {
 		return nil, err
 	}
+	request.Name = strings.TrimSpace(request.Name)
+	request.CustomerType = strings.TrimSpace(request.CustomerType)
+	request.Industry = strings.TrimSpace(request.Industry)
+	request.Region = strings.TrimSpace(request.Region)
+	request.OwnerUserID = strings.TrimSpace(request.OwnerUserID)
+	request.OwnerOrgID = strings.TrimSpace(request.OwnerOrgID)
+	request.Reason = strings.TrimSpace(request.Reason)
 	if err = validateUpdateRegistrationContacts(request.Contacts); err != nil {
 		return nil, err
 	}
-	request.OwnerUserID = strings.TrimSpace(request.OwnerUserID)
-	request.OwnerOrgID = strings.TrimSpace(request.OwnerOrgID)
 	if s.owners != nil {
 		if err = s.owners.Validate(ctx, request.OwnerUserID, request.OwnerOrgID); err != nil {
 			return nil, err
 		}
+	}
+	if err := validateCustomerMasterData(request.Name, request.CustomerType, request.Industry, request.Region, request.Reason); err != nil {
+		return nil, err
 	}
 	current, err := s.repo.FindByID(ctx, principal, id, true)
 	if err != nil {
@@ -489,6 +500,10 @@ func (s *Service) changeStatus(ctx context.Context, id uint64, request StatusCha
 	if err != nil {
 		return nil, err
 	}
+	request.Reason = strings.TrimSpace(request.Reason)
+	if request.Reason == "" {
+		return nil, ErrChangeReasonRequired
+	}
 	model, err := s.repo.FindByID(ctx, principal, id, true)
 	if err != nil {
 		return nil, err
@@ -531,6 +546,11 @@ func (s *Service) changeStatus(ctx context.Context, id uint64, request StatusCha
 }
 
 func validateRegistrationContacts(contacts []ContactInput) error {
+	for _, contact := range contacts {
+		if strings.TrimSpace(contact.Name) == "" || strings.TrimSpace(contact.Phone) == "" {
+			return ErrInvalidContact
+		}
+	}
 	count := 0
 	for _, contact := range contacts {
 		if contact.IsRegistration {
@@ -544,6 +564,11 @@ func validateRegistrationContacts(contacts []ContactInput) error {
 }
 
 func validateUpdateRegistrationContacts(contacts []UpdateContactInput) error {
+	for _, contact := range contacts {
+		if strings.TrimSpace(contact.Name) == "" || (contact.Phone != nil && strings.TrimSpace(*contact.Phone) == "") {
+			return ErrInvalidContact
+		}
+	}
 	count := 0
 	for _, contact := range contacts {
 		if contact.IsRegistration {
@@ -552,6 +577,13 @@ func validateUpdateRegistrationContacts(contacts []UpdateContactInput) error {
 	}
 	if count != 1 {
 		return ErrInvalidContact
+	}
+	return nil
+}
+
+func validateCustomerMasterData(name, customerType, industry, region, reason string) error {
+	if strings.TrimSpace(name) == "" || strings.TrimSpace(customerType) == "" || strings.TrimSpace(industry) == "" || strings.TrimSpace(region) == "" || strings.TrimSpace(reason) == "" {
+		return ErrInvalidMasterData
 	}
 	return nil
 }

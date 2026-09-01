@@ -2,5 +2,5 @@
 .env.presale-worker
 .env.presale-worker.*
 !.env.presale-worker.example
-
+.ai
 .DS_Store

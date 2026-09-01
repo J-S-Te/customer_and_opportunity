@@ -64,12 +64,18 @@ type creditPaymentRecord struct {
 func (creditPaymentRecord) TableName() string { return "crm_customer_credit_payment_records" }
 
 type CreditLog struct {
-	ID                                                                 uint64 `gorm:"primaryKey"`
-	TenantID                                                           string
-	CustomerID                                                         uint64
-	FromLevel, ToLevel, Source, Reason, EventID, PaymentID, OperatorID string
-	ApplicationID                                                      uint64
-	OccurredAt                                                         time.Time
+	ID            uint64    `gorm:"primaryKey" json:"id"`
+	TenantID      string    `json:"-"`
+	CustomerID    uint64    `json:"customer_id"`
+	FromLevel     string    `json:"from_level"`
+	ToLevel       string    `json:"to_level"`
+	Source        string    `json:"source"`
+	Reason        string    `json:"reason,omitempty"`
+	EventID       string    `json:"event_id,omitempty"`
+	PaymentID     string    `json:"payment_id,omitempty"`
+	OperatorID    string    `json:"operator_id,omitempty"`
+	ApplicationID uint64    `json:"application_id,omitempty"`
+	OccurredAt    time.Time `json:"occurred_at"`
 }
 
 func (CreditLog) TableName() string { return "crm_customer_credit_logs" }

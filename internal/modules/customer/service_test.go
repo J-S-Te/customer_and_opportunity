@@ -13,6 +13,18 @@ func TestNormalizeName(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 }
+
+func TestCustomerMasterDataRejectsWhitespace(t *testing.T) {
+	if err := validateCustomerMasterData("客户", "企业", "制造业", "华东", "维护资料"); err != nil {
+		t.Fatalf("valid customer data rejected: %v", err)
+	}
+	if err := validateCustomerMasterData(" ", "企业", "制造业", "华东", "维护资料"); err != ErrInvalidMasterData {
+		t.Fatalf("blank customer name returned %v", err)
+	}
+	if err := validateCustomerMasterData("客户", "企业", "制造业", "华东", "   "); err != ErrInvalidMasterData {
+		t.Fatalf("blank reason returned %v", err)
+	}
+}
 func TestLeftPad4RejectsExhaustedSequence(t *testing.T) {
 	if got := leftPad4(42); got != "0042" {
 		t.Fatalf("got %q", got)
@@ -45,11 +57,14 @@ func TestCustomerFollowupResponseDoesNotExposeTenantFields(t *testing.T) {
 }
 
 func TestValidateRegistrationContacts(t *testing.T) {
-	if err := validateRegistrationContacts([]ContactInput{{Name: "登记人", IsRegistration: true}}); err != nil {
+	if err := validateRegistrationContacts([]ContactInput{{Name: "登记人", Phone: "13800000000", IsRegistration: true}}); err != nil {
 		t.Fatalf("valid contacts rejected: %v", err)
 	}
 	if err := validateRegistrationContacts([]ContactInput{{Name: "无登记人"}}); err != ErrInvalidContact {
 		t.Fatalf("missing registration contact: %v", err)
+	}
+	if err := validateRegistrationContacts([]ContactInput{{Name: " ", Phone: "13800000000", IsRegistration: true}}); err != ErrInvalidContact {
+		t.Fatalf("blank contact name accepted: %v", err)
 	}
 }
 

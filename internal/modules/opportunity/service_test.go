@@ -19,6 +19,18 @@ func TestValidateMasterData(t *testing.T) {
 	}
 }
 
+func TestOpportunityMasterDataRejectsWhitespace(t *testing.T) {
+	if err := validateOpportunityMasterData("商机", "软件", "转介绍", "需求说明"); err != nil {
+		t.Fatalf("valid opportunity data rejected: %v", err)
+	}
+	if err := validateOpportunityMasterData(" ", "软件", "转介绍", "需求说明"); err == nil {
+		t.Fatal("blank opportunity name accepted")
+	}
+	if err := validateOpportunityMasterData("商机", "软件", "转介绍", " "); err == nil {
+		t.Fatal("blank requirement summary accepted")
+	}
+}
+
 func TestVoidBlockerErrorCodeIsStable(t *testing.T) {
 	wrapped := errors.Join(ErrVoidBlocked, errors.New("dependency"))
 	if !errors.Is(wrapped, ErrVoidBlocked) {

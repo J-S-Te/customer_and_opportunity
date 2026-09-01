@@ -608,7 +608,10 @@ func (s *Service) Pending(ctx context.Context) ([]PendingApplication, error) {
 	if !auth.HasPermissionOrRole(p, "customer.credit.approve", "sales_director", "crm_super_admin") {
 		return nil, apperror.ErrForbidden
 	}
-	var items []PendingApplication
+	// Keep the collection shape stable for an empty inbox. A nil slice would
+	// serialize as JSON null, which makes clients mistake the response object
+	// for the item list when all pending applications have been processed.
+	items := make([]PendingApplication, 0)
 	err := database.FromContext(ctx, s.db).
 		Table("crm_customer_credit_applications AS application").
 		Select("application.id, application.customer_id, customer.customer_no, customer.name AS customer_name, application.applicant_id, application.from_level, application.target_level, application.reason, application.status, application.approval_instance_id, application.created_at, application.updated_at, application.version").

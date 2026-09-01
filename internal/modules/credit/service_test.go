@@ -29,6 +29,24 @@ func TestApplicationJSONUsesStableSnakeCaseAPIFields(t *testing.T) {
 	}
 }
 
+func TestCreditLogJSONUsesStableHistoryFields(t *testing.T) {
+	payload, err := json.Marshal(CreditLog{ID: 7, CustomerID: 11, FromLevel: LevelC, ToLevel: LevelB, Source: "MANUAL", OperatorID: "sales-1", OccurredAt: time.Date(2026, 9, 1, 7, 40, 11, 421000000, time.UTC)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(payload)
+	for _, field := range []string{`"from_level":"C"`, `"to_level":"B"`, `"operator_id":"sales-1"`, `"occurred_at"`} {
+		if !strings.Contains(got, field) {
+			t.Fatalf("JSON missing %s: %s", field, got)
+		}
+	}
+	for _, field := range []string{`"FromLevel"`, `"ToLevel"`, `"OperatorID"`, `"TenantID"`} {
+		if strings.Contains(got, field) {
+			t.Fatalf("JSON leaked Go field %s: %s", field, got)
+		}
+	}
+}
+
 func TestAutomaticRuleThresholdMovesOneLevelAndCaps(t *testing.T) {
 	if got := stepLevel("B", -1); got != LevelA {
 		t.Fatalf("two on-time payments should promote B to A, got %q", got)
