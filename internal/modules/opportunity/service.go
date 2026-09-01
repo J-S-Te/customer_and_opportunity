@@ -239,6 +239,9 @@ func (s *Service) Create(ctx context.Context, input CreateRequest) (*Response, e
 	}
 	input = inheritCreateOwner(normalizeCreateRequest(input), principal)
 	input.IdempotencyKey = key
+	if err := validateOpportunityMasterData(input.Name, input.Type, input.Source, input.RequirementSummary); err != nil {
+		return nil, err
+	}
 	if s.owners != nil {
 		if input.OwnerOrgID == "" {
 			page, listErr := s.owners.List(ctx, ownerdirectory.Query{UserID: input.OwnerUserID, Page: 1, PageSize: 1})
@@ -456,8 +459,16 @@ func (s *Service) Update(ctx context.Context, id uint64, input UpdateRequest) (*
 	if err != nil {
 		return nil, err
 	}
+	input.Name = strings.TrimSpace(input.Name)
+	input.Type = strings.TrimSpace(input.Type)
+	input.Source = strings.TrimSpace(input.Source)
+	input.RequirementSummary = strings.TrimSpace(input.RequirementSummary)
+	input.Reason = strings.TrimSpace(input.Reason)
 	amount, signDate, err := validateMasterData(input.ExpectedAmount, input.ExpectedSignDate)
 	if err != nil {
+		return nil, err
+	}
+	if err = validateOpportunityMasterData(input.Name, input.Type, input.Source, input.RequirementSummary); err != nil {
 		return nil, err
 	}
 	model, err := s.repo.FindByID(ctx, principal, id)
@@ -504,6 +515,13 @@ func validateMasterData(expectedAmount, expectedSignDate string) (decimal.Decima
 		return decimal.Zero, time.Time{}, apperror.New(422, "CRM_OPPORTUNITY_INVALID_SIGN_DATE", "expected sign date is invalid")
 	}
 	return amount, signDate, nil
+}
+
+func validateOpportunityMasterData(name, opportunityType, source, requirement string) error {
+	if strings.TrimSpace(name) == "" || strings.TrimSpace(opportunityType) == "" || strings.TrimSpace(source) == "" || strings.TrimSpace(requirement) == "" {
+		return apperror.New(422, "CRM_OPPORTUNITY_MASTER_DATA_INVALID", "opportunity master data is invalid")
+	}
+	return nil
 }
 
 func dateOnly(value time.Time) time.Time {
@@ -710,6 +728,10 @@ func (s *Service) ChangeStage(ctx context.Context, id uint64, input StageChangeR
 	}
 	if !isStage(input.TargetStage) {
 		return nil, ErrInvalidStage
+	}
+	input.Reason = strings.TrimSpace(input.Reason)
+	if input.Reason == "" {
+		return nil, apperror.New(422, "CRM_OPPORTUNITY_CHANGE_REASON_REQUIRED", "change reason is required")
 	}
 	model, err := s.repo.FindByID(ctx, principal, id)
 	if err != nil {

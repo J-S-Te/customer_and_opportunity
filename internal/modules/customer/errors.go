@@ -25,6 +25,8 @@ var (
 	ErrCreateReplayInvalid          = apperror.New(http.StatusConflict, "CRM_CUSTOMER_CREATE_REPLAY_INVALID", "customer creation replay no longer matches its resource")
 	ErrCreateIdempotencyUnavailable = apperror.New(http.StatusServiceUnavailable, "CRM_CUSTOMER_CREATE_IDEMPOTENCY_UNAVAILABLE", "customer creation idempotency repository is not configured")
 	ErrInvalidQuery                 = apperror.New(http.StatusBadRequest, "CRM_CUSTOMER_QUERY_INVALID", "customer query is invalid")
+	ErrInvalidMasterData            = apperror.New(http.StatusUnprocessableEntity, "CRM_CUSTOMER_MASTER_DATA_INVALID", "customer master data is invalid")
+	ErrChangeReasonRequired         = apperror.New(http.StatusUnprocessableEntity, "CRM_CUSTOMER_CHANGE_REASON_REQUIRED", "change reason is required")
 	ErrKeyFilterUnavailable         = apperror.New(http.StatusServiceUnavailable, "CRM_CUSTOMER_KEY_FILTER_NOT_CONFIGURED", "key-customer classification is not configured")
 	ErrProjectHistoryUnavailable    = apperror.New(http.StatusServiceUnavailable, "CRM_CUSTOMER_PROJECT_HISTORY_NOT_CONFIGURED", "project snapshot reader is not configured")
 	ErrProjectHistoryDependency     = apperror.New(http.StatusServiceUnavailable, "CRM_CUSTOMER_PROJECT_HISTORY_UNAVAILABLE", "project snapshot dependency is unavailable")
