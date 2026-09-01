@@ -486,7 +486,7 @@ func (s *Service) Decide(ctx context.Context, applicationID uint64, approve bool
 	if !ok {
 		return nil, apperror.ErrUnauthenticated
 	}
-	if !hasRole(p, "sales_director") {
+	if !auth.HasPermissionOrRole(p, "customer.credit.approve", "sales_director", "crm_super_admin") {
 		return nil, apperror.ErrForbidden
 	}
 	in.Opinion = strings.TrimSpace(in.Opinion)
@@ -605,7 +605,7 @@ func (s *Service) Pending(ctx context.Context) ([]PendingApplication, error) {
 	if !ok {
 		return nil, apperror.ErrUnauthenticated
 	}
-	if !p.HasPermission("customer.credit.approve") {
+	if !auth.HasPermissionOrRole(p, "customer.credit.approve", "sales_director", "crm_super_admin") {
 		return nil, apperror.ErrForbidden
 	}
 	var items []PendingApplication
@@ -668,15 +668,6 @@ func (s *Service) Payments(ctx context.Context, customerID uint64, page, pageSiz
 	}
 	return pagination.Page[PaymentRecord]{Items: items, Page: page, PageSize: pageSize, Total: total}, err
 }
-func hasRole(p auth.Principal, want string) bool {
-	for _, role := range p.Roles {
-		if role == want {
-			return true
-		}
-	}
-	return false
-}
-
 func (s *Service) writeCustomerChangeLog(tx *gorm.DB, tenant string, customerID uint64, from, to, source, reason, operator string, now time.Time) error {
 	return tx.Table("crm_customer_change_logs").Create(map[string]any{
 		"tenant_id": tenant, "customer_id": customerID, "field_name": "credit_level", "before_json": fmt.Sprintf(`"%s"`, from), "after_json": fmt.Sprintf(`"%s"`, to),
