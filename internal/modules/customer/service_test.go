@@ -25,6 +25,15 @@ func TestCustomerMasterDataRejectsWhitespace(t *testing.T) {
 		t.Fatalf("blank reason returned %v", err)
 	}
 }
+
+func TestCustomerMasterDataRejectsNumericPlaceholders(t *testing.T) {
+	if err := validateCustomerMasterData("1", "企业", "制造业", "华东", "维护资料"); err != ErrInvalidMasterData {
+		t.Fatalf("numeric customer name returned %v", err)
+	}
+	if err := validateCustomerMasterData("3M公司", "业主", "制造业", "华东", "维护资料"); err != nil {
+		t.Fatalf("meaningful mixed customer name rejected: %v", err)
+	}
+}
 func TestLeftPad4RejectsExhaustedSequence(t *testing.T) {
 	if got := leftPad4(42); got != "0042" {
 		t.Fatalf("got %q", got)

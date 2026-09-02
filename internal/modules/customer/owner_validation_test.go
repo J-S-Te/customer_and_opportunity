@@ -11,6 +11,7 @@ import (
 
 type ownerCatalogProbe struct {
 	err             error
+	users           map[string]ownerdirectory.User
 	userID          string
 	organizationID  string
 	validationCalls int
@@ -27,7 +28,24 @@ func (probe *ownerCatalogProbe) Validate(_ context.Context, userID, organization
 }
 
 func (probe *ownerCatalogProbe) Resolve(context.Context, []string) (map[string]ownerdirectory.User, error) {
-	return nil, probe.err
+	return probe.users, probe.err
+}
+
+func TestOwnerDisplayNamesAreEnrichedWithoutBlockingCustomerReads(t *testing.T) {
+	probe := &ownerCatalogProbe{users: map[string]ownerdirectory.User{
+		"owner-a": {ID: "owner-a", DisplayName: "张六"},
+	}}
+	service := (&Service{}).UseOwnerDirectory(probe)
+	responses := service.withOwnerDisplayNames(context.Background(), []Response{{OwnerUserID: "owner-a"}, {OwnerUserID: "missing-owner"}})
+	if responses[0].OwnerDisplayName != "张六" || responses[1].OwnerDisplayName != "" {
+		t.Fatalf("unexpected owner names: %#v", responses)
+	}
+
+	probe.err = errors.New("directory temporarily unavailable")
+	responses = service.withOwnerDisplayNames(context.Background(), []Response{{OwnerUserID: "owner-a"}})
+	if responses[0].OwnerDisplayName != "" {
+		t.Fatalf("directory failure must not inject stale owner data: %#v", responses[0])
+	}
 }
 
 func TestCustomerWritesFailClosedBeforePersistenceWhenOwnerDirectoryRejectsSelection(t *testing.T) {
