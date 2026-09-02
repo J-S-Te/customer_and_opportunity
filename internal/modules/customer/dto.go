@@ -197,6 +197,7 @@ type Response struct {
 	Industry             string            `json:"industry"`
 	Region               string            `json:"region"`
 	OwnerUserID          string            `json:"owner_user_id"`
+	OwnerDisplayName     string            `json:"owner_display_name,omitempty"`
 	OwnerOrgID           string            `json:"owner_org_id"`
 	Status               string            `json:"status"`
 	CreditUpdatedAt      *time.Time        `json:"credit_updated_at,omitempty"`

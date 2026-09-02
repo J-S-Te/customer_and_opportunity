@@ -255,6 +255,14 @@ func parseImportRow(rowNo uint32, cells []safexlsx.Cell) parsedImportRow {
 	for _, field := range []struct {
 		index int
 		max   int
+	}{{0, 200}, {2, 64}, {3, 64}, {4, 64}} {
+		if values[field.index] != "" && !validCustomerBusinessText(values[field.index], field.max) {
+			issues = append(issues, ImportRowIssue{Column: importHeaders[field.index], Code: "INVALID_VALUE", Message: "基础资料不能是纯数字或无意义占位值"})
+		}
+	}
+	for _, field := range []struct {
+		index int
+		max   int
 	}{{1, 64}, {6, 64}, {9, 200}} {
 		if utf8.RuneCountInString(values[field.index]) > field.max || unsafeText(values[field.index]) {
 			issues = append(issues, ImportRowIssue{Column: importHeaders[field.index], Code: "INVALID_VALUE", Message: "字段格式或长度不正确"})

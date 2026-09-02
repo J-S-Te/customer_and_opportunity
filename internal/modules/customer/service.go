@@ -12,6 +12,8 @@ import (
 	"os"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	mysqlDriver "github.com/go-sql-driver/mysql"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/ownerdirectory"
@@ -582,10 +584,25 @@ func validateUpdateRegistrationContacts(contacts []UpdateContactInput) error {
 }
 
 func validateCustomerMasterData(name, customerType, industry, region, reason string) error {
-	if strings.TrimSpace(name) == "" || strings.TrimSpace(customerType) == "" || strings.TrimSpace(industry) == "" || strings.TrimSpace(region) == "" || strings.TrimSpace(reason) == "" {
+	if !validCustomerBusinessText(name, 200) || !validCustomerBusinessText(customerType, 64) || !validCustomerBusinessText(industry, 64) || !validCustomerBusinessText(region, 64) || strings.TrimSpace(reason) == "" {
 		return ErrInvalidMasterData
 	}
 	return nil
+}
+
+// validCustomerBusinessText rejects placeholder values such as "1" while keeping
+// legitimate historical values (for example, "3M公司" and "制造业") editable.
+func validCustomerBusinessText(value string, max int) bool {
+	value = strings.TrimSpace(value)
+	if value == "" || utf8.RuneCountInString(value) > max || unsafeText(value) {
+		return false
+	}
+	for _, character := range value {
+		if unicode.IsLetter(character) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Service) Get(ctx context.Context, id uint64) (*Response, error) {
@@ -597,8 +614,8 @@ func (s *Service) Get(ctx context.Context, id uint64) (*Response, error) {
 	if err != nil {
 		return nil, err
 	}
-	response := toResponse(model)
-	return &response, nil
+	responses := s.withOwnerDisplayNames(ctx, []Response{toResponse(model)})
+	return &responses[0], nil
 }
 
 func (s *Service) List(ctx context.Context, query ListQuery) (pagination.Page[Response], error) {
@@ -613,7 +630,44 @@ func (s *Service) List(ctx context.Context, query ListQuery) (pagination.Page[Re
 	if query.QuickFilter == QuickFilterKey {
 		return pagination.Page[Response]{}, ErrKeyFilterUnavailable
 	}
-	return s.repo.List(ctx, principal, query)
+	page, err := s.repo.List(ctx, principal, query)
+	if err != nil {
+		return pagination.Page[Response]{}, err
+	}
+	page.Items = s.withOwnerDisplayNames(ctx, page.Items)
+	return page, nil
+}
+
+// withOwnerDisplayNames enriches read responses with the authoritative directory
+// name. A temporary directory failure must not block otherwise authorized reads.
+func (s *Service) withOwnerDisplayNames(ctx context.Context, responses []Response) []Response {
+	if s.owners == nil || len(responses) == 0 {
+		return responses
+	}
+	ownerIDs := make([]string, 0, len(responses))
+	seen := make(map[string]struct{}, len(responses))
+	for _, response := range responses {
+		ownerID := strings.TrimSpace(response.OwnerUserID)
+		if ownerID == "" {
+			continue
+		}
+		if _, exists := seen[ownerID]; exists {
+			continue
+		}
+		seen[ownerID] = struct{}{}
+		ownerIDs = append(ownerIDs, ownerID)
+	}
+	if len(ownerIDs) == 0 {
+		return responses
+	}
+	owners, err := s.owners.Resolve(ctx, ownerIDs)
+	if err != nil {
+		return responses
+	}
+	for index := range responses {
+		responses[index].OwnerDisplayName = strings.TrimSpace(owners[responses[index].OwnerUserID].DisplayName)
+	}
+	return responses
 }
 
 func validateListQuery(query ListQuery, now time.Time) (ListQuery, error) {

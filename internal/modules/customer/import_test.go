@@ -135,6 +135,18 @@ func TestImportHeaderAndRowsFailClosed(t *testing.T) {
 	}
 }
 
+func TestImportRejectsNumericCustomerMasterDataPlaceholders(t *testing.T) {
+	row := make([]safexlsx.Cell, len(importHeaders))
+	values := []string{"1", "913100001234567890", "1", "科技", "1", "owner-a", "org-a", "张三", "13800138000", "zhang@example.com"}
+	for index, value := range values {
+		row[index].Value = value
+	}
+	parsed := parseImportRow(2, row)
+	if !hasImportError(parsed.issues) {
+		t.Fatalf("numeric master data placeholder accepted: %#v", parsed)
+	}
+}
+
 func TestImportCSVUsesRFC4180AndNeutralizesInjection(t *testing.T) {
 	var output strings.Builder
 	writer := csv.NewWriter(&output)
