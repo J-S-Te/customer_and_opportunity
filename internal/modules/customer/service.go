@@ -770,7 +770,7 @@ func (s *Service) CreateExport(ctx context.Context) (*os.File, error) {
 		return nil, cause
 	}
 	writer := csv.NewWriter(file)
-	if err = writer.Write([]string{"客户编号", "客户名称", "客户类型", "行业", "区域", "负责人用户ID", "负责人组织ID", "状态", "创建时间"}); err != nil {
+	if err = writer.Write([]string{"客户编号", "客户名称", "客户类型", "行业", "区域", "负责人姓名", "负责人组织名称", "状态", "创建时间"}); err != nil {
 		return cleanup(err)
 	}
 	for page := 1; ; page++ {
@@ -778,8 +778,13 @@ func (s *Service) CreateExport(ctx context.Context) (*os.File, error) {
 		if listErr != nil {
 			return cleanup(listErr)
 		}
+		owners, resolveErr := s.exportOwnerNames(ctx, result.Items)
+		if resolveErr != nil {
+			return cleanup(resolveErr)
+		}
 		for _, item := range result.Items {
-			if err = writer.Write([]string{item.CustomerNo, item.Name, item.CustomerType, item.Industry, item.Region, item.OwnerUserID, item.OwnerOrgID, item.Status, item.CreatedAt.UTC().Format(time.RFC3339)}); err != nil {
+			owner := owners[item.ID]
+			if err = writer.Write([]string{item.CustomerNo, item.Name, item.CustomerType, item.Industry, item.Region, owner.userName, owner.organizationName, customerStatusLabel(item.Status), item.CreatedAt.UTC().Format(time.RFC3339)}); err != nil {
 				return cleanup(err)
 			}
 		}
@@ -798,6 +803,64 @@ func (s *Service) CreateExport(ctx context.Context) (*os.File, error) {
 		return cleanup(err)
 	}
 	return file, nil
+}
+
+type exportOwnerName struct {
+	userName, organizationName string
+}
+
+// exportOwnerNames resolves the current authoritative display labels. Exported
+// files deliberately never expose internal user or organization identifiers.
+func (s *Service) exportOwnerNames(ctx context.Context, items []Response) (map[uint64]exportOwnerName, error) {
+	if s.owners == nil {
+		return nil, ownerdirectory.ErrUnavailable
+	}
+	ownerIDs := make([]string, 0, len(items))
+	seen := make(map[string]struct{}, len(items))
+	for _, item := range items {
+		ownerID := strings.TrimSpace(item.OwnerUserID)
+		if ownerID == "" {
+			continue
+		}
+		if _, exists := seen[ownerID]; exists {
+			continue
+		}
+		seen[ownerID] = struct{}{}
+		ownerIDs = append(ownerIDs, ownerID)
+	}
+	resolved, err := s.owners.Resolve(ctx, ownerIDs)
+	if err != nil {
+		return nil, err
+	}
+	labels := make(map[uint64]exportOwnerName, len(items))
+	for _, item := range items {
+		user, exists := resolved[strings.TrimSpace(item.OwnerUserID)]
+		if !exists {
+			continue
+		}
+		label := exportOwnerName{userName: strings.TrimSpace(user.DisplayName)}
+		for _, organization := range user.Organizations {
+			if strings.TrimSpace(organization.ID) == strings.TrimSpace(item.OwnerOrgID) {
+				label.organizationName = strings.TrimSpace(organization.Name)
+				break
+			}
+		}
+		labels[item.ID] = label
+	}
+	return labels, nil
+}
+
+func customerStatusLabel(status string) string {
+	switch strings.ToUpper(strings.TrimSpace(status)) {
+	case StatusActive:
+		return "正常"
+	case StatusVoid:
+		return "已作废"
+	case StatusMerged:
+		return "已合并"
+	default:
+		return "未知"
+	}
 }
 
 func (s *Service) CreateFollowup(ctx context.Context, id uint64, input FollowupCreateRequest) (*FollowupResponse, error) {

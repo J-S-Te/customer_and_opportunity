@@ -1,6 +1,7 @@
 package opportunity
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/apperror"
@@ -27,6 +28,7 @@ var (
 	ErrIdempotencyConflict   = apperror.New(http.StatusConflict, "COMMON_IDEMPOTENCY_KEY_CONFLICT", "Idempotency-Key was already used with a different request")
 	ErrIdempotencyKeyTooLong = apperror.New(http.StatusBadRequest, "COMMON_IDEMPOTENCY_KEY_INVALID", "Idempotency-Key header is too long")
 	ErrInvalidAlertRule      = apperror.New(http.StatusUnprocessableEntity, "CRM_OPPORTUNITY_INVALID_ALERT_RULE", "stage alert rule is invalid")
+	ErrPresaleIneligible     = errors.New("opportunity is not eligible for a new presale request")
 	ErrAlertNotFound         = apperror.New(http.StatusNotFound, "CRM_OPPORTUNITY_ALERT_NOT_FOUND", "opportunity stage alert not found")
 	ErrAlertNotReadable      = apperror.New(http.StatusConflict, "CRM_OPPORTUNITY_ALERT_NOT_READABLE", "opportunity stage alert is not unread")
 	ErrInvalidQuery          = apperror.New(http.StatusBadRequest, "CRM_OPPORTUNITY_QUERY_INVALID", "opportunity query is invalid")

@@ -391,6 +391,18 @@ func (h *Handler) PreviewImport(c *gin.Context) {
 	response.Created(c, result)
 }
 
+func (h *Handler) DownloadImportTemplate(c *gin.Context) {
+	contents, err := customerImportTemplateWorkbook()
+	if err != nil {
+		response.Error(c, err)
+		return
+	}
+	c.Header("Cache-Control", "no-store")
+	c.Header("X-Content-Type-Options", "nosniff")
+	c.Header("Content-Disposition", `attachment; filename="customer-import-template.xlsx"`)
+	c.Data(http.StatusOK, customerImportTemplateContentType, contents)
+}
+
 func (h *Handler) CommitImport(c *gin.Context) {
 	// 提交阶段不再次上传文件，而是引用预览生成的 jobNo，并用幂等键约束重复确认；
 	// 预览令牌、内容摘要和逐行写入规则由服务层复核，不能只信任前端预览结果。

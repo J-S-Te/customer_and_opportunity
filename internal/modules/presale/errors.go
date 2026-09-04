@@ -19,6 +19,7 @@ var (
 	ErrReportExportUnavailable = errors.New("CRM_PRESALE_REPORT_EXPORT_UNAVAILABLE")
 	ErrContactPhoneUnavailable = errors.New("CRM_PRESALE_CONTACT_PHONE_UNAVAILABLE")
 	ErrDependencyUnavailable   = errors.New("INTEGRATION_DEPENDENCY_UNAVAILABLE")
+	ErrOpportunityNotEligible  = errors.New("CRM_PRESALE_OPPORTUNITY_NOT_ELIGIBLE")
 )
 
 func apiError(err error) error {
@@ -45,6 +46,8 @@ func apiError(err error) error {
 		return apperror.New(http.StatusServiceUnavailable, "CRM_PRESALE_CONTACT_PHONE_UNAVAILABLE", "contact phone is unavailable")
 	case errors.Is(err, ErrDependencyUnavailable):
 		return apperror.New(http.StatusServiceUnavailable, "INTEGRATION_DEPENDENCY_UNAVAILABLE", "integration dependency is unavailable")
+	case errors.Is(err, ErrOpportunityNotEligible):
+		return apperror.New(http.StatusConflict, "CRM_PRESALE_OPPORTUNITY_NOT_ELIGIBLE", "presale support can only be requested for an active opportunity in a progressing stage")
 	default:
 		return err
 	}

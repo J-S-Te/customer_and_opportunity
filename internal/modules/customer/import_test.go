@@ -27,6 +27,7 @@ func TestImportRoutesRequireCustomerImportPermission(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	for _, test := range []struct{ method, path string }{
 		{http.MethodPost, "/customers/imports/preview"},
+		{http.MethodGet, "/customers/imports/template"},
 		{http.MethodPost, "/customers/imports/job/commit"},
 		{http.MethodGet, "/customers/imports/job/errors"},
 	} {
@@ -42,6 +43,23 @@ func TestImportRoutesRequireCustomerImportPermission(t *testing.T) {
 		if response.Code != http.StatusForbidden || !strings.Contains(response.Body.String(), "COMMON_FORBIDDEN") {
 			t.Fatalf("%s %s status=%d body=%s", test.method, test.path, response.Code, response.Body.String())
 		}
+	}
+}
+
+func TestCustomerImportTemplateDownloadsValidWorkbook(t *testing.T) {
+	contents, err := customerImportTemplateWorkbook()
+	if err != nil {
+		t.Fatalf("customerImportTemplateWorkbook() error = %v", err)
+	}
+	workbook, err := safexlsx.ParseWorkbook(contents, safexlsx.Limits{MaxArchiveBytes: importMaxFileBytes, MaxRows: importMaxDataRows + 1, MaxColumns: len(importHeaders), MaxCellRunes: 500})
+	if err != nil {
+		t.Fatalf("template parsing error = %v", err)
+	}
+	if err = validateImportHeader(workbook); err != nil {
+		t.Fatalf("template header error = %v", err)
+	}
+	if len(workbook) != 2 || workbook[1][0].Value != customerImportTemplateExample[0] || workbook[1][9].Value != customerImportTemplateExample[9] {
+		t.Fatalf("template rows = %#v", workbook)
 	}
 }
 

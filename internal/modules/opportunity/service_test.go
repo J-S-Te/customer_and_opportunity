@@ -105,3 +105,14 @@ func TestGroupBoardAlwaysReturnsSevenOrderedColumns(t *testing.T) {
 		t.Fatal("empty columns must serialize as [] rather than null")
 	}
 }
+
+func TestPresaleEligibilityOnlyAllowsProgressingStages(t *testing.T) {
+	for stage, want := range map[string]bool{
+		StageInitial: true, StageRequirement: true, StageSolution: true, StageQuotation: true, StageBid: true,
+		StageSigned: false, StageFailed: false, "unknown": false,
+	} {
+		if got := isPresaleEligibleStage(stage); got != want {
+			t.Fatalf("isPresaleEligibleStage(%q)=%t, want %t", stage, got, want)
+		}
+	}
+}

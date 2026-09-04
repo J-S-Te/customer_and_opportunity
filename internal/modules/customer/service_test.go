@@ -1,12 +1,28 @@
 package customer
 
 import (
+	"context"
+	"encoding/csv"
+	"io"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/ownerdirectory"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/auth"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/database"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/pagination"
 )
+
+type exportRepositoryStub struct {
+	Repository
+	page pagination.Page[Response]
+}
+
+func (stub exportRepositoryStub) List(context.Context, auth.Principal, ListQuery) (pagination.Page[Response], error) {
+	return stub.page, nil
+}
 
 func TestNormalizeName(t *testing.T) {
 	if got := normalizeName("  上海 示例 科技  "); got != "上海示例科技" {
@@ -111,5 +127,57 @@ func TestCustomerResponseExposesMergeTraceWithoutSensitiveValues(t *testing.T) {
 	result := toResponse(model)
 	if result.MergedIntoID == nil || *result.MergedIntoID != targetID || result.EndDate == nil || *result.EndDate != "2026-08-01" {
 		t.Fatalf("merge trace missing: %#v", result)
+	}
+}
+
+func TestCreateExportUsesOwnerAndOrganizationNamesAndChineseStatus(t *testing.T) {
+	createdAt := time.Date(2026, 9, 4, 2, 3, 4, 0, time.UTC)
+	repository := exportRepositoryStub{page: pagination.Page[Response]{
+		Items: []Response{{
+			ID: 1, CustomerNo: "KH202609040001", Name: "示例客户", CustomerType: "企业", Industry: "软件",
+			Region: "华东", OwnerUserID: "owner-1", OwnerOrgID: "org-1", Status: StatusVoid, CreatedAt: createdAt,
+		}},
+		Page: 1, PageSize: 100, Total: 1,
+	}}
+	directory := &ownerCatalogProbe{users: map[string]ownerdirectory.User{
+		"owner-1": {ID: "owner-1", DisplayName: "张三", Organizations: []ownerdirectory.Organization{{ID: "org-1", Name: "华东销售部"}}},
+	}}
+	service := (&Service{repo: repository, now: func() time.Time { return createdAt }}).UseOwnerDirectory(directory)
+	ctx := auth.WithPrincipal(context.Background(), auth.Principal{TenantID: "tenant-a", UserID: "exporter"})
+	file, err := service.CreateExport(ctx)
+	if err != nil {
+		t.Fatalf("CreateExport() error = %v", err)
+	}
+	defer os.Remove(file.Name())
+	defer file.Close()
+
+	records, err := csv.NewReader(file).ReadAll()
+	if err != nil && err != io.EOF {
+		t.Fatalf("read export = %v", err)
+	}
+	if len(records) != 2 {
+		t.Fatalf("record count = %d, want 2", len(records))
+	}
+	if got, want := records[0], []string{"客户编号", "客户名称", "客户类型", "行业", "区域", "负责人姓名", "负责人组织名称", "状态", "创建时间"}; strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("headers = %#v, want %#v", got, want)
+	}
+	if got := records[1]; got[5] != "张三" || got[6] != "华东销售部" || got[7] != "已作废" {
+		t.Fatalf("export labels = %#v", got)
+	}
+	if contents := strings.Join(records[0], "|") + "|" + strings.Join(records[1], "|"); strings.Contains(contents, "owner-1") || strings.Contains(contents, "org-1") {
+		t.Fatalf("export leaked internal owner identifiers: %q", contents)
+	}
+}
+
+func TestCustomerStatusLabelUsesChineseLabels(t *testing.T) {
+	for status, want := range map[string]string{
+		StatusActive: "正常",
+		StatusVoid:   "已作废",
+		StatusMerged: "已合并",
+		"future":     "未知",
+	} {
+		if got := customerStatusLabel(status); got != want {
+			t.Fatalf("customerStatusLabel(%q) = %q, want %q", status, got, want)
+		}
 	}
 }

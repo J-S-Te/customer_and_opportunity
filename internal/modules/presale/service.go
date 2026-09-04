@@ -155,6 +155,11 @@ func (s *Service) CreateRequest(ctx context.Context, actor Actor, key string, in
 		} else if !errors.Is(e, ErrNotFound) {
 			return e
 		}
+		// 售前申请不会驱动商机阶段，但只能在未终态的推进阶段创建。该检查在
+		// 同一事务内由商机端加锁，避免商机并发签约、失败或作废后仍插入新申请。
+		if e := s.opportunities.EnsurePresaleEligible(tx, actor, opp.ID); e != nil {
+			return e
+		}
 		no, e := s.repo.NextRequestNo(tx, actor.TenantID, now)
 		if e != nil {
 			return e
@@ -230,6 +235,11 @@ func (s *Service) ReopenRequest(ctx context.Context, actor Actor, id uint64, ver
 		}
 		if r.ApplicantID != actor.UserID && !actor.HasRole("crm_super_admin") {
 			return ErrForbidden
+		}
+		// 重新发起会回到待审批状态，等同于一次新的售前资源协调请求；商机必须仍在
+		// 可推进阶段。该调用在当前事务内锁定商机，不会自动调整其销售阶段。
+		if err = s.opportunities.EnsurePresaleEligible(tx, actor, r.OpportunityID); err != nil {
+			return err
 		}
 		previousStatus := r.Status
 		inst, err := s.repo.FindApprovalInstanceForUpdate(tx, actor.TenantID, id)

@@ -2,6 +2,7 @@ package bootstrap
 
 import (
 	"context"
+	"errors"
 
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/opportunity"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/presale"
@@ -23,6 +24,14 @@ func (a presaleOpportunityReader) GetAccessible(ctx context.Context, actor presa
 		return presale.OpportunitySnapshot{}, err
 	}
 	return presale.OpportunitySnapshot{ID: value.ID, OpportunityNo: value.OpportunityNo}, nil
+}
+
+func (a presaleOpportunityReader) EnsurePresaleEligible(ctx context.Context, actor presale.Actor, opportunityID uint64) error {
+	err := a.service.EnsurePresaleEligible(auth.WithPrincipal(ctx, presaleOpportunityPrincipal(actor)), opportunityID)
+	if errors.Is(err, opportunity.ErrPresaleIneligible) {
+		return presale.ErrOpportunityNotEligible
+	}
+	return err
 }
 
 // presaleOpportunityPrincipal 复用基础平台已经签发并由 CRM 会话保存的数据范围。

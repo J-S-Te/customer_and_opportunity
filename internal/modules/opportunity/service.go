@@ -630,6 +630,32 @@ func (s *Service) Get(ctx context.Context, id uint64) (*Response, error) {
 	return &result, nil
 }
 
+// EnsurePresaleEligible locks the opportunity before a presale request is
+// created. Presale work is related to, but never changes, the sales stage.
+func (s *Service) EnsurePresaleEligible(ctx context.Context, id uint64) error {
+	principal, err := requirePrincipal(ctx)
+	if err != nil {
+		return err
+	}
+	model, err := s.repo.FindByIDForUpdate(ctx, principal, id)
+	if err != nil {
+		return err
+	}
+	if model.Status != StatusFollowing || !isPresaleEligibleStage(model.CurrentStage) {
+		return ErrPresaleIneligible
+	}
+	return nil
+}
+
+func isPresaleEligibleStage(stage string) bool {
+	switch stage {
+	case StageInitial, StageRequirement, StageSolution, StageQuotation, StageBid:
+		return true
+	default:
+		return false
+	}
+}
+
 func (s *Service) List(ctx context.Context, query ListQuery) (pagination.Page[Response], error) {
 	principal, err := requirePrincipal(ctx)
 	if err != nil {

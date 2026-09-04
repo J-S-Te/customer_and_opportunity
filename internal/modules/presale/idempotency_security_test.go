@@ -32,9 +32,20 @@ func (r *createSecurityRepository) WithTransaction(ctx context.Context, fn func(
 }
 
 type accessibleOpportunityReader struct {
-	values map[uint64]OpportunitySnapshot
-	calls  int
-	err    error
+	values         map[uint64]OpportunitySnapshot
+	calls          int
+	err            error
+	eligibilityErr error
+}
+
+func (r *accessibleOpportunityReader) EnsurePresaleEligible(_ context.Context, _ Actor, id uint64) error {
+	if r.eligibilityErr != nil {
+		return r.eligibilityErr
+	}
+	if _, ok := r.values[id]; !ok {
+		return ErrNotFound
+	}
+	return nil
 }
 
 func (r *accessibleOpportunityReader) GetAccessible(_ context.Context, _ Actor, id uint64) (OpportunitySnapshot, error) {
@@ -123,6 +134,21 @@ func TestCreateRequestReplayIsBoundToAuthorizedActorAndOpportunity(t *testing.T)
 				t.Fatalf("resource=%+v error=%v", got, replayErr)
 			}
 		})
+	}
+}
+
+func TestCreateRequestRejectsIneligibleOpportunityBeforePersistence(t *testing.T) {
+	actor := Actor{TenantID: "tenant-1", UserID: "sales-a", UserName: "Sales A", Permissions: map[string]bool{"presale.create": true}}
+	repository := &createSecurityRepository{}
+	opportunities := &accessibleOpportunityReader{values: map[uint64]OpportunitySnapshot{7: {ID: 7, OpportunityNo: "OP7"}}, eligibilityErr: ErrOpportunityNotEligible}
+	service := readyCreateService(repository, opportunities)
+
+	result, err := service.CreateRequest(context.Background(), actor, "new-key", validCreateSecurityInput(7))
+	if result != nil || !errors.Is(err, ErrOpportunityNotEligible) {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+	if repository.findCalls < 2 {
+		t.Fatalf("expected replay checks before transactional eligibility validation, calls=%d", repository.findCalls)
 	}
 }
 
