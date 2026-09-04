@@ -11,6 +11,7 @@ func RegisterRoutes(router *gin.RouterGroup, handler *Handler) {
 	customers.POST("/duplicate-check", middleware.RequirePermission("customer.create"), handler.CheckDuplicate)
 	customers.POST("/merge", middleware.RequirePermission("customer.merge"), handler.Merge)
 	customers.POST("/imports/preview", middleware.RequirePermission("customer.import"), handler.PreviewImport)
+	customers.GET("/imports/template", middleware.RequirePermission("customer.import"), handler.DownloadImportTemplate)
 	customers.POST("/imports/:jobNo/commit", middleware.RequirePermission("customer.import"), handler.CommitImport)
 	customers.GET("/imports/:jobNo/errors", middleware.RequirePermission("customer.import"), handler.ImportErrors)
 	customers.POST("", middleware.RequirePermission("customer.create"), handler.Create)

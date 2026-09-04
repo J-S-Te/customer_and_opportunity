@@ -8,6 +8,7 @@ import (
 // 售前模块只能通过该端口读取商机，具体实现必须校验传入 Actor 的商机数据范围。
 type OpportunityReader interface {
 	GetAccessible(ctx context.Context, actor Actor, opportunityID uint64) (OpportunitySnapshot, error)
+	EnsurePresaleEligible(ctx context.Context, actor Actor, opportunityID uint64) error
 }
 
 // 电话加密、解密和脱敏策略由基础设施实现，领域模型不持有密钥细节。

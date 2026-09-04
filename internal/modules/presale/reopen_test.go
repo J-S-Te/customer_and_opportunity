@@ -62,10 +62,10 @@ func validReopenInput() ReopenRequestInput {
 func TestReopenRequestPersistsEditedFieldsAndKeepsIdentity(t *testing.T) {
 	actor := Actor{TenantID: "tenant-a", UserID: "sales-a", Permissions: map[string]bool{"presale.create": true}, Roles: map[string]bool{}}
 	repo := &reopenRepository{
-		request:  &PresaleRequest{BaseModel: BaseModel{ID: 9, TenantID: actor.TenantID, Version: 3}, RequestNo: "TS202608080001", ApplicantID: actor.UserID, Status: StatusRejected},
+		request:  &PresaleRequest{BaseModel: BaseModel{ID: 9, TenantID: actor.TenantID, Version: 3}, RequestNo: "TS202608080001", OpportunityID: 7, ApplicantID: actor.UserID, Status: StatusRejected},
 		approval: &ApprovalInstance{BaseModel: BaseModel{ID: 21, TenantID: actor.TenantID, Version: 2}, RequestID: 9, Status: "REJECTED"},
 	}
-	service := NewService(repo, nil, testPhoneProtector{}, fixedClock{at: time.Date(2026, 8, 8, 1, 0, 0, 0, time.UTC)}, fixedIDs{})
+	service := NewService(repo, &accessibleOpportunityReader{values: map[uint64]OpportunitySnapshot{7: {ID: 7, OpportunityNo: "OP7"}}}, testPhoneProtector{}, fixedClock{at: time.Date(2026, 8, 8, 1, 0, 0, 0, time.UTC)}, fixedIDs{})
 	result, err := service.ReopenRequest(context.Background(), actor, 9, 3, validReopenInput())
 	if err != nil {
 		t.Fatal(err)
@@ -81,6 +81,21 @@ func TestReopenRequestPersistsEditedFieldsAndKeepsIdentity(t *testing.T) {
 	}
 	if repo.statusLog == nil || repo.statusLog.FromStatus != StatusRejected || repo.statusLog.ToStatus != StatusPendingApproval {
 		t.Fatalf("unexpected status log: %#v", repo.statusLog)
+	}
+}
+
+func TestReopenRequestRejectsIneligibleOpportunityBeforePersistence(t *testing.T) {
+	actor := Actor{TenantID: "tenant-a", UserID: "sales-a", Permissions: map[string]bool{"presale.create": true}, Roles: map[string]bool{}}
+	repo := &reopenRepository{
+		request:  &PresaleRequest{BaseModel: BaseModel{ID: 9, TenantID: actor.TenantID, Version: 3}, OpportunityID: 7, ApplicantID: actor.UserID, Status: StatusRejected},
+		approval: &ApprovalInstance{BaseModel: BaseModel{ID: 21, TenantID: actor.TenantID, Version: 2}, RequestID: 9, Status: "REJECTED"},
+	}
+	service := NewService(repo, &accessibleOpportunityReader{values: map[uint64]OpportunitySnapshot{7: {ID: 7, OpportunityNo: "OP7"}}, eligibilityErr: ErrOpportunityNotEligible}, testPhoneProtector{}, fixedClock{}, fixedIDs{})
+	if result, err := service.ReopenRequest(context.Background(), actor, 9, 3, validReopenInput()); result != nil || !errors.Is(err, ErrOpportunityNotEligible) {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+	if repo.requestFields != nil || repo.approvalFields != nil {
+		t.Fatal("ineligible reopen reached persistence")
 	}
 }
 

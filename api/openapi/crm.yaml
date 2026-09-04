@@ -54,6 +54,8 @@ paths:
     post: {$ref: '#/components/x-operations/mergeCustomers'}
   /api/v1/customers/imports/preview:
     post: {$ref: '#/components/x-operations/previewCustomerImport'}
+  /api/v1/customers/imports/template:
+    get: {$ref: '#/components/x-operations/downloadCustomerImportTemplate'}
   /api/v1/customers/imports/{jobNo}/commit:
     post: {$ref: '#/components/x-operations/commitCustomerImport'}
   /api/v1/customers/imports/{jobNo}/errors:
@@ -534,6 +536,7 @@ components:
     checkCustomerDuplicate: {<<: *crmRead, operationId: checkCustomerDuplicate, tags: [Customer], x-permission: customer.create}
     mergeCustomers: {<<: *crmRead, operationId: mergeCustomers, tags: [Customer], x-permission: customer.merge, parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]}
     previewCustomerImport: {<<: *crmRead, operationId: previewCustomerImport, tags: [Customer], x-permission: customer.import, requestBody: {required: true, content: {multipart/form-data: {schema: {type: object, required: [file, reason], properties: {file: {type: string, contentEncoding: binary}, reason: {type: string, maxLength: 2000}}}}}}}
+    downloadCustomerImportTemplate: {<<: *crmRead, operationId: downloadCustomerImportTemplate, tags: [Customer], x-permission: customer.import, responses: {'200': {description: Customer import XLSX template, content: {application/vnd.openxmlformats-officedocument.spreadsheetml.sheet: {schema: {type: string, format: binary}}}}, '401': {$ref: '#/components/responses/Error'}, '403': {$ref: '#/components/responses/Error'}}}
     commitCustomerImport: {<<: *crmRead, operationId: commitCustomerImport, tags: [Customer], x-permission: customer.import, parameters: [{name: jobNo, in: path, required: true, schema: {type: string}}, {$ref: '#/components/parameters/IdempotencyKey'}]}
     downloadCustomerImportErrors: {operationId: downloadCustomerImportErrors, tags: [Customer], x-permission: customer.import, security: [{crmSession: []}], parameters: [{name: jobNo, in: path, required: true, schema: {type: string}}], responses: {'200': {description: CSV error rows, content: {text/csv: {schema: {type: string}}}}, '401': {$ref: '#/components/responses/Error'}, '403': {$ref: '#/components/responses/Error'}, '404': {$ref: '#/components/responses/Error'}}}
     getCustomer: &customerIDRead {<<: *crmRead, operationId: getCustomer, tags: [Customer], x-permission: customer.read, parameters: [{$ref: '#/components/parameters/CustomerID'}]}
@@ -619,8 +622,8 @@ components:
     readNotification: {<<: *notificationRead, operationId: readNotification, parameters: [{$ref: '#/components/parameters/NumericID'}]}
     listPresaleExecutionDepartments: &presaleRead {<<: *crmRead, operationId: listPresaleExecutionDepartments, tags: [Presale], x-permission: presale.read}
     listPresaleRequests: {<<: *presaleRead, operationId: listPresaleRequests}
-    createPresaleRequest: {<<: *presaleRead, operationId: createPresaleRequest, x-permission: presale.create, parameters: [{$ref: '#/components/parameters/IdempotencyKey'}], requestBody: {$ref: '#/components/requestBodies/PresaleCreate'}}
-    reopenPresaleRequest: {<<: *presaleRead, operationId: reopenPresaleRequest, x-permission: presale.create, parameters: [{$ref: '#/components/parameters/NumericID'}, {name: version, in: query, required: true, schema: {type: integer, minimum: 1}}, {$ref: '#/components/parameters/IdempotencyKey'}], requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/PresaleReopen'}}}}}
+    createPresaleRequest: {<<: *presaleRead, operationId: createPresaleRequest, x-permission: presale.create, description: Creates a presale request only for an accessible opportunity whose status is FOLLOWING and stage is 初步接触、需求沟通、方案制定、报价 or 投标. The request never changes the opportunity stage., parameters: [{$ref: '#/components/parameters/IdempotencyKey'}], requestBody: {$ref: '#/components/requestBodies/PresaleCreate'}}
+    reopenPresaleRequest: {<<: *presaleRead, operationId: reopenPresaleRequest, x-permission: presale.create, description: Reopens a rejected or cancelled request only when its accessible opportunity is still FOLLOWING and in an allowed progressing stage; reopening never changes the opportunity stage., parameters: [{$ref: '#/components/parameters/NumericID'}, {name: version, in: query, required: true, schema: {type: integer, minimum: 1}}, {$ref: '#/components/parameters/IdempotencyKey'}], requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/PresaleReopen'}}}}}
     presaleBoard: {<<: *presaleRead, operationId: presaleBoard}
     presaleFilterOptions: {<<: *presaleRead, operationId: presaleFilterOptions}
     getPresaleRequest: &presaleIDRead {<<: *presaleRead, operationId: getPresaleRequest, parameters: [{$ref: '#/components/parameters/NumericID'}]}
