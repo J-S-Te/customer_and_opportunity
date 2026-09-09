@@ -326,7 +326,7 @@ func New(config Config) (*App, error) {
 	switch {
 	case config.AttachmentS3Enabled:
 		// S3 兼容对象存储优先于本地目录：ETag 版本绑定与流式摘要校验满足
-		// 生产信任边界，扫描器在外部引擎之上保留进程内静态校验。
+		// 生产对象一致性要求；附件内容由进程内静态规则校验。
 		s3Store, storeErr := opportunity.NewS3AttachmentObjectStore(opportunity.S3AttachmentOptions{
 			Endpoint: config.AttachmentS3Endpoint, Region: config.AttachmentS3Region, Bucket: config.AttachmentS3Bucket,
 			AccessKeyID: config.AttachmentS3AccessKeyID, SecretAccessKey: config.AttachmentS3SecretAccessKey,

@@ -135,9 +135,6 @@ type Config struct {
 	AttachmentFileGatewaySecret      string
 	AttachmentFileGatewayScope       string
 	AttachmentFileGatewayApplication string
-	ClamAVEnabled                    bool
-	ClamAVNetwork                    string
-	ClamAVAddress                    string
 	PlatformBaseURL                  string
 	PlatformApplicationCode          string
 	PlatformEnvironmentCode          string
@@ -320,19 +317,6 @@ func LoadConfig() (Config, error) {
 			return Config{}, fmt.Errorf("ATTACHMENT_S3_ENABLED requires ATTACHMENT_S3_ENDPOINT, ATTACHMENT_S3_REGION, ATTACHMENT_S3_BUCKET, ATTACHMENT_S3_ACCESS_KEY_ID and ATTACHMENT_S3_SECRET_ACCESS_KEY")
 		}
 	}
-	clamAVEnabled, err := strconv.ParseBool(valueOrDefault("CLAMAV_ENABLED", "false"))
-	if err != nil {
-		return Config{}, fmt.Errorf("CLAMAV_ENABLED: %w", err)
-	}
-	clamAVNetwork := valueOrDefault("CLAMAV_NETWORK", "tcp")
-	if clamAVEnabled {
-		if clamAVNetwork != "tcp" && clamAVNetwork != "unix" {
-			return Config{}, fmt.Errorf("CLAMAV_NETWORK must be tcp or unix")
-		}
-		if strings.TrimSpace(os.Getenv("CLAMAV_ADDRESS")) == "" {
-			return Config{}, fmt.Errorf("CLAMAV_ENABLED requires CLAMAV_ADDRESS")
-		}
-	}
 	config := Config{
 		Address: valueOrDefault("HTTP_ADDRESS", ":8090"), MySQLDSN: os.Getenv("MYSQL_DSN"), PathPrefix: valueOrDefault("APP_PATH_PREFIX", "/customer-opportunity"), PublicOrigin: os.Getenv("APP_PUBLIC_ORIGIN"), EncryptionKey: encryptionKey, HMACKey: hmacKey,
 		OIDCIssuer: os.Getenv("OIDC_ISSUER"), OIDCBackchannelBaseURL: os.Getenv("OIDC_BACKCHANNEL_BASE_URL"),
@@ -428,9 +412,6 @@ func LoadConfig() (Config, error) {
 		AttachmentFileGatewayTokenURL: strings.TrimSpace(os.Getenv("ATTACHMENT_FILE_GATEWAY_TOKEN_URL")), AttachmentFileGatewayClientID: strings.TrimSpace(os.Getenv("ATTACHMENT_FILE_GATEWAY_CLIENT_ID")),
 		AttachmentFileGatewaySecret: strings.TrimSpace(os.Getenv("ATTACHMENT_FILE_GATEWAY_CLIENT_SECRET")), AttachmentFileGatewayScope: valueOrDefault("ATTACHMENT_FILE_GATEWAY_SCOPE", "platform:file:upload platform:file:bind"),
 		AttachmentFileGatewayApplication: strings.TrimSpace(os.Getenv("ATTACHMENT_FILE_GATEWAY_APPLICATION_ID")),
-		ClamAVEnabled:                    clamAVEnabled,
-		ClamAVNetwork:                    clamAVNetwork,
-		ClamAVAddress:                    strings.TrimSpace(os.Getenv("CLAMAV_ADDRESS")),
 		PlatformBaseURL:                  os.Getenv("PLATFORM_BASE_URL"),
 		PlatformApplicationCode:          valueOrDefault("PLATFORM_APPLICATION_CODE", "customer_and_opportunity"),
 		PlatformEnvironmentCode:          valueOrDefault("PLATFORM_ENVIRONMENT_CODE", "dev"),

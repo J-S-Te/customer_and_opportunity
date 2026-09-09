@@ -198,14 +198,6 @@ func (s *Service) CreateRequest(ctx context.Context, actor Actor, key string, in
 	return created, err
 }
 
-func (s *Service) deliveryWorkerReady(ctx context.Context) bool {
-	if s.workerReadiness == nil || s.workerMaxAge <= 0 {
-		return false
-	}
-	ready, err := s.workerReadiness.HasFreshHeartbeat(ctx, PresaleDeliveryWorkerType, s.clock.Now().Add(-s.workerMaxAge))
-	return err == nil && ready
-}
-
 // ReopenRequest reuses the existing request and approval-instance IDs. Only the
 // terminal rejected/cancelled request can be reopened; its history remains intact.
 func (s *Service) ReopenRequest(ctx context.Context, actor Actor, id uint64, version uint64, in ReopenRequestInput) (*PresaleRequest, error) {

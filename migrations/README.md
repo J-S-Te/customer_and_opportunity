@@ -70,6 +70,13 @@
 56. `000096_add_login_ip_to_crm_oidc_sessions.up.sql`
 57. `000098_add_platform_delivered_at_to_crm_notifications.up.sql`
 58. `000099_widen_crm_notification_source_event_id.up.sql`
+59. `000100_track_platform_notification_delivery_failures.up.sql`
+60. `000101_retry_numeric_platform_notification_events.up.sql`
+61. `000103_crm_oidc_backchannel_logout.up.sql`
+62. `000105_customer_credit.up.sql`
+63. `000106_complete_customer_credit_workflow.up.sql`
+64. `000107_credit_approval_history_and_queries.up.sql`
+65. `000108_unbounded_credit_application_reason.up.sql`
 
 ## customer_portal schema
 
@@ -109,6 +116,7 @@
 32. `000095_add_user_login_ip_to_portal_request_audit_outbox.up.sql`
 33. `000097_add_login_ip_to_portal_sessions.up.sql`
 34. `000102_portal_project_account_bindings.up.sql`
+35. `000104_portal_oidc_backchannel_logout.up.sql`
 
 ## 规则
 
@@ -141,6 +149,7 @@
 `000101` 仅重新排队历史上因 `source_event_id` 以数字开头而被基础平台编码校验拒绝的通知；新版投递 Worker 会把这类 ID 稳定映射为合法的 `CRM_` 事件编码。其他 422 校验失败不会被重试，避免无效收件人或无效资源形成永久重试循环。
 
 `000102` 新建 Portal 账号与项目的显式绑定表，区分上游 `SYNC` 与运营 `MANUAL` 来源。同步接口按租户、客户和项目在事务内锁定项目快照并原子替换 `SYNC` 绑定，重复 `source_version` 请求幂等，空账号集合表示明确撤销同步授权；项目查询、详情、动态、报告、备案、评价、反馈和项目消息入口统一复用账号可见性边界。存量账号在尚未产生绑定时保留客户单位级回退，完成首次绑定后立即收紧到项目级范围。上线前须先执行迁移，再由项目系统调用 `POST /customer-portal/internal/project-access/sync` 建立绑定。
+`000100/000101` 记录平台通知投递失败并仅对已知的历史数字型事件 ID 做受控重排队；不把其他校验失败误转为可重试事件。`000103/000104` 分别为 CRM 与 Portal 增加 OIDC 后通道注销重放防护及会话撤销所需结构。`000105` 至 `000108` 引入客户信用规则、回款事实、申请/审批历史、规则版本与原因字段，所有记录仍按租户隔离且以幂等键约束重复写入。
 `000072` 新建独立 Worker 多实例心跳表，以 `worker_type + worker_id` 保存最后一次成功读取售前 outbox 的时间。CRM 只在任一 `presale_delivery` 实例具有新鲜数据库证据时接受新的售前申请；无记录、过期或查询失败均失败关闭，已提交申请的幂等重放不受 Worker 暂停影响。首笔心跳与 outbox 查询/领取在同一短事务，写入失败会回滚租约；此后每处理一个具有 5 秒硬超时的外部事件就刷新心跳，刷新失败会告警但不会中断已领取批次。CRM/Worker 使用相同新鲜度窗口，Worker 启动时校验该窗口足以覆盖轮询、外部超时和调度抖动；配置项本身不能把 Worker 标记为可用。
 `000048` 新建转合同逐次投递诊断表；既有 `OPPORTUNITY_SIGNED` 仍由 Worker 按原事件 ID 领取，不伪造历史投递成功。
 `000046` 新建项目进度 PDF 任务、账号绑定的一次性下载授权和不可变事件表，不从历史项目浏览记录伪造导出请求；生产有导出证据后只允许前向修复。`000016` 的同步游标列使用 `sync_cursor`，避免 MySQL 8.4 保留字 `CURSOR` 导致空库迁移失败。

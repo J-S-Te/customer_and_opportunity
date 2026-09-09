@@ -610,7 +610,3 @@ func invalidAttemptDedupeKey(actor Actor, requestID uint64, now time.Time) strin
 	bucket := now.UTC().Truncate(time.Hour).Format(time.RFC3339)
 	return sourceHash("INVALID_DOWNLOAD", actor.TenantID+"\x00"+actor.AccountID+"\x00"+strconv.FormatUint(requestID, 10)+"\x00"+bucket)
 }
-
-func IsDownloadClientError(err error) bool {
-	return errors.Is(err, ErrGrantExpired) || errors.Is(err, ErrGrantFrozen) || errors.Is(err, ErrGrantRevoked) || errors.Is(err, ErrGrantNotFound)
-}
