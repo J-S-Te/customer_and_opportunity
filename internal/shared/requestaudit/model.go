@@ -80,6 +80,7 @@ type BusinessEvent struct {
 type OutboxStatus struct {
 	PendingCount        int64            `json:"pending_count"`
 	RetryCount          int64            `json:"retry_count"`
+	HeldCount           int64            `json:"held_count"` // Included in RetryCount; requires operator resolution.
 	ProcessingCount     int64            `json:"processing_count"`
 	StartedCount        int64            `json:"started_count"`
 	DeliveredCount      int64            `json:"delivered_count"`

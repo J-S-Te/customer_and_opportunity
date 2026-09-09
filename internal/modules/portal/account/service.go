@@ -783,14 +783,6 @@ func hash(v string) string {
 	sum := sha256.Sum256([]byte(v))
 	return base64.RawURLEncoding.EncodeToString(sum[:])
 }
-func contains(values []string, expected string) bool {
-	for _, value := range values {
-		if value == expected {
-			return true
-		}
-	}
-	return false
-}
 func safeReturnPath(path string) bool {
 	// 回跳地址只能是站内绝对路径，并拒绝协议相对地址，防止登录成功后发生开放重定向。
 	return strings.HasPrefix(path, "/") && !strings.HasPrefix(path, "//") && !strings.ContainsAny(path, "\r\n")

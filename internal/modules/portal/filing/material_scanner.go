@@ -14,8 +14,7 @@ const localMaterialScannerVersion = "portal-material-static-v1"
 const maxMaterialImagePixels = uint64(100_000_000)
 
 // LocalMaterialScanner 对文件网关中的不可变对象执行本地静态安全校验。它不会伪造外部
-// 杀毒结果；引用明确标记 static-v1，后续可在不改变 MaterialService 的前提下替换为
-// ClamAV 或独立扫描服务。
+// 杀毒结果；引用明确标记 static-v1。此校验器不执行病毒引擎检测。
 type LocalMaterialScanner struct{ store MaterialObjectStore }
 
 // NewLocalMaterialScanner 创建只读取已终结不可变对象的静态扫描器。

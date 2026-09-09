@@ -138,6 +138,26 @@ func (s *Store) Delivered(ctx context.Context, workerID string, values []Record,
 		}).Error
 }
 
+// HoldSourceMismatch preserves a permanently mismatched event without repeated
+// writes. NULL next_attempt_at is excluded by Claim, including older workers.
+// The lease-owner condition prevents a stale worker from changing another claim.
+func (s *Store) HoldSourceMismatch(ctx context.Context, workerID string, values []Record, now time.Time) error {
+	if len(values) == 0 {
+		return nil
+	}
+	ids := make([]uint64, 0, len(values))
+	for _, value := range values {
+		ids = append(ids, value.ID)
+	}
+	return s.db.WithContext(ctx).Table(s.tableName).
+		Where("id IN ? AND delivery_status=? AND locked_by=?", ids, StatusProcessing, workerID).
+		Updates(map[string]any{
+			"delivery_status": StatusRetry, "next_attempt_at": nil,
+			"locked_by": "", "locked_until": nil,
+			"last_error_code": "PLATFORM_AUDIT_OUTBOX_SOURCE_MISMATCH", "updated_at": now.UTC(),
+		}).Error
+}
+
 func (s *Store) Retry(ctx context.Context, workerID string, values []Record, code string, next, now time.Time) error {
 	if len(values) == 0 {
 		return nil
@@ -197,6 +217,10 @@ func (s *Store) Status(ctx context.Context, tenantID string) (OutboxStatus, erro
 	status.OldestUndeliveredAt = aggregate.OldestUndeliveredAt
 	status.MaxAttempts = aggregate.MaxAttempts
 	status.LastDeliveredAt = aggregate.LastDeliveredAt
+	if err := query().Where("delivery_status=? AND next_attempt_at IS NULL AND last_error_code=?", StatusRetry, "PLATFORM_AUDIT_OUTBOX_SOURCE_MISMATCH").
+		Count(&status.HeldCount).Error; err != nil {
+		return OutboxStatus{}, err
+	}
 
 	type errorCountRow struct {
 		Code  string

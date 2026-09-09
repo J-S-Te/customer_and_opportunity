@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -24,8 +25,16 @@ type DispatcherOptions struct {
 	HTTPClient                                                                          *http.Client
 }
 
+type deliveryStore interface {
+	RecoverInterrupted(context.Context, time.Time, time.Time) error
+	Claim(context.Context, string, int, time.Time, time.Time) ([]Record, error)
+	HoldSourceMismatch(context.Context, string, []Record, time.Time) error
+	Retry(context.Context, string, []Record, string, time.Time, time.Time) error
+	Delivered(context.Context, string, []Record, time.Time) error
+}
+
 type Dispatcher struct {
-	store                    *Store
+	store                    deliveryStore
 	baseURL                  string
 	clientID, clientSecret   string
 	application, environment string
@@ -86,10 +95,16 @@ func NewDispatcher(store *Store, options DispatcherOptions) (*Dispatcher, error)
 func (d *Dispatcher) Run(ctx context.Context) {
 	ticker := time.NewTicker(d.pollInterval)
 	defer ticker.Stop()
+	var lastFailureLog time.Time
 	for {
 		if err := d.runOnce(ctx); err != nil && !errors.Is(err, context.Canceled) {
-			// The durable row remains RETRY. The caller's structured logger records
-			// process health; this package never logs payloads or credentials.
+			// Bound failure logging during an outage. Never emit raw database or
+			// HTTP errors, which may contain audit payloads or credentials.
+			if lastFailureLog.IsZero() || time.Since(lastFailureLog) >= time.Minute {
+				slog.ErrorContext(ctx, "request audit dispatch failed", "application_code", d.application,
+					"environment_code", d.environment, "worker_id", d.workerID, "error_code", deliveryErrorCode(err))
+				lastFailureLog = time.Now()
+			}
 		}
 		select {
 		case <-ctx.Done():
@@ -150,12 +165,33 @@ func (d *Dispatcher) runOnce(ctx context.Context) error {
 	if err != nil || len(values) == 0 {
 		return err
 	}
+	var matching, mismatched []Record
+	for _, value := range values {
+		if value.ApplicationCode != d.application || value.EnvironmentCode != d.environment {
+			mismatched = append(mismatched, value)
+		} else {
+			matching = append(matching, value)
+		}
+	}
+	// A configuration mismatch cannot heal by replaying the same event. Keep
+	// its evidence in RETRY with no scheduled attempt; operators can explicitly
+	// reschedule it after establishing a valid source. Do not poison good rows
+	// that happened to share this claim batch.
+	if len(mismatched) > 0 {
+		if err := d.store.HoldSourceMismatch(ctx, d.workerID, mismatched, now); err != nil {
+			return fmt.Errorf("hold audit source mismatch: %w", err)
+		}
+	}
+	values = matching
+	if len(values) == 0 {
+		return nil
+	}
 	if err = d.deliver(ctx, values); err != nil {
 		next := now.Add(retryDelay(values))
 		retryContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
 		defer cancel()
-		_ = d.store.Retry(retryContext, d.workerID, values, deliveryErrorCode(err), next, now)
-		return err
+		retryErr := d.store.Retry(retryContext, d.workerID, values, deliveryErrorCode(err), next, now)
+		return errors.Join(err, retryErr)
 	}
 	return d.store.Delivered(ctx, d.workerID, values, now)
 }
