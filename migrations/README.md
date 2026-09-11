@@ -107,16 +107,17 @@
 23. `000062_portal_filing_waiting_contract_status.up.sql`
 24. `000063_portal_report_async_ingest.up.sql`
 25. `000066_portal_filing_submission_receipts.up.sql`
-26. `000068_portal_report_risk_operations.up.sql`
-27. `000070_portal_identity_disable_idempotency.up.sql`
-28. `000073_portal_worker_heartbeats.up.sql`
-29. `000076_portal_request_audit_outbox.up.sql`
-30. `000077_portal_customer_service_options.up.sql`
-31. `000079_portal_session_data_scopes.up.sql`
-32. `000095_add_user_login_ip_to_portal_request_audit_outbox.up.sql`
-33. `000097_add_login_ip_to_portal_sessions.up.sql`
-34. `000102_portal_project_account_bindings.up.sql`
-35. `000104_portal_oidc_backchannel_logout.up.sql`
+26. `000067_portal_feedback_customer_notifications.up.sql`
+27. `000068_portal_report_risk_operations.up.sql`
+28. `000070_portal_identity_disable_idempotency.up.sql`
+29. `000073_portal_worker_heartbeats.up.sql`
+30. `000076_portal_request_audit_outbox.up.sql`
+31. `000077_portal_customer_service_options.up.sql`
+32. `000079_portal_session_data_scopes.up.sql`
+33. `000095_add_user_login_ip_to_portal_request_audit_outbox.up.sql`
+34. `000097_add_login_ip_to_portal_sessions.up.sql`
+35. `000102_portal_project_account_bindings.up.sql`
+36. `000104_portal_oidc_backchannel_logout.up.sql`
 
 ## 规则
 
@@ -137,6 +138,7 @@
 `000059` 为报告文件增加显式扫描结论，旧行默认空且不可下载；只有 `CLEAN` 与对象版本、AES-256-GCM、扫描编号/时间和 SHA-256 证据同时成立才可下载。`000061` 为成功下载事件保存水印追踪码的作用域摘要，不保存明文。`000062` 将旧的本地 `SUBMITTED` 状态前向改名为 `WAITING_CONTRACT`，避免误称公安已提交；未来只有可信回执才能使用 `SUBMITTED`。`000063` 增加报告文件异步 Ingest 作业、加密描述符、稳定事件号、有限租约和重试/死信状态，使对象读取、病毒扫描与信封加密不再发生在 ISSUED 回调事务内；不为存量报告伪造作业。
 `000066` 新建不可变公安提交回执表，并增加 `SUBMITTING`/`SUBMISSION_FAILED` 状态。只有正式 Provider 返回经校验的回执后，Worker 才在同一事务写入回执身份、加密证据、明文证据 SHA-256 并把备案改为 `SUBMITTED`；既有 `WAITING_CONTRACT` 行不推断回执、不自动变更状态。
 `000067` 新建 TS-009 可重建日报事实表和聚合运行记录。独立 Worker 按 tenant 与 UTC 半开日窗口事务性先删后重建，使用历史人员/部门快照、有效工时和已有 PMS outbox 证据；失败运行不发布部分窗口，事实表不替代不可变业务证据。
+Portal `000067`（`000067_portal_feedback_customer_notifications`）为 `portal_feedback_notifications` 增加账号收件人 `account_id`、稳定 `event_id` 及站内信标题/正文/跳转路径字段，唯一键改为 tenant+`event_id`；存量行按所属反馈补齐 `account_id` 并生成 `legacy-` 前缀事件号，不做其他回填，未匹配反馈的旧行视为异常须人工核查。
 `000068` 新建报告风险冻结站内告警和人工复核事件，冻结与告警同事务；人工解冻仅允许恢复尚未过期且不存在其他活动授权的原 grant，撤销重发只撤销旧 grant 并要求客户再次显式生成一次性授权，后台不生成或返回可回放的明文 token。旧 FROZEN grant 缺少可信规则和检测时点，不补造历史告警。
 `000069` 新建独立 Portal 访问禁用 Saga。操作绑定身份链接 ID/版本快照，先让 Portal 映射进入 `DISABLED` 并撤销该 subject 的全部本地会话，再回收基础平台 `portal_customer` 角色；两个远端步骤使用稳定业务幂等键。请求与独立恢复 Worker 共享有限租约，到期 `RETRY_WAIT` 由 `FOR UPDATE SKIP LOCKED` 领取，第 8 次失败保留 `DEAD_LETTER` 证据。既有身份链接不自动禁用，邀请 revoke 也不会触发该流程。
 `000070` 为 Portal 本地映射禁用增加机器主体+业务幂等键+规范载荷摘要账本；随机 integration nonce 只防单次请求重放，不能替代跨网络重试的业务幂等。映射、会话撤销、最小化 auth event 与账本在同一事务提交，审计失败整体回滚。
@@ -177,3 +179,5 @@
 `000053` 的快照时间语义修正后，又使用“可复用成员行且原始 created_at 远早于当前状态”的活动/停用样例在 MySQL 8.4.11 执行。结果确认两类 `LEGACY_SNAPSHOT` 的 `started_at`/`ended_at`/`started_by` 均不被伪造，只有迁移时活动的快照占用活动任期唯一键；该定向验证 schema 已删除。
 
 该结果证明当前空库迁移链可执行，不等于上一版本升级、在线 DDL 或生产性能验收完成。`000032/000033/000035/000036/000037/000040/000041/000045/000050` 等在存量表上增加索引、约束、列或改变列长度的迁移仍须使用发布平台认可的在线变更方案，并监控 metadata lock、副本延迟、临时磁盘及回退条件。相应 `down.sql` 会删除不可变协调或审计证据、索引或缩窄字段，只能用于确认数据满足回退条件的测试/空环境，不能作为已有生产事件时的常规回滚。
+
+2026-09-12 已在本地 Docker MySQL 8.4.11 的两个全新空库 schema 分别执行当前完整 `up` 链：CRM 65 个文件（至 `000108`）创建 74 张表，combined checksum 为 `sha256:b2d4140d3f222f30987aaacb2fab43b4f3e1d110cf96f08b6e1571bb04d93887`；Portal 36 个文件（至 `000104`）创建 57 张表，combined checksum 为 `sha256:4650c30c545832fdcb3fd81a04845fc20a8a6a3d896e1e8acd2d5ef9e15269a4`。该验证补上了 `000068` 至 `000108` 此前缺失的空库执行证据；两个临时 schema 已删除。本结果仍不替代上一版本增量升级、在线 DDL、metadata lock、回滚演练和生产规模性能验收。
