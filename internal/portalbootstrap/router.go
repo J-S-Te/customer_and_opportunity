@@ -1259,18 +1259,21 @@ func contentDisposition(fileName string) string {
 }
 
 type reportResponse struct {
-	ID                  uint64        `json:"id"`
-	RequestNo           string        `json:"request_no"`
-	ProjectID           string        `json:"project_id"`
-	ReportType          string        `json:"report_type"`
-	Reason              string        `json:"reason"`
-	Status              report.Status `json:"status"`
-	DownstreamRequestID string        `json:"downstream_request_id,omitempty"`
-	ApprovalResult      string        `json:"approval_result,omitempty"`
-	SubmittedAt         time.Time     `json:"submitted_at"`
-	ApprovedAt          *time.Time    `json:"approved_at,omitempty"`
-	IssuedAt            *time.Time    `json:"issued_at,omitempty"`
-	Version             uint64        `json:"version"`
+	ID                    uint64        `json:"id"`
+	RequestNo             string        `json:"request_no"`
+	ProjectID             string        `json:"project_id"`
+	ReportType            string        `json:"report_type"`
+	Reason                string        `json:"reason"`
+	Status                report.Status `json:"status"`
+	DownstreamRequestID   string        `json:"downstream_request_id,omitempty"`
+	ApprovalResult        string        `json:"approval_result,omitempty"`
+	SubmittedAt           time.Time     `json:"submitted_at"`
+	ApprovedAt            *time.Time    `json:"approved_at,omitempty"`
+	IssuedAt              *time.Time    `json:"issued_at,omitempty"`
+	Version               uint64        `json:"version"`
+	CurrentReportRevision uint64        `json:"current_report_revision"`
+	ReportValidityStatus  string        `json:"report_validity_status"`
+	VoidNotice            string        `json:"void_notice,omitempty"`
 }
 
 type reportStatusEventResponse struct {
@@ -1287,7 +1290,7 @@ type reportDetailResponse struct {
 }
 
 func publicReport(value *report.Request) reportResponse {
-	return reportResponse{ID: value.ID, RequestNo: value.RequestNo, ProjectID: value.ProjectID, ReportType: value.ReportType, Reason: value.Reason, Status: value.Status, DownstreamRequestID: value.DownstreamRequestID, ApprovalResult: value.ApprovalResult, SubmittedAt: value.SubmittedAt, ApprovedAt: value.ApprovedAt, IssuedAt: value.IssuedAt, Version: value.Version}
+	return reportResponse{ID: value.ID, RequestNo: value.RequestNo, ProjectID: value.ProjectID, ReportType: value.ReportType, Reason: value.Reason, Status: value.Status, DownstreamRequestID: value.DownstreamRequestID, ApprovalResult: value.ApprovalResult, SubmittedAt: value.SubmittedAt, ApprovedAt: value.ApprovedAt, IssuedAt: value.IssuedAt, Version: value.Version, CurrentReportRevision: value.CurrentReportRevision, ReportValidityStatus: value.ReportValidityStatus, VoidNotice: value.VoidNotice}
 }
 func publicReportDetail(value *report.Detail) reportDetailResponse {
 	result := reportDetailResponse{reportResponse: publicReport(value.Request), Events: make([]reportStatusEventResponse, 0, len(value.Events))}

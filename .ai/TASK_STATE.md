@@ -1,5 +1,15 @@
 # Current Task
 
+## Focused follow-up: portal report revision ledger (2026-09-14)
+
+- Added migration `000109` for report request/file/ingest/grant revision fields and revision events.
+- Correction callbacks accept only the next R number, void the previous file and revoke its active
+  grants while retaining historical download records.
+- Portal list responses identify current revision/validity/void notice; grant creation and download
+  fail closed for void or superseded files.
+- Complete Go tests and unified frontend tests/build passed. Deployment and migration execution have
+  not been performed.
+
 ## 目标
 
 对客户与商机管理系统进行业务层深度测试，并修复发现的问题。

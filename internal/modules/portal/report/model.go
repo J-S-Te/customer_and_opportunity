@@ -34,24 +34,27 @@ const (
 
 type Request struct {
 	ActorModel
-	RequestNo           string     `gorm:"size:32;not null;uniqueIndex:uq_portal_report_no,priority:2"`
-	ProjectID           string     `gorm:"size:64;not null;index"`
-	CustomerID          uint64     `gorm:"not null;index"`
-	AccountID           string     `gorm:"size:128;not null;index"`
-	ReportType          string     `gorm:"size:64;not null"`
-	Reason              string     `gorm:"size:2000;not null"`
-	ReceiveEmailCipher  []byte     `gorm:"type:varbinary(1024)"`
-	Status              Status     `gorm:"size:32;not null;index"`
-	DownstreamRequestID string     `gorm:"size:128;index"`
-	ApprovalResult      string     `gorm:"size:2000"`
-	SubmittedAt         time.Time  `gorm:"precision:3;not null"`
-	ApprovedAt          *time.Time `gorm:"precision:3"`
-	IssuedAt            *time.Time `gorm:"precision:3"`
-	IdempotencyKey      string     `gorm:"size:128;not null;uniqueIndex:uq_portal_report_idempotency,priority:2"`
-	RequestHash         string     `gorm:"size:64;not null"`
-	LastCallbackVersion uint64     `gorm:"not null;default:0"`
-	LastCallbackKey     string     `gorm:"size:128;not null;default:''"`
-	LastCallbackHash    string     `gorm:"size:64;not null;default:''"`
+	RequestNo             string     `gorm:"size:32;not null;uniqueIndex:uq_portal_report_no,priority:2"`
+	ProjectID             string     `gorm:"size:64;not null;index"`
+	CustomerID            uint64     `gorm:"not null;index"`
+	AccountID             string     `gorm:"size:128;not null;index"`
+	ReportType            string     `gorm:"size:64;not null"`
+	Reason                string     `gorm:"size:2000;not null"`
+	ReceiveEmailCipher    []byte     `gorm:"type:varbinary(1024)"`
+	Status                Status     `gorm:"size:32;not null;index"`
+	DownstreamRequestID   string     `gorm:"size:128;index"`
+	ApprovalResult        string     `gorm:"size:2000"`
+	SubmittedAt           time.Time  `gorm:"precision:3;not null"`
+	ApprovedAt            *time.Time `gorm:"precision:3"`
+	IssuedAt              *time.Time `gorm:"precision:3"`
+	IdempotencyKey        string     `gorm:"size:128;not null;uniqueIndex:uq_portal_report_idempotency,priority:2"`
+	RequestHash           string     `gorm:"size:64;not null"`
+	LastCallbackVersion   uint64     `gorm:"not null;default:0"`
+	LastCallbackKey       string     `gorm:"size:128;not null;default:''"`
+	LastCallbackHash      string     `gorm:"size:64;not null;default:''"`
+	CurrentReportRevision uint64     `gorm:"not null;default:0"`
+	ReportValidityStatus  string     `gorm:"size:16;not null;default:ACTIVE"`
+	VoidNotice            string     `gorm:"size:1000;not null;default:''"`
 }
 
 func (Request) TableName() string { return "portal_report_requests" }
@@ -115,7 +118,10 @@ func (NotificationReadEvent) TableName() string {
 
 type File struct {
 	database.Model
-	RequestID           uint64     `gorm:"not null;uniqueIndex"`
+	RequestID           uint64     `gorm:"not null;index"`
+	ReportRevision      uint64     `gorm:"not null;default:0"`
+	ValidityStatus      string     `gorm:"size:16;not null;default:ACTIVE"`
+	VoidNotice          string     `gorm:"size:1000;not null;default:''"`
 	ObjectKeyCipher     []byte     `gorm:"type:varbinary(1024);not null"`
 	ObjectVersion       string     `gorm:"size:256;not null"`
 	FileName            string     `gorm:"size:255;not null"`
@@ -146,7 +152,8 @@ type IngestJob struct {
 	EventID          string     `gorm:"size:64;not null;uniqueIndex"`
 	TenantID         string     `gorm:"size:64;not null;index"`
 	CustomerID       uint64     `gorm:"not null"`
-	RequestID        uint64     `gorm:"not null;uniqueIndex"`
+	RequestID        uint64     `gorm:"not null;index"`
+	ReportRevision   uint64     `gorm:"not null;default:0"`
 	DescriptorCipher []byte     `gorm:"type:varbinary(2048);not null"`
 	DescriptorHash   string     `gorm:"size:64;not null"`
 	Status           string     `gorm:"size:16;not null;index"`
@@ -160,6 +167,20 @@ type IngestJob struct {
 }
 
 func (IngestJob) TableName() string { return "portal_report_ingest_jobs" }
+
+type RevisionEvent struct {
+	ID             uint64    `gorm:"primaryKey;autoIncrement"`
+	TenantID       string    `gorm:"size:64;not null"`
+	CustomerID     uint64    `gorm:"not null"`
+	RequestID      uint64    `gorm:"not null"`
+	ReportRevision uint64    `gorm:"not null"`
+	EventType      string    `gorm:"size:32;not null"`
+	Reason         string    `gorm:"size:1000;not null"`
+	SourceKeyHash  string    `gorm:"size:64;not null"`
+	OccurredAt     time.Time `gorm:"precision:3;not null"`
+}
+
+func (RevisionEvent) TableName() string { return "portal_report_revision_events" }
 
 type GrantStatus string
 
@@ -176,6 +197,7 @@ type Grant struct {
 	PublicID       string      `gorm:"size:64;not null;uniqueIndex:uq_portal_report_grant_public,priority:2"`
 	CustomerID     uint64      `gorm:"not null;index"`
 	RequestID      uint64      `gorm:"not null;index"`
+	ReportRevision uint64      `gorm:"not null;default:0"`
 	AccountID      string      `gorm:"size:128;not null;index"`
 	TokenHash      string      `gorm:"size:64;not null;uniqueIndex:uq_portal_report_grant_token"`
 	IssueKeyHash   string      `gorm:"size:64;not null"`

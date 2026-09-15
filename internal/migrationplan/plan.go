@@ -72,6 +72,7 @@ var baseFiles = map[Schema][]string{
 		"000079_portal_session_data_scopes.up.sql",
 		"000095_add_user_login_ip_to_portal_request_audit_outbox.up.sql", "000097_add_login_ip_to_portal_sessions.up.sql", "000102_portal_project_account_bindings.up.sql",
 		"000104_portal_oidc_backchannel_logout.up.sql",
+		"000109_portal_report_revision_ledger.up.sql",
 	},
 }
 

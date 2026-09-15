@@ -35,6 +35,7 @@ var (
 	ErrGrantExpired        = apperror.New(http.StatusGone, "PORTAL_REPORT_LINK_EXPIRED", "download authorization expired")
 	ErrGrantFrozen         = apperror.New(http.StatusLocked, "PORTAL_REPORT_GRANT_FROZEN", "download authorization is frozen")
 	ErrGrantRevoked        = apperror.New(http.StatusGone, "PORTAL_REPORT_GRANT_REVOKED", "download authorization was revoked")
+	ErrReportVoided        = apperror.New(http.StatusGone, "PORTAL_REPORT_VOIDED", "this report revision has been voided; download the latest revision")
 	ErrDownloadUnavailable = apperror.New(http.StatusServiceUnavailable, "PORTAL_REPORT_DOWNLOAD_UNAVAILABLE", "secure report download is unavailable")
 	ErrDownloadIntegrity   = apperror.New(http.StatusServiceUnavailable, "PORTAL_REPORT_DOWNLOAD_INTEGRITY_FAILED", "report content integrity check failed")
 	ErrIssueReplay         = apperror.New(http.StatusConflict, "PORTAL_REPORT_GRANT_REPLAY", "download authorization response cannot be replayed; request a new authorization")
@@ -237,12 +238,17 @@ func (s *DownloadService) CreateGrant(ctx context.Context, actor Actor, requestI
 		if request.CustomerID != actor.CustomerID {
 			return ErrNotFound
 		}
+		if request.ReportValidityStatus == "VOID" {
+			return ErrReportVoided
+		}
 		if request.Status != StatusIssued {
 			return ErrReportNotIssued
 		}
-		if _, fileErr := s.repo.FindFile(tx, actor.TenantID, request.ID); fileErr != nil {
+		file, fileErr := s.repo.FindFile(tx, actor.TenantID, request.ID)
+		if fileErr != nil {
 			return fileErr
 		}
+		grant.ReportRevision = file.ReportRevision
 		if _, replayErr := s.repo.FindGrantByIssueKeyForUpdate(tx, actor.TenantID, actor.CustomerID, request.ID, actor.AccountID, grant.IssueKeyHash); replayErr == nil {
 			return ErrIssueReplay
 		} else if !errors.Is(replayErr, ErrGrantNotFound) {
@@ -304,6 +310,10 @@ func (s *DownloadService) AuthorizeDownload(ctx context.Context, actor Actor, re
 			return grantErr
 		}
 		value = grant
+		if request.ReportValidityStatus == "VOID" || grant.ReportRevision != request.CurrentReportRevision {
+			decisionErr = ErrReportVoided
+			return s.auditDenied(tx, actor, requestID, grant, "VOIDED", "PORTAL_REPORT_VOIDED", metadata, now)
+		}
 		if !sameGrantScope(grant, actor, requestID) {
 			return ErrGrantNotFound
 		}

@@ -69,6 +69,9 @@ type reportRepoStub struct {
 	notification   *Notification
 	readEvents     []NotificationReadEvent
 	unreadCount    int64
+	revisionEvents []RevisionEvent
+	voidedRevision uint64
+	voidReason     string
 }
 
 func (r *reportRepoStub) WithTransaction(ctx context.Context, fn func(context.Context) error) error {
@@ -173,6 +176,14 @@ func (r *reportRepoStub) MarkNotificationRead(_ context.Context, value *Notifica
 }
 func (r *reportRepoStub) CreateNotificationReadEvent(_ context.Context, value *NotificationReadEvent) error {
 	r.readEvents = append(r.readEvents, *value)
+	return nil
+}
+func (r *reportRepoStub) VoidSupersededReport(_ context.Context, _ *Request, revision uint64, reason, _ string, _ time.Time) error {
+	r.voidedRevision, r.voidReason = revision, reason
+	return nil
+}
+func (r *reportRepoStub) CreateRevisionEvent(_ context.Context, value *RevisionEvent) error {
+	r.revisionEvents = append(r.revisionEvents, *value)
 	return nil
 }
 func (r *reportRepoStub) FindFile(context.Context, string, uint64) (*File, error) {
@@ -530,6 +541,31 @@ func TestIssuedCallbackQueuesEncryptedDescriptorWithoutPublishingFile(t *testing
 	}
 	if len(repo.notifications) != 0 {
 		t.Fatalf("queued callback published premature notification=%+v", repo.notifications)
+	}
+}
+
+func TestCorrectedReportVoidsPriorRevisionBeforeQueuingReplacement(t *testing.T) {
+	request := callbackRequest()
+	request.Status = StatusIssued
+	request.CurrentReportRevision = 0
+	request.LastCallbackVersion = 2
+	cb := validCallback()
+	cb.Version, cb.Status, cb.ReportRevision = 3, StatusIssued, 1
+	cb.ObjectRef, cb.FileName, cb.MIME = "trusted-bucket/reports/report-7-r1.pdf", "final-report-r1.pdf", "application/pdf"
+	cb.FileHash, cb.Size, cb.VoidReason = strings.Repeat("b", 64), 2048, "R0 数据口径错误"
+	repo := &reportRepoStub{request: request}
+	service := NewService(repo, nil, nil, &ingestorStub{}, reportClock{now: time.Now()}, nil)
+	if err := service.ApplyCallback(context.Background(), cb); err != nil {
+		t.Fatalf("ApplyCallback() err=%v", err)
+	}
+	if repo.voidedRevision != 0 || repo.voidReason != cb.VoidReason {
+		t.Fatalf("void=%d reason=%q", repo.voidedRevision, repo.voidReason)
+	}
+	if repo.ingestJob == nil || repo.ingestJob.ReportRevision != 1 {
+		t.Fatalf("job=%+v", repo.ingestJob)
+	}
+	if repo.update["report_validity_status"] != "VOID" || repo.update["void_notice"] != cb.VoidReason {
+		t.Fatalf("update=%+v", repo.update)
 	}
 }
 
