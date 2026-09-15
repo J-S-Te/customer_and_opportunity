@@ -69,6 +69,8 @@ type Callback struct {
 	MIME                string `json:"mime"`
 	FileHash            string `json:"file_hash"`
 	Size                int64  `json:"size"`
+	ReportRevision      uint64 `json:"report_revision"`
+	VoidReason          string `json:"void_reason"`
 }
 
 type FileDescriptor struct {
@@ -129,6 +131,11 @@ type Repository interface {
 	FindNotificationForUpdate(context.Context, Actor, uint64) (*Notification, error)
 	MarkNotificationRead(context.Context, *Notification, time.Time) error
 	CreateNotificationReadEvent(context.Context, *NotificationReadEvent) error
+}
+
+type revisionRepository interface {
+	VoidSupersededReport(context.Context, *Request, uint64, string, string, time.Time) error
+	CreateRevisionEvent(context.Context, *RevisionEvent) error
 }
 
 func (s *Service) List(ctx context.Context, actor Actor, page, pageSize int) (pagination.Page[Request], error) {
@@ -390,6 +397,7 @@ func (s *Service) ApplyCallback(ctx context.Context, cb Callback) error {
 	cb.FileName = strings.TrimSpace(cb.FileName)
 	cb.MIME = strings.TrimSpace(cb.MIME)
 	cb.FileHash = strings.ToLower(strings.TrimSpace(cb.FileHash))
+	cb.VoidReason = strings.TrimSpace(cb.VoidReason)
 	if !validBoundedText(cb.TenantID, maxTenantIDBytes) || cb.RequestID == 0 || cb.CustomerID == 0 ||
 		!validBoundedText(cb.ProjectID, maxProjectIDBytes) || cb.Version == 0 ||
 		!validBoundedText(cb.DownstreamRequestID, maxDownstreamRequestIDBytes) || !validBoundedText(cb.IdempotencyKey, maxIdempotencyKeyBytes) ||
@@ -435,7 +443,15 @@ func (s *Service) ApplyCallback(ctx context.Context, cb Callback) error {
 			}
 			return ErrCallbackConflict
 		}
-		if !transitionAllowed(value.Status, cb.Status) {
+		reportRevision := cb.ReportRevision
+		if reportRevision == 0 {
+			reportRevision = value.CurrentReportRevision
+		}
+		isCorrection := cb.Status == StatusIssued && reportRevision > value.CurrentReportRevision
+		if isCorrection && reportRevision != value.CurrentReportRevision+1 {
+			return ErrInvalidCallback
+		}
+		if !transitionAllowed(value.Status, cb.Status) && !(isCorrection && value.Status == StatusIssued) {
 			return ErrInvalidTransition
 		}
 		now := s.clock.Now().UTC()
@@ -470,7 +486,24 @@ func (s *Service) ApplyCallback(ctx context.Context, cb Callback) error {
 				return ErrInvalidCallback
 			}
 			eventID := sourceHash("INGEST", cb.IdempotencyKey)
-			if err = s.repo.CreateIngestJob(tx, &IngestJob{EventID: eventID, TenantID: value.TenantID, CustomerID: value.CustomerID, RequestID: value.ID, DescriptorCipher: ciphertext, DescriptorHash: descriptorHash(descriptor), Status: IngestPending, CreatedAt: now}); err != nil {
+			if isCorrection {
+				revisions, ok := s.repo.(revisionRepository)
+				if !ok {
+					return errors.New("report revision repository is unavailable")
+				}
+				reason := cb.VoidReason
+				if reason == "" {
+					reason = "报告已由更正版本替代"
+				}
+				if len([]byte(reason)) > 1000 {
+					return ErrInvalidCallback
+				}
+				if err = revisions.VoidSupersededReport(tx, value, value.CurrentReportRevision, reason, source, now); err != nil {
+					return err
+				}
+				fields["report_validity_status"], fields["void_notice"] = "VOID", reason
+			}
+			if err = s.repo.CreateIngestJob(tx, &IngestJob{EventID: eventID, TenantID: value.TenantID, CustomerID: value.CustomerID, RequestID: value.ID, ReportRevision: reportRevision, DescriptorCipher: ciphertext, DescriptorHash: descriptorHash(descriptor), Status: IngestPending, CreatedAt: now}); err != nil {
 				return err
 			}
 			fields["status"] = StatusIngestPending
@@ -513,7 +546,7 @@ func (s *Service) CompleteIngest(ctx context.Context, job IngestJob, descriptor 
 		if err != nil {
 			return err
 		}
-		if currentJob.EventID != job.EventID || currentJob.TenantID != job.TenantID || currentJob.CustomerID != job.CustomerID || currentJob.RequestID != job.RequestID || currentJob.DescriptorHash != job.DescriptorHash {
+		if currentJob.EventID != job.EventID || currentJob.TenantID != job.TenantID || currentJob.CustomerID != job.CustomerID || currentJob.RequestID != job.RequestID || currentJob.ReportRevision != job.ReportRevision || currentJob.DescriptorHash != job.DescriptorHash {
 			return ErrCallbackConflict
 		}
 		if currentJob.Status == IngestCompleted {
@@ -529,11 +562,16 @@ func (s *Service) CompleteIngest(ctx context.Context, job IngestJob, descriptor 
 		if value.CustomerID != job.CustomerID || value.Status != StatusIngestPending {
 			return ErrInvalidTransition
 		}
-		if err = s.repo.CreateFile(tx, &File{Model: database.Model{TenantID: job.TenantID, CreatedBy: "portal-file-ingestor", UpdatedBy: "portal-file-ingestor", CreatedAt: now, UpdatedAt: now, Version: 1}, RequestID: value.ID, ObjectKeyCipher: ingested.ObjectKeyCipher, ObjectVersion: ingested.ObjectVersion, FileName: descriptor.FileName, MIME: descriptor.MIME, Size: descriptor.Size, FileHash: descriptor.FileHash, EncryptionKeyRef: ingested.EncryptionKeyRef, EncryptionAlgorithm: ingested.EncryptionAlgorithm, ScanStatus: ingested.ScanStatus, ScanReference: ingested.ScanReference, ScannedAt: &scannedAt, WatermarkStatus: ingested.WatermarkStatus}); err != nil {
+		if err = s.repo.CreateFile(tx, &File{Model: database.Model{TenantID: job.TenantID, CreatedBy: "portal-file-ingestor", UpdatedBy: "portal-file-ingestor", CreatedAt: now, UpdatedAt: now, Version: 1}, RequestID: value.ID, ReportRevision: job.ReportRevision, ValidityStatus: "ACTIVE", ObjectKeyCipher: ingested.ObjectKeyCipher, ObjectVersion: ingested.ObjectVersion, FileName: descriptor.FileName, MIME: descriptor.MIME, Size: descriptor.Size, FileHash: descriptor.FileHash, EncryptionKeyRef: ingested.EncryptionKeyRef, EncryptionAlgorithm: ingested.EncryptionAlgorithm, ScanStatus: ingested.ScanStatus, ScanReference: ingested.ScanReference, ScannedAt: &scannedAt, WatermarkStatus: ingested.WatermarkStatus}); err != nil {
 			return err
 		}
-		if err = s.repo.Update(tx, value, value.Version, map[string]any{"status": StatusIssued, "issued_at": &now, "updated_by": "portal-file-ingestor", "updated_at": now}); err != nil {
+		if err = s.repo.Update(tx, value, value.Version, map[string]any{"status": StatusIssued, "issued_at": &now, "current_report_revision": job.ReportRevision, "report_validity_status": "ACTIVE", "void_notice": "", "updated_by": "portal-file-ingestor", "updated_at": now}); err != nil {
 			return err
+		}
+		if revisions, ok := s.repo.(revisionRepository); ok {
+			if err = revisions.CreateRevisionEvent(tx, &RevisionEvent{TenantID: value.TenantID, CustomerID: value.CustomerID, RequestID: value.ID, ReportRevision: job.ReportRevision, EventType: "ISSUED", SourceKeyHash: sourceHash("INGEST", job.EventID), OccurredAt: now}); err != nil {
+				return err
+			}
 		}
 		if err = s.repo.CreateStatusEvent(tx, statusEvent(value, "REPORT_ISSUED", value.Version+1, StatusIngestPending, StatusIssued, "SYSTEM", "portal-file-ingestor", "INGEST", job.EventID, job.DescriptorHash, requestctx.ID(tx), now)); err != nil {
 			return err
@@ -557,7 +595,7 @@ func (s *Service) MarkIngestDeadLetter(ctx context.Context, job IngestJob) error
 		if err != nil {
 			return err
 		}
-		if currentJob.EventID != job.EventID || currentJob.TenantID != job.TenantID || currentJob.CustomerID != job.CustomerID || currentJob.RequestID != job.RequestID || currentJob.DescriptorHash != job.DescriptorHash {
+		if currentJob.EventID != job.EventID || currentJob.TenantID != job.TenantID || currentJob.CustomerID != job.CustomerID || currentJob.RequestID != job.RequestID || currentJob.ReportRevision != job.ReportRevision || currentJob.DescriptorHash != job.DescriptorHash {
 			return ErrCallbackConflict
 		}
 		if currentJob.Status == IngestDeadLetter {
@@ -667,7 +705,7 @@ func hashCallback(cb Callback) string {
 	raw, _ := json.Marshal([]any{
 		cb.TenantID, cb.RequestID, cb.CustomerID, cb.ProjectID, cb.Version, cb.Status,
 		cb.DownstreamRequestID, cb.ApprovalResult, cb.ObjectRef, cb.FileName,
-		cb.MIME, strings.ToLower(cb.FileHash), cb.Size,
+		cb.MIME, strings.ToLower(cb.FileHash), cb.Size, cb.ReportRevision, strings.TrimSpace(cb.VoidReason),
 	})
 	sum := sha256.Sum256(raw)
 	return base64.RawURLEncoding.EncodeToString(sum[:])

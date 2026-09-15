@@ -72,6 +72,22 @@ func (r *GORMRepository) CreateFile(ctx context.Context, value *File) error {
 func (r *GORMRepository) CreateIngestJob(ctx context.Context, value *IngestJob) error {
 	return r.tx(ctx).Create(value).Error
 }
+func (r *GORMRepository) VoidSupersededReport(ctx context.Context, request *Request, revision uint64, reason, source string, now time.Time) error {
+	if err := r.tx(ctx).Model(&File{}).
+		Where("tenant_id=? AND request_id=? AND report_revision=? AND validity_status='ACTIVE'", request.TenantID, request.ID, revision).
+		Updates(map[string]any{"validity_status": "VOID", "void_notice": reason, "updated_by": "project-service", "updated_at": now, "version": gorm.Expr("version + 1")}).Error; err != nil {
+		return err
+	}
+	if err := r.tx(ctx).Model(&Grant{}).
+		Where("tenant_id=? AND customer_id=? AND request_id=? AND report_revision=? AND status=?", request.TenantID, request.CustomerID, request.ID, revision, GrantActive).
+		Updates(map[string]any{"status": GrantRevoked, "active_slot": nil, "updated_by": "project-service", "updated_at": now, "version": gorm.Expr("version + 1")}).Error; err != nil {
+		return err
+	}
+	return r.CreateRevisionEvent(ctx, &RevisionEvent{TenantID: request.TenantID, CustomerID: request.CustomerID, RequestID: request.ID, ReportRevision: revision, EventType: "VOIDED", Reason: reason, SourceKeyHash: source, OccurredAt: now})
+}
+func (r *GORMRepository) CreateRevisionEvent(ctx context.Context, value *RevisionEvent) error {
+	return r.tx(ctx).Create(value).Error
+}
 func (r *GORMRepository) FindIngestJobForUpdate(ctx context.Context, id uint64) (*IngestJob, error) {
 	var value IngestJob
 	err := r.tx(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).Where("id=?", id).Take(&value).Error
@@ -167,7 +183,7 @@ func (r *GORMRepository) CreateNotificationReadEvent(ctx context.Context, value 
 }
 func (r *GORMRepository) FindFile(ctx context.Context, tenant string, requestID uint64) (*File, error) {
 	var value File
-	err := r.tx(ctx).Where("tenant_id=? AND request_id=? AND deleted_at IS NULL", tenant, requestID).Take(&value).Error
+	err := r.tx(ctx).Where("tenant_id=? AND request_id=? AND validity_status='ACTIVE' AND deleted_at IS NULL", tenant, requestID).Order("report_revision DESC").Take(&value).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, ErrFileUnavailable
 	}
