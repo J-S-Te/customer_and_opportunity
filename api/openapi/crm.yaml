@@ -142,6 +142,8 @@ paths:
     post: {$ref: '#/components/x-operations/transferOpportunityContract'}
   /api/v1/internal/opportunities/{id}/contract-link:
     post: {$ref: '#/components/x-operations/receiveOpportunityContractLink'}
+  /api/v1/internal/contract-references/customers/{customerID}:
+    get: {$ref: '#/components/x-operations/resolveContractReference'}
   /api/v1/opportunities/{id}/attachment-capabilities:
     get: {$ref: '#/components/x-operations/getOpportunityAttachmentCapabilities'}
   /api/v1/opportunities/{id}/attachments:
@@ -246,6 +248,7 @@ components:
           tokenUrl: https://platform.example.invalid/oauth2/token
           scopes:
             portal.invite.verify: Verify and consume a Portal invitation.
+            customer.contract_reference.read: Resolve one active customer and an optional same-customer opportunity for Contract Management.
             opportunity.status.write: Apply trusted quotation or bid status events.
             opportunity.attachment.scan.write: Apply attachment malware scan events.
             approval.callback.write: Apply trusted presale approval callbacks.
@@ -690,3 +693,19 @@ components:
     applyOpportunityExternalStatus: &machineOpportunityStatus {operationId: applyOpportunityExternalStatus, tags: [Machine integration], security: [{machineJWT: [opportunity.status.write]}], x-scope: opportunity.status.write, requestBody: {$ref: '#/components/requestBodies/ExternalStatusEvent'}, responses: {'200': {$ref: '#/components/responses/OK'}, '400': {$ref: '#/components/responses/Error'}, '401': {$ref: '#/components/responses/Error'}, '403': {$ref: '#/components/responses/Error'}, '409': {$ref: '#/components/responses/Error'}}}
     applyOpportunityAttachmentScan: {<<: *machineOpportunityStatus, operationId: applyOpportunityAttachmentScan, x-scope: opportunity.attachment.scan.write, security: [{machineJWT: [opportunity.attachment.scan.write]}]}
     applyPresaleApprovalCallback: {<<: *machineOpportunityStatus, operationId: applyPresaleApprovalCallback, x-scope: approval.callback.write, security: [{machineJWT: [approval.callback.write]}], description: Approval Provider request fields are the current inbound projection; the formal engine contract remains pending.}
+    resolveContractReference:
+      operationId: resolveContractReference
+      tags: [Machine integration]
+      security: [{machineJWT: [customer.contract_reference.read]}]
+      x-scope: customer.contract_reference.read
+      parameters:
+        - {name: customerID, in: path, required: true, schema: {type: integer, format: uint64, minimum: 1}}
+        - {name: opportunity_id, in: query, required: false, schema: {type: integer, format: uint64, minimum: 1}}
+        - {name: X-Integration-Timestamp, in: header, required: true, schema: {type: string, format: date-time}}
+        - {name: X-Integration-Nonce, in: header, required: true, schema: {type: string, minLength: 1, maxLength: 200}}
+        - {name: X-Actor-Identity-ID, in: header, required: true, description: Trusted originating platform identity supplied by Contract Management and revalidated against a fresh CRM authorization snapshot., schema: {type: string, minLength: 1, maxLength: 128}}
+      responses:
+        '200': {$ref: '#/components/responses/OK'}
+        '401': {$ref: '#/components/responses/Error'}
+        '403': {$ref: '#/components/responses/Error'}
+        '422': {$ref: '#/components/responses/Error'}

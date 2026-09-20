@@ -85,7 +85,7 @@ func TestApplicationManifestsAreCompleteAndIndependent(t *testing.T) {
 	if HasPermission(portal, "customer.read") || !HasRole(portal, "portal_customer") {
 		t.Fatal("Portal manifest is not isolated from CRM authorization")
 	}
-	for _, machineOnly := range []string{"authorization.catalog.sync", "portal.feedback.manage", "portal.report.risk.manage", "report.callback.write", "portal.identity_mapping.provision"} {
+	for _, machineOnly := range []string{"authorization.catalog.sync", "customer.contract_reference.read", "portal.feedback.manage", "portal.report.risk.manage", "report.callback.write", "portal.identity_mapping.provision"} {
 		if HasPermission(crm, machineOnly) || HasPermission(portal, machineOnly) {
 			t.Fatalf("machine-only scope %s leaked into a browser role catalog", machineOnly)
 		}

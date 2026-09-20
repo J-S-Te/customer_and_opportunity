@@ -100,6 +100,7 @@ CRM 与本地开发模式均要求：
 - 配置基础平台 Discovery issuer、CRM Client、租户、授权目录哈希和公开 Origin；
 - 浏览器非安全方法必须同时携带匹配的 `Origin` 和 `X-CSRF-Token: 1`；
 - `/api/v1/internal` 不接受浏览器会话，必须使用基础平台 `client_credentials` 机器 Token，并校验 audience、scope、`token_use=application`、时间戳和单次 nonce。
+- 合同管理复核 CRM 引用使用独立 `customer.contract_reference.read` 客户端调用 `/api/v1/internal/contract-references/customers/:customerID`。请求必须携带合同会话中已认证的 `X-Actor-Identity-ID`；CRM 只从最近已重验、未撤销的本地授权快照重建该用户范围，并重新执行客户/商机 SELF、ORG、ALL 与销售归属过滤。无快照、快照过期、权限不足、客户失效、跨客户或已作废商机均失败关闭；该机器 scope 不得加入浏览器角色目录。
 
 CRM 不接受任何客户端传入的用户、角色或权限请求头。本地联调也必须先通过基础平台 OIDC 登录；机器接口只接受基础平台签发的单 scope 应用令牌。
 

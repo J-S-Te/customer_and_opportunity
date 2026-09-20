@@ -12,6 +12,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/filegateway"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/middleware"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/contractreference"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/credit"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/crmauth"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/customer"
@@ -380,6 +381,7 @@ func New(config Config) (*App, error) {
 	if portalInviteHandler != nil {
 		portalinvite.RegisterInternalRoutes(internal, portalInviteHandler)
 	}
+	contractreference.RegisterInternalRoutes(internal, contractreference.NewHandler(contractreference.NewService(contractreference.NewGORMRepository(db))))
 	opportunity.RegisterIntegrationRoutes(internal, opportunityHandler)
 	presale.RegisterInternalRoutes(internal, presaleHandler)
 	credit.RegisterInternalRoutes(internal, creditHandler)
