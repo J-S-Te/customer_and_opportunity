@@ -28,18 +28,23 @@ import (
 )
 
 type Service struct {
-	db       *gorm.DB
-	repo     Repository
-	create   CreateRepository
-	merge    MergeRepository
-	profile  ProfileRepository
-	imports  ImportRepository
-	audit    audit.Writer
-	codec    *security.SensitiveCodec
-	scanner  ImportFileScanner
-	projects ProjectHistoryReader
-	owners   ownerdirectory.Catalog
-	now      func() time.Time
+	db            *gorm.DB
+	repo          Repository
+	create        CreateRepository
+	merge         MergeRepository
+	profile       ProfileRepository
+	imports       ImportRepository
+	audit         audit.Writer
+	codec         *security.SensitiveCodec
+	scanner       ImportFileScanner
+	projects      ProjectHistoryReader
+	owners        ownerdirectory.Catalog
+	importGateway ImportFileGateway
+	now           func() time.Time
+}
+
+type ImportFileGateway interface {
+	StoreImport(context.Context, string, string, string, []byte) error
 }
 
 func NewService(db *gorm.DB, repo Repository, auditWriter audit.Writer, codec *security.SensitiveCodec) *Service {
@@ -67,6 +72,11 @@ func (s *Service) UseImportScanner(scanner ImportFileScanner) *Service {
 	if scanner != nil {
 		s.scanner = scanner
 	}
+	return s
+}
+
+func (s *Service) UseImportFileGateway(gateway ImportFileGateway) *Service {
+	s.importGateway = gateway
 	return s
 }
 

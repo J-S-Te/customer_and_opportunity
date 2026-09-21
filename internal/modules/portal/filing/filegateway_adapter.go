@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"io"
-	"time"
 
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/filegateway"
 )
@@ -24,9 +23,9 @@ func (s *LocalFileGatewayStore) Available() bool {
 }
 
 // CreateUpload 创建短时内部上传授权。
-func (s *LocalFileGatewayStore) CreateUpload(ctx context.Context, key, media string, size uint64, digest, name string) (string, time.Time, error) {
+func (s *LocalFileGatewayStore) CreateUpload(ctx context.Context, key, media string, size uint64, digest, name string) (ObjectUploadGrant, error) {
 	grant, err := s.client.CreateUpload(ctx, key, media, size, digest, name)
-	return grant.URL, grant.ExpiresAt, err
+	return ObjectUploadGrant{URL: grant.URL, ExpiresAt: grant.ExpiresAt}, err
 }
 
 // PutVerified 通过本地文件网关受控写入材料内容；任何元数据或摘要不一致都映射为稳定的
@@ -40,7 +39,7 @@ func (s *LocalFileGatewayStore) PutVerified(ctx context.Context, key string, bod
 }
 
 // Finalize 将已校验的临时材料转为不可变对象。
-func (s *LocalFileGatewayStore) Finalize(ctx context.Context, key string) (MaterialObjectMetadata, error) {
+func (s *LocalFileGatewayStore) Finalize(ctx context.Context, key, _ string, _ uint64, _, _ string) (MaterialObjectMetadata, error) {
 	value, err := s.client.Finalize(ctx, key)
 	return MaterialObjectMetadata{ObjectVersion: value.ObjectVersion, SizeBytes: value.SizeBytes, MIMEType: value.MIMEType, SHA256: value.SHA256}, err
 }

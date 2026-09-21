@@ -130,7 +130,14 @@ func New(ctx context.Context, config Config) (*App, error) {
 	filingService := filing.NewService(filingRepository, filingProtector{codec: codec}, projectAccess{projects: projectService}, systemClock{}, requestIDGenerator{})
 	var filingMaterialStore filing.MaterialObjectStore = filing.UnavailableMaterialObjectStore{}
 	var filingMaterialScanner filing.MaterialScanner = filing.UnavailableMaterialScanner{}
-	if portalFileClient != nil {
+	portalGatewayClient, gatewayErr := newPortalFileGatewayClient(config)
+	if gatewayErr != nil {
+		return nil, fmt.Errorf("initialize Portal HTTP file gateway: %w", gatewayErr)
+	}
+	if portalGatewayClient != nil {
+		filingMaterialStore = filing.NewHTTPFileGatewayStore(portalGatewayClient)
+		filingMaterialScanner = filing.NewLocalMaterialScanner(filingMaterialStore)
+	} else if portalFileClient != nil {
 		filingMaterialStore = filing.NewLocalFileGatewayStore(portalFileClient)
 		filingMaterialScanner = filing.NewLocalMaterialScanner(filingMaterialStore)
 	}

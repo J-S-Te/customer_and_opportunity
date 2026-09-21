@@ -69,12 +69,21 @@ func (s *Service) PreviewImport(ctx context.Context, file []byte, reason string)
 	if s.imports == nil {
 		return nil, ErrImportJobConflict
 	}
+	jobNo := requestctx.NewID()
+	if !validImportJobNo(jobNo) {
+		return nil, errors.New("customer import job id generation failed")
+	}
 	reason = strings.TrimSpace(reason)
 	if reason == "" || utf8.RuneCountInString(reason) > 500 || unsafeText(reason) || len(file) == 0 || len(file) > importMaxFileBytes {
 		return nil, ErrImportInvalidFile
 	}
 	if s.scanner == nil {
 		return nil, ErrImportScannerUnavailable
+	}
+	if s.importGateway != nil {
+		if err = s.importGateway.StoreImport(ctx, jobNo, principal.UserID, "customers.xlsx", file); err != nil {
+			return nil, ErrImportGatewayUnavailable
+		}
 	}
 	if err = s.scanner.Scan(ctx, file); err != nil {
 		if errors.Is(err, ErrImportFileUnsafe) {
@@ -133,10 +142,6 @@ func (s *Service) PreviewImport(ctx context.Context, file []byte, reason string)
 	}
 
 	now := s.now()
-	jobNo := requestctx.NewID()
-	if !validImportJobNo(jobNo) {
-		return nil, errors.New("customer import job id generation failed")
-	}
 	job := &ImportJob{TenantID: principal.TenantID, JobNo: jobNo, ActorID: principal.UserID, Status: "PREVIEWED", Reason: reason, TotalRows: uint32(len(parsed)), ExpiresAt: now.Add(importPreviewTTL), CreatedAt: now, UpdatedAt: now, Version: 1}
 	rows := make([]ImportRow, 0, len(parsed))
 	previewRows := make([]ImportPreviewRowResponse, 0, len(parsed))

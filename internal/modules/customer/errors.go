@@ -34,6 +34,7 @@ var (
 	ErrInvalidSystems               = apperror.New(http.StatusUnprocessableEntity, "CRM_CUSTOMER_SYSTEMS_INVALID", "customer information systems are invalid")
 	ErrProfileUnavailable           = apperror.New(http.StatusServiceUnavailable, "CRM_CUSTOMER_PROFILE_NOT_CONFIGURED", "customer profile repository is not configured")
 	ErrImportScannerUnavailable     = apperror.New(http.StatusServiceUnavailable, "CRM_CUSTOMER_IMPORT_SCANNER_UNAVAILABLE", "customer import file scanner is not configured")
+	ErrImportGatewayUnavailable     = apperror.New(http.StatusServiceUnavailable, "CRM_CUSTOMER_IMPORT_GATEWAY_UNAVAILABLE", "customer import file gateway is temporarily unavailable")
 	ErrImportScanFailed             = apperror.New(http.StatusUnprocessableEntity, "CRM_CUSTOMER_IMPORT_FILE_REJECTED", "customer import file was rejected by the security scanner")
 	ErrImportInvalidFile            = apperror.New(http.StatusUnprocessableEntity, "CRM_CUSTOMER_IMPORT_FILE_INVALID", "customer import workbook is invalid")
 	ErrImportJobNotFound            = apperror.New(http.StatusNotFound, "CRM_CUSTOMER_IMPORT_JOB_NOT_FOUND", "customer import job not found")
