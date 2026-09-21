@@ -68,6 +68,10 @@ type Config struct {
 	// FileGatewayLocalEnabled 启用本地文件网关时，报告文件仅从该根目录读取。
 	FileGatewayLocalEnabled bool
 	FileGatewayLocalRoot    string
+	FileGatewayBaseURL      string
+	FileGatewayClientID     string
+	FileGatewayClientSecret string
+	FileGatewayScope        string
 }
 
 func LoadConfig() (Config, error) {
@@ -154,6 +158,10 @@ func LoadConfig() (Config, error) {
 		UsePlatformBinding:        usePlatformBinding,
 		FileGatewayLocalEnabled:   fileGatewayLocalEnabled,
 		FileGatewayLocalRoot:      valueOrDefault("PORTAL_FILE_GATEWAY_LOCAL_ROOT", "/app/data/file-gateway"),
+		FileGatewayBaseURL:        strings.TrimSpace(os.Getenv("FILE_GATEWAY_BASE_URL")),
+		FileGatewayClientID:       strings.TrimSpace(os.Getenv("FILE_GATEWAY_CLIENT_ID")),
+		FileGatewayClientSecret:   os.Getenv("FILE_GATEWAY_CLIENT_SECRET"),
+		FileGatewayScope:          valueOrDefault("FILE_GATEWAY_SCOPE", "platform:file:upload platform:file:download"),
 		CatalogApplicationID:      os.Getenv("PORTAL_AUTHORIZATION_CATALOG_APPLICATION_ID"), CatalogClientID: os.Getenv("PORTAL_AUTHORIZATION_CATALOG_CLIENT_ID"),
 		CatalogClientSecret: os.Getenv("PORTAL_AUTHORIZATION_CATALOG_CLIENT_SECRET"),
 	}
@@ -209,6 +217,19 @@ func (c Config) validate() error {
 	}
 	if c.PlatformApplicationCode != "customer_portal" {
 		return fmt.Errorf("PLATFORM_APPLICATION_CODE must be customer_portal")
+	}
+	if c.FileGatewayBaseURL != "" {
+		parsed, parseErr := url.ParseRequestURI(c.FileGatewayBaseURL)
+		if parseErr != nil || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+			return fmt.Errorf("FILE_GATEWAY_BASE_URL must be an HTTP(S) origin")
+		}
+		if c.FileGatewayClientID == "" || c.FileGatewayClientSecret == "" {
+			return fmt.Errorf("FILE_GATEWAY_CLIENT_ID and FILE_GATEWAY_CLIENT_SECRET are required when FILE_GATEWAY_BASE_URL is configured")
+		}
+		scopes := strings.Fields(c.FileGatewayScope)
+		if !contains(scopes, "platform:file:upload") || !contains(scopes, "platform:file:download") {
+			return fmt.Errorf("FILE_GATEWAY_SCOPE must include platform:file:upload and platform:file:download")
+		}
 	}
 	parsedPlatform, err := url.ParseRequestURI(c.PlatformBaseURL)
 	if err != nil || (parsedPlatform.Scheme != "http" && parsedPlatform.Scheme != "https") || parsedPlatform.Host == "" || parsedPlatform.User != nil || (parsedPlatform.Path != "" && parsedPlatform.Path != "/") || parsedPlatform.RawQuery != "" || parsedPlatform.Fragment != "" {

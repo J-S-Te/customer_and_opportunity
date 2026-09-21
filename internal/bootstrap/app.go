@@ -189,6 +189,13 @@ func New(config Config) (*App, error) {
 		}
 		customerService.UseProjectHistoryReader(projectHistoryReader)
 	}
+	if config.AttachmentFileGatewayMode != "legacy" {
+		gatewayHTTPClient, gatewayErr := newAttachmentFileGatewayClient(config)
+		if gatewayErr != nil {
+			return nil, gatewayErr
+		}
+		customerService.UseImportFileGateway(customer.NewImportGatewayAdapter(gatewayHTTPClient))
+	}
 	customer.RegisterRoutes(api, customer.NewHandler(customerService))
 	creditHandler := credit.NewHandler(credit.NewService(db).UseOwnerDirectory(ownerCatalog))
 	credit.RegisterRoutes(api, creditHandler)

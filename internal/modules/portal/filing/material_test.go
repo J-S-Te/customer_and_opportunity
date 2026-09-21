@@ -27,9 +27,9 @@ type materialStoreStub struct {
 }
 
 func (*materialStoreStub) Available() bool { return true }
-func (s *materialStoreStub) CreateUpload(_ context.Context, key, _ string, _ uint64, _ string, _ string) (string, time.Time, error) {
+func (s *materialStoreStub) CreateUpload(_ context.Context, key, _ string, _ uint64, _ string, _ string) (ObjectUploadGrant, error) {
 	s.keys = append(s.keys, key)
-	return "https://objects.example.test/upload", time.Date(2026, 8, 1, 2, 2, 3, 0, time.UTC), nil
+	return ObjectUploadGrant{URL: "https://objects.example.test/upload", ExpiresAt: time.Date(2026, 8, 1, 2, 2, 3, 0, time.UTC)}, nil
 }
 func (s *materialStoreStub) PutVerified(_ context.Context, key string, body io.Reader, size uint64, digest, media string) error {
 	s.putCalls++
@@ -49,7 +49,7 @@ func (s *materialStoreStub) PutVerified(_ context.Context, key string, body io.R
 	s.metadata[key] = MaterialObjectMetadata{ObjectVersion: hex.EncodeToString(actual[:]), SizeBytes: size, MIMEType: media, SHA256: hex.EncodeToString(actual[:])}
 	return nil
 }
-func (s *materialStoreStub) Finalize(_ context.Context, key string) (MaterialObjectMetadata, error) {
+func (s *materialStoreStub) Finalize(_ context.Context, key, _ string, _ uint64, _, _ string) (MaterialObjectMetadata, error) {
 	return s.metadata[key], nil
 }
 func (s *materialStoreStub) OpenVerified(_ context.Context, key, version, digest string, size uint64) (io.ReadCloser, error) {

@@ -32,7 +32,7 @@ func TestLocalFileGatewayStoreRoundTrip(t *testing.T) {
 	if err = store.PutVerified(context.Background(), "portal/filings/t/f/m", bytes.NewReader(body), uint64(len(body)), hex.EncodeToString(other[:]), "application/pdf"); err != ErrMaterialContentInvalid {
 		t.Fatalf("different digest replay error=%v", err)
 	}
-	meta, err := store.Finalize(context.Background(), "portal/filings/t/f/m")
+	meta, err := store.Finalize(context.Background(), "portal/filings/t/f/m", "application/pdf", uint64(len(body)), digest, "evidence.pdf")
 	if err != nil || meta.ObjectVersion != digest {
 		t.Fatalf("meta=%#v err=%v", meta, err)
 	}
@@ -60,7 +60,7 @@ func TestLocalMaterialScannerProducesExplicitImmediateStatus(t *testing.T) {
 	if err = store.PutVerified(context.Background(), key, bytes.NewReader(content), uint64(len(content)), digest, "application/pdf"); err != nil {
 		t.Fatal(err)
 	}
-	metadata, err := store.Finalize(context.Background(), key)
+	metadata, err := store.Finalize(context.Background(), key, "application/pdf", uint64(len(content)), digest, "evidence.pdf")
 	if err != nil {
 		t.Fatal(err)
 	}

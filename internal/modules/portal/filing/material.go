@@ -46,10 +46,16 @@ type MaterialUploadCommand struct {
 }
 
 type MaterialUploadGrant struct {
-	Material   MaterialView `json:"material"`
-	UploadURL  string       `json:"upload_url"`
-	UploadMode string       `json:"upload_mode"`
-	ExpiresAt  time.Time    `json:"expires_at"`
+	Material     MaterialView `json:"material"`
+	UploadURL    string       `json:"upload_url"`
+	UploadTicket string       `json:"upload_ticket,omitempty"`
+	UploadMode   string       `json:"upload_mode"`
+	ExpiresAt    time.Time    `json:"expires_at"`
+}
+
+type ObjectUploadGrant struct {
+	URL, Ticket string
+	ExpiresAt   time.Time
 }
 
 type MaterialObjectMetadata struct {
@@ -60,8 +66,8 @@ type MaterialObjectMetadata struct {
 // MaterialObjectStore 与供应方无关，每个操作都必须绑定不可变对象版本；API 不接受任意回调 URL。
 type MaterialObjectStore interface {
 	Available() bool
-	CreateUpload(context.Context, string, string, uint64, string, string) (string, time.Time, error)
-	Finalize(context.Context, string) (MaterialObjectMetadata, error)
+	CreateUpload(context.Context, string, string, uint64, string, string) (ObjectUploadGrant, error)
+	Finalize(context.Context, string, string, uint64, string, string) (MaterialObjectMetadata, error)
 	OpenVerified(context.Context, string, string, string, uint64) (io.ReadCloser, error)
 }
 
@@ -88,10 +94,10 @@ type MaterialObjectProtector interface {
 type UnavailableMaterialObjectStore struct{}
 
 func (UnavailableMaterialObjectStore) Available() bool { return false }
-func (UnavailableMaterialObjectStore) CreateUpload(context.Context, string, string, uint64, string, string) (string, time.Time, error) {
-	return "", time.Time{}, ErrMaterialUnavailable
+func (UnavailableMaterialObjectStore) CreateUpload(context.Context, string, string, uint64, string, string) (ObjectUploadGrant, error) {
+	return ObjectUploadGrant{}, ErrMaterialUnavailable
 }
-func (UnavailableMaterialObjectStore) Finalize(context.Context, string) (MaterialObjectMetadata, error) {
+func (UnavailableMaterialObjectStore) Finalize(context.Context, string, string, uint64, string, string) (MaterialObjectMetadata, error) {
 	return MaterialObjectMetadata{}, ErrMaterialUnavailable
 }
 func (UnavailableMaterialObjectStore) OpenVerified(context.Context, string, string, string, uint64) (io.ReadCloser, error) {
@@ -191,16 +197,16 @@ func (s *MaterialService) CreateUpload(ctx context.Context, actor Actor, filingP
 		return nil, ErrMaterialUnavailable
 	}
 	now := s.clock.Now().UTC()
-	uploadURL, expiresAt, err := s.store.CreateUpload(ctx, string(plainObjectKey), mediaType, command.SizeBytes, digest, name)
-	if err != nil || strings.TrimSpace(uploadURL) == "" || !expiresAt.After(now) {
+	objectGrant, err := s.store.CreateUpload(ctx, string(plainObjectKey), mediaType, command.SizeBytes, digest, name)
+	if err != nil || strings.TrimSpace(objectGrant.URL) == "" || !objectGrant.ExpiresAt.After(now) {
 		return nil, ErrMaterialUnavailable
 	}
 	uploadMode := "DIRECT"
 	if _, ok := s.store.(InternalMaterialContentStore); ok {
 		uploadMode = "INTERNAL"
-		uploadURL = "/filings/" + filing.PublicID + "/materials/" + material.PublicID + "/content"
+		objectGrant.URL = "/filings/" + filing.PublicID + "/materials/" + material.PublicID + "/content"
 	}
-	return &MaterialUploadGrant{Material: materialView(material), UploadURL: uploadURL, UploadMode: uploadMode, ExpiresAt: expiresAt}, nil
+	return &MaterialUploadGrant{Material: materialView(material), UploadURL: objectGrant.URL, UploadTicket: objectGrant.Ticket, UploadMode: uploadMode, ExpiresAt: objectGrant.ExpiresAt}, nil
 }
 
 // UploadContent 只允许备案所有者把与预登记元数据完全一致的内容写入内部文件网关。
@@ -348,7 +354,7 @@ func (s *MaterialService) CompleteUpload(ctx context.Context, actor Actor, filin
 		s.releaseFinalize(ctx, material, actor.AccountID)
 		return nil, ErrMaterialUnavailable
 	}
-	metadata, err := s.store.Finalize(ctx, string(plainObjectKey))
+	metadata, err := s.store.Finalize(ctx, string(plainObjectKey), material.MIMEType, material.SizeBytes, material.SHA256, material.FileName)
 	if err != nil || strings.TrimSpace(metadata.ObjectVersion) == "" || metadata.SizeBytes != material.SizeBytes || canonicalMaterialMIME(metadata.MIMEType) != material.MIMEType || !strings.EqualFold(metadata.SHA256, material.SHA256) {
 		s.releaseFinalize(ctx, material, actor.AccountID)
 		return nil, ErrMaterialUnavailable

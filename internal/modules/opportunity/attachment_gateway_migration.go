@@ -61,7 +61,7 @@ func (migration *HTTPAttachmentGatewayMigration) Migrate(ctx context.Context, in
 		return errors.New("attachment file gateway migration input is invalid")
 	}
 	uploadKey := attachmentGatewayRequestKey("upload", input)
-	fileID, err := migration.client.Upload(ctx, uploadKey, migration.applicationID, "CONFIDENTIAL", input.FileName, input.MIMEType, bytes.NewReader(input.Content))
+	fileID, err := migration.client.UploadForPurpose(ctx, uploadKey, migration.applicationID, "CONFIDENTIAL", "crm.opportunity.attachment", input.FileName, input.MIMEType, bytes.NewReader(input.Content))
 	if err != nil {
 		return fmt.Errorf("upload attachment to file gateway: %w", err)
 	}
