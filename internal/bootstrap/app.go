@@ -293,7 +293,8 @@ func New(config Config) (*App, error) {
 			return nil, err
 		}
 	}
-	opportunityService := opportunity.NewService(db, opportunityRepo, auditWriter, contractVerifier)
+	opportunityCatalogService := opportunity.NewCatalogService(db, auditWriter)
+	opportunityService := opportunity.NewService(db, opportunityRepo, auditWriter, contractVerifier).UseCatalog(opportunityCatalogService)
 	if config.ContractSignedCountEnabled {
 		counter, counterErr := opportunity.NewHTTPSignedContractCounter(context.Background(), opportunity.SignedContractCounterOptions{
 			Endpoint: config.ContractSignedCountURL, TokenURL: config.ContractSignedCountTokenURL,

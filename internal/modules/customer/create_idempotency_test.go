@@ -95,10 +95,14 @@ func (r *createIdempotencyRepoStub) Create(_ context.Context, value *Customer) e
 	return nil
 }
 
-type createAuditStub struct{ writes int }
+type createAuditStub struct {
+	writes int
+	last   audit.Event
+}
 
-func (w *createAuditStub) Write(context.Context, audit.Event) error {
+func (w *createAuditStub) Write(_ context.Context, event audit.Event) error {
 	w.writes++
+	w.last = event
 	return nil
 }
 
@@ -108,12 +112,26 @@ func TestCustomerCreateHandlerReadsIdempotencyKey(t *testing.T) {
 	service := newCreateTestService(t, repo, &createAuditStub{})
 	recorder := httptest.NewRecorder()
 	ginContext, _ := gin.CreateTestContext(recorder)
-	ginContext.Request = httptest.NewRequest(http.MethodPost, "/customers", strings.NewReader(`{"name":"示例客户","unified_credit_code":"91310000TEST","customer_type":"企业","industry":"软件","region":"华东","contacts":[{"name":"张三","phone":"13800138000","email":"zhang@example.com","is_registration":true}],"reason":"新建"}`))
+	ginContext.Request = httptest.NewRequest(http.MethodPost, "/customers", strings.NewReader(`{"name":"示例客户","unified_credit_code":"91310000TEST","customer_type":"企业","industry":"软件","region":"华东","contacts":[{"name":"张三","phone":"13800138000","email":"zhang@example.com","is_registration":true}]}`))
 	ginContext.Request.Header.Set("Idempotency-Key", "handler-key")
 	ginContext.Request = ginContext.Request.WithContext(auth.WithPrincipal(ginContext.Request.Context(), createTestPrincipal("tenant-a", "user-a")))
 	NewHandler(service).Create(ginContext)
 	if recorder.Code != http.StatusCreated || repo.prior == nil || repo.prior.Key != "handler-key" || repo.resource.OwnerUserID != "user-a" || repo.resource.OwnerOrgID != "org-a" {
 		t.Fatalf("status=%d body=%s replay=%#v", recorder.Code, recorder.Body.String(), repo.prior)
+	}
+}
+
+func TestCustomerCreateUsesServerOwnedAuditReasonWhenClientOmitsIt(t *testing.T) {
+	repo := &createIdempotencyRepoStub{}
+	writer := &createAuditStub{}
+	service := newCreateTestService(t, repo, writer)
+	input := createTestRequest("server-audit-reason")
+	input.Reason = ""
+	if _, err := service.Create(auth.WithPrincipal(context.Background(), createTestPrincipal("tenant-a", "user-a")), input); err != nil {
+		t.Fatalf("create without user reason: %v", err)
+	}
+	if writer.writes != 1 || writer.last.Reason != "创建客户档案" {
+		t.Fatalf("audit writes=%d reason=%q", writer.writes, writer.last.Reason)
 	}
 }
 

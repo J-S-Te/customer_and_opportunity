@@ -42,8 +42,11 @@ type CreateRequest struct {
 	Contacts                []ContactInput `json:"contacts" binding:"required,min=1,dive"`
 	DuplicateOverride       bool           `json:"duplicate_override"`
 	DuplicateOverrideReason string         `json:"duplicate_override_reason" binding:"omitempty,max=500"`
-	Reason                  string         `json:"reason" binding:"required,max=500"`
-	IdempotencyKey          string         `json:"-"`
+	// Reason is accepted for rolling compatibility with older clients. New
+	// customer creation uses a server-owned audit reason and does not ask users
+	// to provide one.
+	Reason         string `json:"reason,omitempty" binding:"omitempty,max=500"`
+	IdempotencyKey string `json:"-"`
 }
 
 // UpdateRequest 全量替换可编辑主数据和联系人集合；Version 显式处理并发编辑，Reason 写入审计链路。

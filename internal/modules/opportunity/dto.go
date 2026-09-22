@@ -3,16 +3,18 @@ package opportunity
 import "time"
 
 type CreateRequest struct {
-	Name               string `json:"name" binding:"required,max=200"`
-	CustomerID         uint64 `json:"customer_id" binding:"required"`
-	Type               string `json:"type" binding:"required,max=2000"`
-	Source             string `json:"source" binding:"required,max=2000"`
-	ExpectedAmount     string `json:"expected_amount" binding:"required"`
-	ExpectedSignDate   string `json:"expected_sign_date" binding:"required"`
-	RequirementSummary string `json:"requirement_summary" binding:"required"`
-	SystemCount        uint32 `json:"system_count"`
-	PainPoints         string `json:"pain_points" binding:"omitempty,max=10000"`
-	CompetitorInfo     string `json:"competitor_info" binding:"omitempty,max=10000"`
+	Name               string   `json:"name" binding:"required,max=200"`
+	CustomerID         uint64   `json:"customer_id" binding:"required"`
+	Type               string   `json:"type,omitempty" binding:"omitempty,max=2000"`
+	Source             string   `json:"source,omitempty" binding:"omitempty,max=2000"`
+	TypeIDs            []uint64 `json:"type_ids,omitempty" binding:"omitempty,max=50,dive,gt=0"`
+	SourceIDs          []uint64 `json:"source_ids,omitempty" binding:"omitempty,max=50,dive,gt=0"`
+	ExpectedAmount     string   `json:"expected_amount" binding:"required"`
+	ExpectedSignDate   string   `json:"expected_sign_date" binding:"required"`
+	RequirementSummary string   `json:"requirement_summary" binding:"required"`
+	SystemCount        uint32   `json:"system_count"`
+	PainPoints         string   `json:"pain_points" binding:"omitempty,max=10000"`
+	CompetitorInfo     string   `json:"competitor_info" binding:"omitempty,max=10000"`
 	// OwnerUserID 与 OwnerOrgID 只用于兼容旧客户端；创建服务始终绑定认证主体及其主组织。
 	OwnerUserID    string `json:"owner_user_id,omitempty" binding:"omitempty,max=64"`
 	OwnerOrgID     string `json:"owner_org_id" binding:"omitempty,max=64"`
@@ -22,17 +24,19 @@ type CreateRequest struct {
 // UpdateRequest 只承载普通主数据字段；客户归属、负责人、阶段和生命周期变化必须走专用操作，
 // 以应用更严格的权限、状态机与并发校验。
 type UpdateRequest struct {
-	Name               string `json:"name" binding:"required,max=200"`
-	Type               string `json:"type" binding:"required,max=2000"`
-	Source             string `json:"source" binding:"required,max=2000"`
-	ExpectedAmount     string `json:"expected_amount" binding:"required"`
-	ExpectedSignDate   string `json:"expected_sign_date" binding:"required"`
-	RequirementSummary string `json:"requirement_summary" binding:"required,max=10000"`
-	SystemCount        uint32 `json:"system_count"`
-	PainPoints         string `json:"pain_points" binding:"omitempty,max=10000"`
-	CompetitorInfo     string `json:"competitor_info" binding:"omitempty,max=10000"`
-	Version            uint64 `json:"version" binding:"required"`
-	Reason             string `json:"reason" binding:"required,max=500"`
+	Name               string   `json:"name" binding:"required,max=200"`
+	Type               string   `json:"type,omitempty" binding:"omitempty,max=2000"`
+	Source             string   `json:"source,omitempty" binding:"omitempty,max=2000"`
+	TypeIDs            []uint64 `json:"type_ids,omitempty" binding:"omitempty,max=50,dive,gt=0"`
+	SourceIDs          []uint64 `json:"source_ids,omitempty" binding:"omitempty,max=50,dive,gt=0"`
+	ExpectedAmount     string   `json:"expected_amount" binding:"required"`
+	ExpectedSignDate   string   `json:"expected_sign_date" binding:"required"`
+	RequirementSummary string   `json:"requirement_summary" binding:"required,max=10000"`
+	SystemCount        uint32   `json:"system_count"`
+	PainPoints         string   `json:"pain_points" binding:"omitempty,max=10000"`
+	CompetitorInfo     string   `json:"competitor_info" binding:"omitempty,max=10000"`
+	Version            uint64   `json:"version" binding:"required"`
+	Reason             string   `json:"reason" binding:"required,max=500"`
 }
 
 type LifecycleRequest struct {
@@ -229,39 +233,41 @@ type BoardColumn struct {
 }
 
 type Response struct {
-	ID                  uint64           `json:"id"`
-	OpportunityNo       string           `json:"opportunity_no"`
-	Name                string           `json:"name"`
-	CustomerID          uint64           `json:"customer_id"`
-	CustomerName        string           `json:"customer_name,omitempty"`
-	Type                string           `json:"type"`
-	Source              string           `json:"source"`
-	ExpectedAmount      string           `json:"expected_amount"`
-	ExpectedSignDate    string           `json:"expected_sign_date"`
-	RequirementSummary  string           `json:"requirement_summary"`
-	SystemCount         uint32           `json:"system_count"`
-	PainPoints          string           `json:"pain_points"`
-	CompetitorInfo      string           `json:"competitor_info"`
-	OwnerUserID         string           `json:"owner_user_id"`
-	OwnerOrgID          string           `json:"owner_org_id"`
-	CurrentStage        string           `json:"current_stage"`
-	Status              string           `json:"opp_status"`
-	ContractRef         *string          `json:"contract_ref,omitempty"`
-	ContractID          *string          `json:"contract_id,omitempty"`
-	ContractIntakeID    *string          `json:"contract_intake_id,omitempty"`
-	ContractLinkStatus  string           `json:"contract_link_status"`
-	ContractLinkedAt    *time.Time       `json:"contract_linked_at,omitempty"`
-	ContractSyncVersion uint64           `json:"contract_sync_version"`
-	LostReason          *string          `json:"lost_reason,omitempty"`
-	TerminalPendingType string           `json:"terminal_pending_type"`
-	StageChangedAt      time.Time        `json:"stage_changed_at"`
-	EndDate             *string          `json:"end_date,omitempty"`
-	StatusBeforeVoid    *string          `json:"status_before_void,omitempty"`
-	Version             uint64           `json:"version"`
-	CreatedAt           time.Time        `json:"created_at"`
-	UpdatedAt           time.Time        `json:"updated_at"`
-	Members             []MemberResponse `json:"members,omitempty"`
-	SignedContractCount *uint64          `json:"signed_contract_count"`
+	ID                  uint64                    `json:"id"`
+	OpportunityNo       string                    `json:"opportunity_no"`
+	Name                string                    `json:"name"`
+	CustomerID          uint64                    `json:"customer_id"`
+	CustomerName        string                    `json:"customer_name,omitempty"`
+	Type                string                    `json:"type"`
+	Source              string                    `json:"source"`
+	Types               []OpportunityCatalogValue `json:"types"`
+	Sources             []OpportunityCatalogValue `json:"sources"`
+	ExpectedAmount      string                    `json:"expected_amount"`
+	ExpectedSignDate    string                    `json:"expected_sign_date"`
+	RequirementSummary  string                    `json:"requirement_summary"`
+	SystemCount         uint32                    `json:"system_count"`
+	PainPoints          string                    `json:"pain_points"`
+	CompetitorInfo      string                    `json:"competitor_info"`
+	OwnerUserID         string                    `json:"owner_user_id"`
+	OwnerOrgID          string                    `json:"owner_org_id"`
+	CurrentStage        string                    `json:"current_stage"`
+	Status              string                    `json:"opp_status"`
+	ContractRef         *string                   `json:"contract_ref,omitempty"`
+	ContractID          *string                   `json:"contract_id,omitempty"`
+	ContractIntakeID    *string                   `json:"contract_intake_id,omitempty"`
+	ContractLinkStatus  string                    `json:"contract_link_status"`
+	ContractLinkedAt    *time.Time                `json:"contract_linked_at,omitempty"`
+	ContractSyncVersion uint64                    `json:"contract_sync_version"`
+	LostReason          *string                   `json:"lost_reason,omitempty"`
+	TerminalPendingType string                    `json:"terminal_pending_type"`
+	StageChangedAt      time.Time                 `json:"stage_changed_at"`
+	EndDate             *string                   `json:"end_date,omitempty"`
+	StatusBeforeVoid    *string                   `json:"status_before_void,omitempty"`
+	Version             uint64                    `json:"version"`
+	CreatedAt           time.Time                 `json:"created_at"`
+	UpdatedAt           time.Time                 `json:"updated_at"`
+	Members             []MemberResponse          `json:"members,omitempty"`
+	SignedContractCount *uint64                   `json:"signed_contract_count"`
 }
 
 type ListQuery struct {

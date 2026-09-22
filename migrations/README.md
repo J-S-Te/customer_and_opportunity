@@ -77,6 +77,8 @@
 63. `000106_complete_customer_credit_workflow.up.sql`
 64. `000107_credit_approval_history_and_queries.up.sql`
 65. `000108_unbounded_credit_application_reason.up.sql`
+66. `000110_opportunity_catalog.up.sql`
+67. `000111_opportunity_catalog_initializations.up.sql`
 
 ## customer_portal schema
 
@@ -127,6 +129,8 @@
 - CRM 与 Portal 可以使用同一个 MySQL 实例，亦可按部署需要使用同一个 database/schema；两套迁移历史仍须独立记录并串行执行，运行账号按各自表收紧权限。两套审计 outbox 使用不同表名和领取租约，禁止一个进程领取另一应用的审计任务，也禁止跨模块业务事务耦合。
 
 `000047` 新建报价/投标可信回调的只读快照表，不从缺少完整来源类型和金额的旧阶段日志伪造历史；`OPPORTUNITY_SIGNED` 转合同接受态复用既有 outbox 和操作人绑定幂等表。
+
+`000110` 将商机类型与来源迁移为租户级目录及有序关联，按“、”拆分历史多选文本并保留自定义值。`000111` 以前向迁移增加租户初始化标记并为已有租户回填标记，使默认目录只初始化一次；该能力不能通过修改已经执行的 `000110` 追加。旧 `type` / `source` 字段继续作为滚动升级投影；目录关联外键使用 `RESTRICT`，已引用配置不能物理删除。默认项删除后不会被首次访问逻辑自动补回。
 
 `000049` 新建商机附件对象引用与安全扫描状态机；只保存不可变对象版本、摘要和信任状态，不保存文件二进制。正式对象存储/扫描未配置时业务层在写入会话前失败关闭。
 `000053` 新建商机团队独立任期账本。旧成员表只能证明迁移时观察到的当前状态，因此 `LEGACY_SNAPSHOT` 只保存 `snapshot_at` 和 `active_at_snapshot`；`started_at`/`ended_at` 及其操作人必须保持未知。迁移绝不把可反复激活的成员行 `created_at`/`updated_at` 当成连续任期边界，也不从通用审计 JSON 猜测历史。上线后的加入、移出、重新加入和角色变化才以 `RECORDED` 写入完整时间边界，并与当前团队替换在同一事务记录。

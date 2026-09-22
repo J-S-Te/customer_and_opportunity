@@ -117,6 +117,9 @@ func (s *Service) Create(ctx context.Context, request CreateRequest) (*Response,
 		return nil, ErrCreateIdempotencyUnavailable
 	}
 	request = inheritCreateOwner(normalizeCreateRequest(request), principal)
+	if request.Reason == "" {
+		request.Reason = "创建客户档案"
+	}
 	if err := validateCustomerMasterData(request.Name, request.CustomerType, request.Industry, request.Region, request.Reason); err != nil {
 		return nil, err
 	}
