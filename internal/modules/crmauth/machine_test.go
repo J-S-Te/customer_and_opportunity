@@ -20,6 +20,11 @@ func TestMachineClaimsFollowPlatformApplicationTokenContract(t *testing.T) {
 	if err := validateMachineClaims(portal, "tenant-1"); err != nil {
 		t.Fatalf("documented Portal-to-CRM scopes rejected: %v", err)
 	}
+	contract := valid
+	contract.Scopes = []string{"customer.contract_reference.read"}
+	if err := validateMachineClaims(contract, "tenant-1"); err != nil {
+		t.Fatalf("contract reference scope rejected: %v", err)
+	}
 	scanner := valid
 	scanner.Scopes = []string{"opportunity.attachment.scan.write"}
 	if err := validateMachineClaims(scanner, "tenant-1"); err != nil {

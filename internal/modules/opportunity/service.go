@@ -40,6 +40,11 @@ func (s *Service) Board(ctx context.Context, query ListQuery) ([]BoardColumn, er
 	if err != nil {
 		return nil, err
 	}
+	if s.catalog != nil {
+		if err = s.catalog.EnrichResponses(ctx, principal.TenantID, items); err != nil {
+			return nil, err
+		}
+	}
 	s.enrichSignedContractCounts(ctx, items)
 	return groupBoard(items), nil
 }
@@ -173,6 +178,13 @@ func (s *Service) CompleteTerminalTodo(ctx context.Context, id uint64, input Ter
 		return nil, err
 	}
 	result := toResponse(model)
+	if s.catalog != nil {
+		values := []Response{result}
+		if err = s.catalog.EnrichResponses(ctx, principal.TenantID, values); err != nil {
+			return nil, err
+		}
+		result = values[0]
+	}
 	return &result, nil
 }
 
@@ -186,11 +198,14 @@ type Service struct {
 	launches        *ExternalLaunchSigner
 	owners          ownerdirectory.Catalog
 	now             func() time.Time
+	catalog         *CatalogService
 	// 仅在服务单元测试中注入；生产构造始终使用共享 GORM 事务边界。
 	createTransaction func(context.Context, func(context.Context) error) error
 	// 转合同命令保持与生产相同的事务语义，同时让聚焦测试无需连接真实 MySQL。
 	contractTransferTransaction func(context.Context, func(context.Context) error) error
 }
+
+func (s *Service) UseCatalog(catalog *CatalogService) *Service { s.catalog = catalog; return s }
 
 func (s *Service) UseQBStatusReader(reader QBStatusReader) *Service {
 	s.qbStatuses = reader
@@ -239,7 +254,7 @@ func (s *Service) Create(ctx context.Context, input CreateRequest) (*Response, e
 	}
 	input = inheritCreateOwner(normalizeCreateRequest(input), principal)
 	input.IdempotencyKey = key
-	if err := validateOpportunityMasterData(input.Name, input.Type, input.Source, input.RequirementSummary); err != nil {
+	if err := validateOpportunityMasterDataSelection(input.Name, input.Type, input.Source, input.RequirementSummary, input.TypeIDs, input.SourceIDs); err != nil {
 		return nil, err
 	}
 	if s.owners != nil {
@@ -288,6 +303,17 @@ func (s *Service) Create(ctx context.Context, input CreateRequest) (*Response, e
 			}
 			return createReplayResult(txCtx, replayed)
 		}
+		var typeItems, sourceItems []CatalogItem
+		if s.catalog != nil {
+			typeItems, model.Type, err = s.catalog.ResolveSelections(txCtx, principal.TenantID, CatalogKindType, input.TypeIDs, input.Type, 0)
+			if err != nil {
+				return err
+			}
+			sourceItems, model.Source, err = s.catalog.ResolveSelections(txCtx, principal.TenantID, CatalogKindSource, input.SourceIDs, input.Source, 0)
+			if err != nil {
+				return err
+			}
+		}
 		model.OpportunityNo, err = s.repo.NextNumber(txCtx, principal.TenantID, s.now().Format("20060102"))
 		if err != nil {
 			return err
@@ -295,7 +321,22 @@ func (s *Service) Create(ctx context.Context, input CreateRequest) (*Response, e
 		if err = s.repo.Create(txCtx, model); err != nil {
 			return err
 		}
+		if s.catalog != nil {
+			if err = s.catalog.ReplaceLinks(txCtx, principal.TenantID, model.ID, CatalogKindType, typeItems); err != nil {
+				return err
+			}
+			if err = s.catalog.ReplaceLinks(txCtx, principal.TenantID, model.ID, CatalogKindSource, sourceItems); err != nil {
+				return err
+			}
+		}
 		createdResponse := toResponse(model)
+		if s.catalog != nil {
+			values := []Response{createdResponse}
+			if err = s.catalog.EnrichResponses(txCtx, principal.TenantID, values); err != nil {
+				return err
+			}
+			createdResponse = values[0]
+		}
 		responseJSON, encodeErr := json.Marshal(createdResponse)
 		if encodeErr != nil {
 			return encodeErr
@@ -321,6 +362,13 @@ func (s *Service) Create(ctx context.Context, input CreateRequest) (*Response, e
 		return nil, err
 	}
 	result := toResponse(model)
+	if s.catalog != nil {
+		values := []Response{result}
+		if err = s.catalog.EnrichResponses(ctx, principal.TenantID, values); err != nil {
+			return nil, err
+		}
+		result = values[0]
+	}
 	return &result, nil
 }
 
@@ -358,12 +406,14 @@ func createRequestHash(input CreateRequest) (string, error) {
 		RequirementSummary, PainPoints, CompetitorInfo       string
 		CustomerID, SystemCount                              uint64
 		OwnerUserID, OwnerOrgID                              string
+		TypeIDs, SourceIDs                                   []uint64
 	}{
 		Name: input.Name, Type: input.Type, Source: input.Source,
 		ExpectedAmount: input.ExpectedAmount, ExpectedSignDate: input.ExpectedSignDate,
 		RequirementSummary: input.RequirementSummary, PainPoints: input.PainPoints,
 		CompetitorInfo: input.CompetitorInfo, CustomerID: input.CustomerID,
 		SystemCount: uint64(input.SystemCount), OwnerUserID: input.OwnerUserID, OwnerOrgID: input.OwnerOrgID,
+		TypeIDs: uniqueCatalogIDs(input.TypeIDs), SourceIDs: uniqueCatalogIDs(input.SourceIDs),
 	}
 	encoded, err := json.Marshal(canonical)
 	if err != nil {
@@ -468,7 +518,7 @@ func (s *Service) Update(ctx context.Context, id uint64, input UpdateRequest) (*
 	if err != nil {
 		return nil, err
 	}
-	if err = validateOpportunityMasterData(input.Name, input.Type, input.Source, input.RequirementSummary); err != nil {
+	if err = validateOpportunityMasterDataSelection(input.Name, input.Type, input.Source, input.RequirementSummary, input.TypeIDs, input.SourceIDs); err != nil {
 		return nil, err
 	}
 	model, err := s.repo.FindByID(ctx, principal, id)
@@ -493,8 +543,27 @@ func (s *Service) Update(ctx context.Context, id uint64, input UpdateRequest) (*
 	model.RequirementSummary, model.SystemCount = strings.TrimSpace(input.RequirementSummary), input.SystemCount
 	model.PainPoints, model.CompetitorInfo, model.UpdatedBy = strings.TrimSpace(input.PainPoints), strings.TrimSpace(input.CompetitorInfo), principal.UserID
 	err = database.WithTransaction(ctx, s.db, func(txCtx context.Context) error {
+		var typeItems, sourceItems []CatalogItem
+		if s.catalog != nil {
+			typeItems, model.Type, err = s.catalog.ResolveSelections(txCtx, principal.TenantID, CatalogKindType, input.TypeIDs, input.Type, model.ID)
+			if err != nil {
+				return err
+			}
+			sourceItems, model.Source, err = s.catalog.ResolveSelections(txCtx, principal.TenantID, CatalogKindSource, input.SourceIDs, input.Source, model.ID)
+			if err != nil {
+				return err
+			}
+		}
 		if updateErr := s.repo.Update(txCtx, model, input.Version); updateErr != nil {
 			return updateErr
+		}
+		if s.catalog != nil {
+			if err = s.catalog.ReplaceLinks(txCtx, principal.TenantID, model.ID, CatalogKindType, typeItems); err != nil {
+				return err
+			}
+			if err = s.catalog.ReplaceLinks(txCtx, principal.TenantID, model.ID, CatalogKindSource, sourceItems); err != nil {
+				return err
+			}
 		}
 		return s.audit.Write(txCtx, audit.Event{TenantID: principal.TenantID, Module: "opportunity", Operation: "UPDATE", ResourceType: "opportunity", ResourceID: uintString(id), ActorID: principal.UserID, ActorNameSnapshot: principal.DisplayName, BeforeJSON: audit.JSON(before), AfterJSON: audit.JSON(toResponse(model)), Reason: input.Reason, Result: "SUCCESS"})
 	})
@@ -502,6 +571,13 @@ func (s *Service) Update(ctx context.Context, id uint64, input UpdateRequest) (*
 		return nil, err
 	}
 	result := toResponse(model)
+	if s.catalog != nil {
+		values := []Response{result}
+		if err = s.catalog.EnrichResponses(ctx, principal.TenantID, values); err != nil {
+			return nil, err
+		}
+		result = values[0]
+	}
 	return &result, nil
 }
 
@@ -519,6 +595,15 @@ func validateMasterData(expectedAmount, expectedSignDate string) (decimal.Decima
 
 func validateOpportunityMasterData(name, opportunityType, source, requirement string) error {
 	if strings.TrimSpace(name) == "" || strings.TrimSpace(opportunityType) == "" || strings.TrimSpace(source) == "" || strings.TrimSpace(requirement) == "" {
+		return apperror.New(422, "CRM_OPPORTUNITY_MASTER_DATA_INVALID", "opportunity master data is invalid")
+	}
+	return nil
+}
+
+func validateOpportunityMasterDataSelection(name, opportunityType, source, requirement string, typeIDs, sourceIDs []uint64) error {
+	if strings.TrimSpace(name) == "" || strings.TrimSpace(requirement) == "" ||
+		(strings.TrimSpace(opportunityType) == "" && len(typeIDs) == 0) ||
+		(strings.TrimSpace(source) == "" && len(sourceIDs) == 0) {
 		return apperror.New(422, "CRM_OPPORTUNITY_MASTER_DATA_INVALID", "opportunity master data is invalid")
 	}
 	return nil
@@ -561,6 +646,13 @@ func (s *Service) Void(ctx context.Context, id uint64, input LifecycleRequest) (
 		return nil, err
 	}
 	result := toResponse(model)
+	if s.catalog != nil {
+		values := []Response{result}
+		if err = s.catalog.EnrichResponses(ctx, principal.TenantID, values); err != nil {
+			return nil, err
+		}
+		result = values[0]
+	}
 	return &result, nil
 }
 
@@ -592,6 +684,13 @@ func (s *Service) Restore(ctx context.Context, id uint64, input LifecycleRequest
 		return nil, err
 	}
 	result := toResponse(model)
+	if s.catalog != nil {
+		values := []Response{result}
+		if err = s.catalog.EnrichResponses(ctx, principal.TenantID, values); err != nil {
+			return nil, err
+		}
+		result = values[0]
+	}
 	return &result, nil
 }
 
@@ -625,6 +724,11 @@ func (s *Service) Get(ctx context.Context, id uint64) (*Response, error) {
 	}
 	result.Members = memberResponses(members)
 	values := []Response{result}
+	if s.catalog != nil {
+		if err = s.catalog.EnrichResponses(ctx, principal.TenantID, values); err != nil {
+			return nil, err
+		}
+	}
 	s.enrichSignedContractCounts(ctx, values)
 	result = values[0]
 	return &result, nil
@@ -668,6 +772,11 @@ func (s *Service) List(ctx context.Context, query ListQuery) (pagination.Page[Re
 	result, err := s.repo.List(ctx, principal, query)
 	if err != nil {
 		return pagination.Page[Response]{}, err
+	}
+	if s.catalog != nil {
+		if err = s.catalog.EnrichResponses(ctx, principal.TenantID, result.Items); err != nil {
+			return pagination.Page[Response]{}, err
+		}
 	}
 	s.enrichSignedContractCounts(ctx, result.Items)
 	return result, nil

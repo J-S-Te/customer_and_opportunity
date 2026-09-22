@@ -63,6 +63,7 @@ func routeFiles(root, application string) ([]sourceFile, error) {
 			{path: filepath.Join(root, "internal/modules/customer/routes.go"), prefixes: map[string]string{"customers": "/api/v1/customers", "router": "/api/v1"}},
 			{path: filepath.Join(root, "internal/modules/opportunity/routes.go"), prefixes: map[string]string{"opportunities": "/api/v1/opportunities"}, functionPrefixes: map[string]map[string]string{"RegisterRoutes": {"router": "/api/v1"}, "RegisterIntegrationRoutes": {"router": "/api/v1/internal"}}},
 			{path: filepath.Join(root, "internal/modules/ownerdirectory/routes.go"), prefixes: map[string]string{"router": "/api/v1"}},
+			{path: filepath.Join(root, "internal/modules/contractreference/routes.go"), functionPrefixes: map[string]map[string]string{"RegisterInternalRoutes": {"router": "/api/v1/internal"}}},
 			{path: filepath.Join(root, "internal/modules/notification/routes.go"), prefixes: map[string]string{"router": "/api/v1"}},
 			{path: filepath.Join(root, "internal/modules/portalinvite/routes.go"), prefixes: map[string]string{"api": "/api/v1", "invites": "/api/v1/internal/portal/invites"}},
 			{path: filepath.Join(root, "internal/modules/presale/routes.go"), prefixes: map[string]string{"presale": "/api/v1/presale", "internal": "/api/v1/internal"}},

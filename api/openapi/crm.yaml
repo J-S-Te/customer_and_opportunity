@@ -104,6 +104,12 @@ paths:
     get: {$ref: '#/components/x-operations/listOpportunityAlerts'}
   /api/v1/opportunity-stage-alerts/{id}/read:
     post: {$ref: '#/components/x-operations/readOpportunityAlert'}
+  /api/v1/opportunity-catalog-items:
+    get: {$ref: '#/components/x-operations/listOpportunityCatalogItems'}
+    post: {$ref: '#/components/x-operations/createOpportunityCatalogItem'}
+  /api/v1/opportunity-catalog-items/{id}:
+    put: {$ref: '#/components/x-operations/updateOpportunityCatalogItem'}
+    delete: {$ref: '#/components/x-operations/deleteOpportunityCatalogItem'}
   /api/v1/opportunities:
     get: {$ref: '#/components/x-operations/listOpportunities'}
     post: {$ref: '#/components/x-operations/createOpportunity'}
@@ -142,6 +148,8 @@ paths:
     post: {$ref: '#/components/x-operations/transferOpportunityContract'}
   /api/v1/internal/opportunities/{id}/contract-link:
     post: {$ref: '#/components/x-operations/receiveOpportunityContractLink'}
+  /api/v1/internal/contract-references/customers/{customerID}:
+    get: {$ref: '#/components/x-operations/resolveContractReference'}
   /api/v1/opportunities/{id}/attachment-capabilities:
     get: {$ref: '#/components/x-operations/getOpportunityAttachmentCapabilities'}
   /api/v1/opportunities/{id}/attachments:
@@ -246,6 +254,7 @@ components:
           tokenUrl: https://platform.example.invalid/oauth2/token
           scopes:
             portal.invite.verify: Verify and consume a Portal invitation.
+            customer.contract_reference.read: Resolve one active customer and an optional same-customer opportunity for Contract Management.
             opportunity.status.write: Apply trusted quotation or bid status events.
             opportunity.attachment.scan.write: Apply attachment malware scan events.
             approval.callback.write: Apply trusted presale approval callbacks.
@@ -351,12 +360,17 @@ components:
         reason: {type: string, maxLength: 500}
     CreateOpportunity:
       type: object
-      required: [name, customer_id, type, source, expected_amount, expected_sign_date, requirement_summary, owner_user_id]
+      required: [name, customer_id, expected_amount, expected_sign_date, requirement_summary]
+      anyOf:
+        - required: [type_ids, source_ids]
+        - required: [type, source]
       properties:
         name: {type: string, maxLength: 200}
         customer_id: {type: integer, format: uint64, minimum: 1}
-        type: {type: string, maxLength: 64}
-        source: {type: string, maxLength: 64}
+        type_ids: {type: array, minItems: 1, maxItems: 50, uniqueItems: true, items: {type: integer, format: uint64, minimum: 1}}
+        source_ids: {type: array, minItems: 1, maxItems: 50, uniqueItems: true, items: {type: integer, format: uint64, minimum: 1}}
+        type: {type: string, maxLength: 2000, deprecated: true, description: Rolling-upgrade compatibility projection. New clients submit type_ids.}
+        source: {type: string, maxLength: 2000, deprecated: true, description: Rolling-upgrade compatibility projection. New clients submit source_ids.}
         expected_amount: {type: string}
         expected_sign_date: {type: string, format: date}
         requirement_summary: {type: string}
@@ -365,6 +379,68 @@ components:
         competitor_info: {type: string, maxLength: 10000}
         owner_user_id: {type: string, maxLength: 64}
         owner_org_id: {type: string, maxLength: 64}
+    UpdateOpportunity:
+      type: object
+      required: [name, expected_amount, expected_sign_date, requirement_summary, version, reason]
+      anyOf:
+        - required: [type_ids, source_ids]
+        - required: [type, source]
+      properties:
+        name: {type: string, maxLength: 200}
+        type_ids: {type: array, minItems: 1, maxItems: 50, uniqueItems: true, items: {type: integer, format: uint64, minimum: 1}}
+        source_ids: {type: array, minItems: 1, maxItems: 50, uniqueItems: true, items: {type: integer, format: uint64, minimum: 1}}
+        type: {type: string, maxLength: 2000, deprecated: true}
+        source: {type: string, maxLength: 2000, deprecated: true}
+        expected_amount: {type: string}
+        expected_sign_date: {type: string, format: date}
+        requirement_summary: {type: string, maxLength: 10000}
+        system_count: {type: integer, format: uint32}
+        pain_points: {type: string, maxLength: 10000}
+        competitor_info: {type: string, maxLength: 10000}
+        version: {type: integer, format: uint64, minimum: 1}
+        reason: {type: string, minLength: 1, maxLength: 500}
+    OpportunityCatalogItem:
+      type: object
+      additionalProperties: false
+      required: [id, kind, code, name, sort_order, enabled, version, reference_count, created_by, updated_by, created_at, updated_at]
+      properties:
+        id: {type: integer, format: uint64, minimum: 1}
+        kind: {type: string, enum: [TYPE, SOURCE]}
+        code: {type: string, maxLength: 32, readOnly: true}
+        name: {type: string, minLength: 1, maxLength: 64}
+        sort_order: {type: integer, format: uint32, minimum: 0}
+        enabled: {type: boolean}
+        version: {type: integer, format: uint64, minimum: 1}
+        reference_count: {type: integer, format: int64, minimum: 0, readOnly: true}
+        created_by: {type: string, maxLength: 64, readOnly: true}
+        updated_by: {type: string, maxLength: 64, readOnly: true}
+        created_at: {type: string, format: date-time, readOnly: true}
+        updated_at: {type: string, format: date-time, readOnly: true}
+    CreateOpportunityCatalogItem:
+      type: object
+      additionalProperties: false
+      required: [kind, name, sort_order]
+      properties:
+        kind: {type: string, enum: [TYPE, SOURCE]}
+        name: {type: string, minLength: 1, maxLength: 64}
+        sort_order: {type: integer, format: uint32, minimum: 0}
+    UpdateOpportunityCatalogItem:
+      type: object
+      additionalProperties: false
+      required: [name, sort_order, enabled, version, reason]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 64}
+        sort_order: {type: integer, format: uint32, minimum: 0}
+        enabled: {type: boolean}
+        version: {type: integer, format: uint64, minimum: 1}
+        reason: {type: string, minLength: 1, maxLength: 500}
+    DeleteOpportunityCatalogItem:
+      type: object
+      additionalProperties: false
+      required: [version, reason]
+      properties:
+        version: {type: integer, format: uint64, minimum: 1}
+        reason: {type: string, minLength: 1, maxLength: 500}
     StageChange:
       type: object
       required: [target_stage, reason, version]
@@ -495,6 +571,10 @@ components:
     ReasonOnly: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ReasonOnly'}}}}
     CreateCustomer: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/CreateCustomer'}}}}
     CreateOpportunity: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/CreateOpportunity'}}}}
+    UpdateOpportunity: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/UpdateOpportunity'}}}}
+    CreateOpportunityCatalogItem: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/CreateOpportunityCatalogItem'}}}}
+    UpdateOpportunityCatalogItem: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/UpdateOpportunityCatalogItem'}}}}
+    DeleteOpportunityCatalogItem: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/DeleteOpportunityCatalogItem'}}}}
     StageChange: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/StageChange'}}}}
     PresaleCreate: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/PresaleCreate'}}}}
     PresaleComplete: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/PresaleComplete'}}}}
@@ -589,11 +669,15 @@ components:
     updateOpportunityAlertRule: {<<: *opportunityRead, operationId: updateOpportunityAlertRule, parameters: [{name: stage, in: path, required: true, schema: {type: string}}]}
     listOpportunityAlerts: {<<: *opportunityRead, operationId: listOpportunityAlerts, x-permission: opportunity.read}
     readOpportunityAlert: {<<: *opportunityRead, operationId: readOpportunityAlert, x-permission: opportunity.read, parameters: [{$ref: '#/components/parameters/NumericID'}]}
+    listOpportunityCatalogItems: {<<: *opportunityRead, operationId: listOpportunityCatalogItems, x-permission: opportunity.read, parameters: [{name: kind, in: query, required: true, schema: {type: string, enum: [TYPE, SOURCE]}}, {name: include_disabled, in: query, schema: {type: boolean, default: false}, description: Requires opportunity.catalog.manage when true.}]}
+    createOpportunityCatalogItem: {<<: *opportunityRead, operationId: createOpportunityCatalogItem, x-permission: opportunity.catalog.manage, parameters: [{$ref: '#/components/parameters/IdempotencyKey'}], requestBody: {$ref: '#/components/requestBodies/CreateOpportunityCatalogItem'}}
+    updateOpportunityCatalogItem: {<<: *opportunityRead, operationId: updateOpportunityCatalogItem, x-permission: opportunity.catalog.manage, parameters: [{$ref: '#/components/parameters/NumericID'}], requestBody: {$ref: '#/components/requestBodies/UpdateOpportunityCatalogItem'}}
+    deleteOpportunityCatalogItem: {<<: *opportunityRead, operationId: deleteOpportunityCatalogItem, x-permission: opportunity.catalog.manage, parameters: [{$ref: '#/components/parameters/NumericID'}, {$ref: '#/components/parameters/IdempotencyKey'}], requestBody: {$ref: '#/components/requestBodies/DeleteOpportunityCatalogItem'}, description: Physically deletes an unreferenced item. Referenced items return 409 CRM_OPPORTUNITY_CATALOG_IN_USE with reference_count only; no cascade or force mode is available.}
     listOpportunities: {<<: *opportunityRead, operationId: listOpportunities, x-permission: opportunity.read}
     createOpportunity: {<<: *opportunityRead, operationId: createOpportunity, x-permission: opportunity.create, parameters: [{$ref: '#/components/parameters/IdempotencyKey'}], requestBody: {$ref: '#/components/requestBodies/CreateOpportunity'}}
     opportunityBoard: {<<: *opportunityRead, operationId: opportunityBoard, x-permission: opportunity.read}
     getOpportunity: &opportunityIDRead {<<: *opportunityRead, operationId: getOpportunity, x-permission: opportunity.read, parameters: [{$ref: '#/components/parameters/OpportunityID'}]}
-    updateOpportunity: {<<: *opportunityIDRead, operationId: updateOpportunity, x-permission: opportunity.update}
+    updateOpportunity: {<<: *opportunityIDRead, operationId: updateOpportunity, x-permission: opportunity.update, requestBody: {$ref: '#/components/requestBodies/UpdateOpportunity'}}
     changeOpportunityOwner: {<<: *opportunityIDRead, operationId: changeOpportunityOwner, x-permission: opportunity.owner.change, parameters: [{$ref: '#/components/parameters/OpportunityID'}, {$ref: '#/components/parameters/IdempotencyKey'}]}
     getOpportunityMembers: {<<: *opportunityIDRead, operationId: getOpportunityMembers}
     replaceOpportunityMembers: {<<: *opportunityIDRead, operationId: replaceOpportunityMembers, x-permission: opportunity.team.manage}
@@ -690,3 +774,19 @@ components:
     applyOpportunityExternalStatus: &machineOpportunityStatus {operationId: applyOpportunityExternalStatus, tags: [Machine integration], security: [{machineJWT: [opportunity.status.write]}], x-scope: opportunity.status.write, requestBody: {$ref: '#/components/requestBodies/ExternalStatusEvent'}, responses: {'200': {$ref: '#/components/responses/OK'}, '400': {$ref: '#/components/responses/Error'}, '401': {$ref: '#/components/responses/Error'}, '403': {$ref: '#/components/responses/Error'}, '409': {$ref: '#/components/responses/Error'}}}
     applyOpportunityAttachmentScan: {<<: *machineOpportunityStatus, operationId: applyOpportunityAttachmentScan, x-scope: opportunity.attachment.scan.write, security: [{machineJWT: [opportunity.attachment.scan.write]}]}
     applyPresaleApprovalCallback: {<<: *machineOpportunityStatus, operationId: applyPresaleApprovalCallback, x-scope: approval.callback.write, security: [{machineJWT: [approval.callback.write]}], description: Approval Provider request fields are the current inbound projection; the formal engine contract remains pending.}
+    resolveContractReference:
+      operationId: resolveContractReference
+      tags: [Machine integration]
+      security: [{machineJWT: [customer.contract_reference.read]}]
+      x-scope: customer.contract_reference.read
+      parameters:
+        - {name: customerID, in: path, required: true, schema: {type: integer, format: uint64, minimum: 1}}
+        - {name: opportunity_id, in: query, required: false, schema: {type: integer, format: uint64, minimum: 1}}
+        - {name: X-Integration-Timestamp, in: header, required: true, schema: {type: string, format: date-time}}
+        - {name: X-Integration-Nonce, in: header, required: true, schema: {type: string, minLength: 1, maxLength: 200}}
+        - {name: X-Actor-Identity-ID, in: header, required: true, description: Trusted originating platform identity supplied by Contract Management and revalidated against a fresh CRM authorization snapshot., schema: {type: string, minLength: 1, maxLength: 128}}
+      responses:
+        '200': {$ref: '#/components/responses/OK'}
+        '401': {$ref: '#/components/responses/Error'}
+        '403': {$ref: '#/components/responses/Error'}
+        '422': {$ref: '#/components/responses/Error'}

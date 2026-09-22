@@ -166,6 +166,122 @@ func attachmentOpportunityID(c *gin.Context) (uint64, error) {
 
 func NewHandler(service *Service) *Handler { return &Handler{service: service} }
 
+func (h *Handler) catalogService() (*CatalogService, error) {
+	if h == nil || h.service == nil || h.service.catalog == nil {
+		return nil, ErrCatalogUnavailable
+	}
+	return h.service.catalog, nil
+}
+
+func (h *Handler) ListCatalogItems(c *gin.Context) {
+	if !validQueryKeys(c, "kind", "include_disabled") {
+		response.Error(c, ErrInvalidQuery)
+		return
+	}
+	kind := CatalogKind(strings.ToUpper(strings.TrimSpace(c.Query("kind"))))
+	includeDisabled := false
+	if raw, present := c.GetQuery("include_disabled"); present {
+		var err error
+		includeDisabled, err = strconv.ParseBool(raw)
+		if err != nil {
+			response.Error(c, ErrInvalidQuery)
+			return
+		}
+	}
+	catalog, err := h.catalogService()
+	if err != nil {
+		response.Error(c, err)
+		return
+	}
+	values, err := catalog.List(c.Request.Context(), kind, includeDisabled)
+	if err != nil {
+		response.Error(c, err)
+		return
+	}
+	response.OK(c, values)
+}
+
+func (h *Handler) CreateCatalogItem(c *gin.Context) {
+	if !validQueryKeys(c) {
+		response.Error(c, ErrInvalidQuery)
+		return
+	}
+	var input CatalogCreateRequest
+	if err := requestbody.DecodeJSON(c, &input); err != nil {
+		response.Error(c, invalidJSON())
+		return
+	}
+	input.IdempotencyKey = c.GetHeader("Idempotency-Key")
+	catalog, err := h.catalogService()
+	if err != nil {
+		response.Error(c, err)
+		return
+	}
+	value, err := catalog.Create(c.Request.Context(), input)
+	if err != nil {
+		response.Error(c, err)
+		return
+	}
+	response.Created(c, value)
+}
+
+func (h *Handler) UpdateCatalogItem(c *gin.Context) {
+	if !validQueryKeys(c) {
+		response.Error(c, ErrInvalidQuery)
+		return
+	}
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil || id == 0 {
+		response.Error(c, ErrCatalogInvalid)
+		return
+	}
+	var input CatalogUpdateRequest
+	if err = requestbody.DecodeJSON(c, &input); err != nil {
+		response.Error(c, invalidJSON())
+		return
+	}
+	catalog, err := h.catalogService()
+	if err != nil {
+		response.Error(c, err)
+		return
+	}
+	value, err := catalog.Update(c.Request.Context(), id, input)
+	if err != nil {
+		response.Error(c, err)
+		return
+	}
+	response.OK(c, value)
+}
+
+func (h *Handler) DeleteCatalogItem(c *gin.Context) {
+	if !validQueryKeys(c) {
+		response.Error(c, ErrInvalidQuery)
+		return
+	}
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil || id == 0 {
+		response.Error(c, ErrCatalogInvalid)
+		return
+	}
+	var input CatalogDeleteRequest
+	if err = requestbody.DecodeJSON(c, &input); err != nil {
+		response.Error(c, invalidJSON())
+		return
+	}
+	input.IdempotencyKey = c.GetHeader("Idempotency-Key")
+	catalog, err := h.catalogService()
+	if err != nil {
+		response.Error(c, err)
+		return
+	}
+	value, err := catalog.Delete(c.Request.Context(), id, input)
+	if err != nil {
+		response.Error(c, err)
+		return
+	}
+	response.OK(c, value)
+}
+
 // 阶段告警作为可选能力附加到既有处理器，不改变现有商机测试和适配器依赖的构造合同。
 func (h *Handler) UseStageAlerts(alerts *StageAlertService) *Handler {
 	h.alerts = alerts

@@ -6,6 +6,10 @@ import (
 )
 
 func RegisterRoutes(router *gin.RouterGroup, handler *Handler) {
+	router.GET("/opportunity-catalog-items", middleware.RequirePermission("opportunity.read"), handler.ListCatalogItems)
+	router.POST("/opportunity-catalog-items", middleware.RequirePermission("opportunity.catalog.manage"), handler.CreateCatalogItem)
+	router.PUT("/opportunity-catalog-items/:id", middleware.RequirePermission("opportunity.catalog.manage"), handler.UpdateCatalogItem)
+	router.DELETE("/opportunity-catalog-items/:id", middleware.RequirePermission("opportunity.catalog.manage"), handler.DeleteCatalogItem)
 	router.GET("/opportunity-stage-alert-rules", middleware.RequirePermission("opportunity.alert.config"), handler.StageAlertRules)
 	router.PUT("/opportunity-stage-alert-rules/:stage", middleware.RequirePermission("opportunity.alert.config"), handler.UpdateStageAlertRule)
 	router.GET("/opportunity-stage-alerts", middleware.RequirePermission("opportunity.read"), handler.StageAlerts)
