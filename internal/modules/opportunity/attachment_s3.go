@@ -384,8 +384,8 @@ func drainAndClose(response *http.Response) {
 // verifyingReader 在流式读取结束时校验总字节数与 SHA-256 摘要；Close 时
 // 内容未读完整或摘要不匹配都会返回 ErrAttachmentInvalid。
 type verifyingReader struct {
-	body     io.ReadCloser
-	hash     interface {
+	body io.ReadCloser
+	hash interface {
 		io.Writer
 		Sum([]byte) []byte
 	}

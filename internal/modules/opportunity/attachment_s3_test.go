@@ -48,8 +48,8 @@ func (b *fakeS3) handle(writer http.ResponseWriter, request *http.Request) {
 		body, _ := io.ReadAll(request.Body)
 		digest := sha256.Sum256(body)
 		b.objects[key] = fakeS3Object{
-			body:     body,
-			etag:     hex.EncodeToString(digest[:16]),
+			body: body,
+			etag: hex.EncodeToString(digest[:16]),
 			metadata: map[string]string{
 				"x-amz-meta-sha256": request.Header.Get("x-amz-meta-sha256"),
 				"x-amz-meta-size":   request.Header.Get("x-amz-meta-size"),
