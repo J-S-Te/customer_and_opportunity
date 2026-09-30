@@ -73,9 +73,9 @@ GitHub `test` Environment 配置：
 
 - Secrets：`DEPLOY_HOST`、`DEPLOY_USER`、`DEPLOY_PORT`、`DEPLOY_SSH_KEY`、
   `DEPLOY_KNOWN_HOSTS`；
-- Variable：`DEPLOY_PATH`，默认 `/opt/basic-platform`；
+- Variable：`DEPLOY_PATH`，默认 `/opt/unified-identity-platform`；
 - 可选 Variable：`CUSTOMER_DEPLOY_SCRIPT`，默认
-  `/opt/basic-platform/bin/deploy-customer-opportunity.sh`。
+  `/opt/unified-identity-platform/bin/deploy-customer-opportunity.sh`。
 
 服务器发布脚本必须由 customer_and_opportunity 的生产部署基线提供，并接收
 两个参数：`<crm-image@sha256:digest> <portal-image@sha256:digest>`。脚本负责

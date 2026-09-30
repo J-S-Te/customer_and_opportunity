@@ -213,7 +213,12 @@ func (client *Client) createV2Session(ctx context.Context, input V2UploadInput) 
 		return V2DirectGrant{}, err
 	}
 	var session struct {
-		Data struct{ UploadID, FileID, Status, UploadURL string } `json:"data"`
+		Data struct {
+			UploadID  string `json:"upload_id"`
+			FileID    string `json:"file_id"`
+			Status    string `json:"status"`
+			UploadURL string `json:"upload_url"`
+		} `json:"data"`
 	}
 	if err = client.do(ctx, http.MethodPost, "/api/v2/upload-sessions", input.RequestID, "application/json", bytes.NewReader(payload), &session); err != nil {
 		return V2DirectGrant{}, err
@@ -231,7 +236,11 @@ func (client *Client) CreateV2DirectUpload(ctx context.Context, input V2UploadIn
 		return grant, err
 	}
 	var ticket struct {
-		Data struct{ Ticket, UploadURL, ExpiresAt string } `json:"data"`
+		Data struct {
+			Ticket    string `json:"ticket"`
+			UploadURL string `json:"upload_url"`
+			ExpiresAt string `json:"expires_at"`
+		} `json:"data"`
 	}
 	if err = client.do(ctx, http.MethodPost, "/api/v2/upload-sessions/"+url.PathEscape(grant.UploadID)+"/tickets", input.RequestID, "application/json", nil, &ticket); err != nil {
 		return V2DirectGrant{}, err

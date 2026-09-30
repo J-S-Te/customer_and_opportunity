@@ -169,6 +169,53 @@ func TestCreateExportUsesOwnerAndOrganizationNamesAndChineseStatus(t *testing.T)
 	}
 }
 
+func TestCreateExportEscapesCSVFormulaInjection(t *testing.T) {
+	createdAt := time.Date(2026, 9, 4, 2, 3, 4, 0, time.UTC)
+	repository := exportRepositoryStub{page: pagination.Page[Response]{
+		Items: []Response{{
+			// 名称携带 =HYPERLINK 载荷、编号带前导 tab，均来自 customer.create 可控输入。
+			ID: 1, CustomerNo: "\tKH202609040001", Name: `=HYPERLINK("https://evil.example","x")`, CustomerType: "企业", Industry: "软件",
+			Region: "华东", OwnerUserID: "owner-1", OwnerOrgID: "org-1", Status: StatusActive, CreatedAt: createdAt,
+		}},
+		Page: 1, PageSize: 100, Total: 1,
+	}}
+	directory := &ownerCatalogProbe{users: map[string]ownerdirectory.User{
+		"owner-1": {ID: "owner-1", DisplayName: "张三", Organizations: []ownerdirectory.Organization{{ID: "org-1", Name: "华东销售部"}}},
+	}}
+	service := (&Service{repo: repository, now: func() time.Time { return createdAt }}).UseOwnerDirectory(directory)
+	ctx := auth.WithPrincipal(context.Background(), auth.Principal{TenantID: "tenant-a", UserID: "exporter"})
+	file, err := service.CreateExport(ctx)
+	if err != nil {
+		t.Fatalf("CreateExport() error = %v", err)
+	}
+	defer os.Remove(file.Name())
+	defer file.Close()
+
+	records, err := csv.NewReader(file).ReadAll()
+	if err != nil && err != io.EOF {
+		t.Fatalf("read export = %v", err)
+	}
+	if len(records) != 2 {
+		t.Fatalf("record count = %d, want 2", len(records))
+	}
+	// 公式载荷与前导 tab 都必须带 ' 前缀，按字面文本渲染。
+	if got, want := records[1][1], `'=HYPERLINK("https://evil.example","x")`; got != want {
+		t.Fatalf("name cell = %q, want %q", got, want)
+	}
+	if got, want := records[1][0], "'\tKH202609040001"; got != want {
+		t.Fatalf("customer no cell = %q, want %q", got, want)
+	}
+	// 普通中文与常规值不受转义影响。
+	for index, want := range map[int]string{2: "企业", 3: "软件", 4: "华东", 5: "张三", 6: "华东销售部", 7: "正常"} {
+		if got := records[1][index]; got != want {
+			t.Fatalf("cell[%d] = %q, want %q", index, got, want)
+		}
+	}
+	if got, want := records[1][8], "2026-09-04T02:03:04Z"; got != want {
+		t.Fatalf("created at cell = %q, want %q", got, want)
+	}
+}
+
 func TestCustomerStatusLabelUsesChineseLabels(t *testing.T) {
 	for status, want := range map[string]string{
 		StatusActive: "正常",

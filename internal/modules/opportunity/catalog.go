@@ -454,34 +454,86 @@ func isMySQLDuplicate(err error) bool {
 	return errors.As(err, &mysqlErr) && mysqlErr.Number == 1062
 }
 
+// catalogProjectionBatchSize 限制单次投影同步的商机数量。改名同步发生在同一事务内，
+// 一个目录项可关联任意多商机；不按批收口会累积成千上万条逐行 UPDATE，放大
+// crm_opportunities 上的行锁持有时长与主键往返开销。
+const catalogProjectionBatchSize = 500
+
 func syncOpportunityCatalogProjection(db *gorm.DB, tenantID string, itemID uint64, kind CatalogKind) error {
-	column := "type"
-	if kind == CatalogKindSource {
-		column = "source"
-	}
+	column := catalogProjectionColumn(kind)
 	var opportunityIDs []uint64
 	if err := db.Model(&CatalogLink{}).
 		Where("tenant_id=? AND catalog_item_id=? AND kind=?", tenantID, itemID, kind).
 		Pluck("opportunity_id", &opportunityIDs).Error; err != nil {
 		return err
 	}
-	for _, opportunityID := range opportunityIDs {
-		var names []string
-		if err := db.Table("crm_opportunity_catalog_links AS link").
-			Select("item.name").
-			Joins("JOIN crm_opportunity_catalog_items AS item ON item.tenant_id=link.tenant_id AND item.id=link.catalog_item_id").
-			Where("link.tenant_id=? AND link.opportunity_id=? AND link.kind=?", tenantID, opportunityID, kind).
-			Order("link.sort_order ASC,item.id ASC").
-			Pluck("item.name", &names).Error; err != nil {
-			return err
-		}
-		if err := db.Model(&Opportunity{}).
-			Where("tenant_id=? AND id=?", tenantID, opportunityID).
-			UpdateColumn(column, strings.Join(names, "、")).Error; err != nil {
+	for _, batch := range splitCatalogProjectionBatches(opportunityIDs) {
+		if err := applyCatalogProjectionBatch(db, column, tenantID, kind, batch); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func catalogProjectionColumn(kind CatalogKind) string {
+	if kind == CatalogKindSource {
+		return "source"
+	}
+	return "type"
+}
+
+func splitCatalogProjectionBatches(opportunityIDs []uint64) [][]uint64 {
+	batches := make([][]uint64, 0, (len(opportunityIDs)+catalogProjectionBatchSize-1)/catalogProjectionBatchSize)
+	for start := 0; start < len(opportunityIDs); start += catalogProjectionBatchSize {
+		end := start + catalogProjectionBatchSize
+		if end > len(opportunityIDs) {
+			end = len(opportunityIDs)
+		}
+		batches = append(batches, opportunityIDs[start:end])
+	}
+	return batches
+}
+
+type catalogProjectionName struct {
+	OpportunityID uint64 `gorm:"column:opportunity_id"`
+	Name          string `gorm:"column:name"`
+}
+
+// catalogProjectionNameQuery 与历史逐行查询保持同一口径：不按 enabled 过滤（禁用目录项的
+// 名称保留在投影中），逐商机按 sort_order、item.id 排序聚合。
+func catalogProjectionNameQuery(db *gorm.DB, tenantID string, kind CatalogKind, opportunityIDs []uint64) *gorm.DB {
+	return db.Table("crm_opportunity_catalog_links AS link").
+		Select("link.opportunity_id, item.name").
+		Joins("JOIN crm_opportunity_catalog_items AS item ON item.tenant_id=link.tenant_id AND item.id=link.catalog_item_id").
+		Where("link.tenant_id=? AND link.kind=? AND link.opportunity_id IN ?", tenantID, kind, opportunityIDs).
+		Order("link.opportunity_id ASC,link.sort_order ASC,item.id ASC")
+}
+
+// catalogProjectionUpdateQuery 用单条 CASE 语句写回一批商机投影；名称聚合在 Go 侧完成，
+// 避免 GROUP_CONCAT 受 group_concat_max_len 截断导致投影值与历史行为不一致。
+func catalogProjectionUpdateQuery(db *gorm.DB, column, tenantID string, opportunityIDs []uint64, labels map[uint64][]string) *gorm.DB {
+	var builder strings.Builder
+	args := make([]any, 0, len(opportunityIDs)*2+2)
+	builder.WriteString("UPDATE crm_opportunities SET `" + column + "` = CASE `id`")
+	for _, opportunityID := range opportunityIDs {
+		builder.WriteString(" WHEN ? THEN ?")
+		args = append(args, opportunityID, strings.Join(labels[opportunityID], "、"))
+	}
+	builder.WriteString(" END WHERE `tenant_id` = ? AND `id` IN ?")
+	args = append(args, tenantID, opportunityIDs)
+	return db.Exec(builder.String(), args...)
+}
+
+func applyCatalogProjectionBatch(db *gorm.DB, column, tenantID string, kind CatalogKind, opportunityIDs []uint64) error {
+	var names []catalogProjectionName
+	if err := catalogProjectionNameQuery(db, tenantID, kind, opportunityIDs).Scan(&names).Error; err != nil {
+		return err
+	}
+	labels := make(map[uint64][]string, len(opportunityIDs))
+	for _, row := range names {
+		labels[row.OpportunityID] = append(labels[row.OpportunityID], row.Name)
+	}
+	return catalogProjectionUpdateQuery(db, column, tenantID, opportunityIDs, labels).Error
 }
 
 func (s *CatalogService) ResolveSelections(ctx context.Context, tenantID string, kind CatalogKind, ids []uint64, legacy string, opportunityID uint64) ([]CatalogItem, string, error) {
