@@ -124,7 +124,9 @@ func New(config Config) (*App, error) {
 	base.GET("/auth/login", authHandler.Login)
 	base.GET("/auth/callback", authHandler.Callback)
 	base.POST("/auth/logout", authMiddleware, authHandler.RequireSameOrigin, authHandler.Logout)
-	base.POST("/auth/local-logout", authHandler.LocalLogout)
+	// local-logout 由前端裸 fetch 调用且不带 X-CSRF-Token，因此走仅 Origin 精确校验的同源防护
+	//（浏览器同源 POST 自动携带 Origin），阻断跨站盲注销；Origin 缺失同样拒绝。
+	base.POST("/auth/local-logout", middleware.RequireOriginMatch(config.PublicOrigin), authHandler.LocalLogout)
 	base.POST("/auth/backchannel-logout", crmauth.NewBackchannelLogoutHandler(oidcClient, authRepository, config.OIDCIssuer, config.OIDCClientID, config.OIDCBackchannelLogoutTTL).Handle)
 	machineAuth, machineErr := crmauth.NewMachineAuthenticator(context.Background(), db, crmauth.MachineOptions{Issuer: config.MachineTokenIssuer, Audience: config.MachineTokenAudience, PublicKeyPath: config.MachineTokenPublicKeyPath, TenantID: config.OIDCTenantID})
 	if machineErr != nil {

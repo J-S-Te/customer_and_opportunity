@@ -107,7 +107,10 @@ func validateMachineClaims(claims machineClaims, expectedTenant string) error {
 
 func validMachinePermission(scope string) bool {
 	switch scope {
-	case "portal.invite.verify", "customer.summary.read", "customer.contract_reference.read", "approval.callback.write", "opportunity.status.write", "opportunity.attachment.scan.write", "customer.credit.payment.ingest", "customer.credit.internal.read":
+	// opportunity.signed.write 是平台为合同系统签发的签约回链凭据 scope
+	//（platform application/subsystem_onboarding.go 的 contract_opportunity_signed_write 用途），
+	// internal/opportunities/:id/contract-link 依赖它完成认证，缺了会让回链在验签层直接 401。
+	case "portal.invite.verify", "customer.summary.read", "customer.contract_reference.read", "approval.callback.write", "opportunity.status.write", "opportunity.signed.write", "opportunity.attachment.scan.write", "customer.credit.payment.ingest", "customer.credit.internal.read":
 		return true
 	default:
 		return false

@@ -797,7 +797,12 @@ func (s *Service) CreateExport(ctx context.Context) (*os.File, error) {
 		}
 		for _, item := range result.Items {
 			owner := owners[item.ID]
-			if err = writer.Write([]string{item.CustomerNo, item.Name, item.CustomerType, item.Industry, item.Region, owner.userName, owner.organizationName, customerStatusLabel(item.Status), item.CreatedAt.UTC().Format(time.RFC3339)}); err != nil {
+			// 导出列包含用户可控文本（客户名称等），统一按 SEC-B6 口径做公式注入转义：
+			// =/+/-/@ 前缀与前导 tab/CR 一律加 ' 前缀按字面渲染，普通值原样返回。
+			if err = writer.Write([]string{
+				safeCSV(item.CustomerNo), safeCSV(item.Name), safeCSV(item.CustomerType), safeCSV(item.Industry), safeCSV(item.Region),
+				safeCSV(owner.userName), safeCSV(owner.organizationName), safeCSV(customerStatusLabel(item.Status)), safeCSV(item.CreatedAt.UTC().Format(time.RFC3339)),
+			}); err != nil {
 				return cleanup(err)
 			}
 		}

@@ -1,10 +1,24 @@
-.git
-.DS_Store
-.env
-.env.*
-!.env.example
-coverage
-dist
-node_modules
-ISSUES
-*.html
+# Production images are compiled only from reviewed Go inputs. In particular,
+# local env files, prebuilt host binaries, reports, credentials and backups are
+# excluded by default.
+**
+!Dockerfile
+!go.mod
+!go.sum
+!cmd/
+!cmd/**
+!internal/
+!internal/**
+!migrations/
+!migrations/**
+**/.env
+**/.env.*
+**/*.pem
+**/*.key
+**/*.p12
+**/*.jks
+**/*.bak
+**/*.backup
+**/*.dump
+**/dump*.sql
+**/.DS_Store

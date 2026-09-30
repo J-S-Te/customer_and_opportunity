@@ -1,14 +1,24 @@
-FROM golang:1.26.4-alpine AS builder
+FROM golang:1.25.4-alpine AS builder
 
-ARG GOPROXY=https://goproxy.cn,direct
-ENV GOPROXY=${GOPROXY}
+ARG GOPROXY=https://goproxy.cn|https://proxy.golang.org|direct
+ARG GOSUMDB=sum.golang.google.cn
+ENV GOPROXY=${GOPROXY} \
+    GOSUMDB=${GOSUMDB}
 
 WORKDIR /src
 
 COPY go.mod go.sum ./
-RUN go mod download
+RUN set -eu; \
+    for attempt in 1 2 3 4 5; do \
+      if go mod download && go mod verify; then exit 0; fi; \
+      echo "go module download failed (attempt ${attempt}/5)" >&2; \
+      sleep $((attempt * 2)); \
+    done; \
+    exit 1
 
-COPY . ./
+COPY cmd/ ./cmd/
+COPY internal/ ./internal/
+COPY migrations/ ./migrations/
 
 # 在镜像编译前校验 CRM/Portal 迁移归属与 SQL 可拆分性，避免漏登记的迁移直到
 # docker-local 或生产迁移容器启动时才被发现。

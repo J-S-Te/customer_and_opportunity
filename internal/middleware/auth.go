@@ -59,6 +59,28 @@ func RequireSameOriginWrite(publicOrigin string) gin.HandlerFunc {
 	}
 }
 
+// RequireOriginMatch 只做精确 Origin 校验，用于无法要求自定义 CSRF 头的清理型 POST
+// （如 /auth/local-logout）。浏览器同源 POST 会自动携带 Origin，跨站盲 POST 即便借
+// SameSite 放行 Cookie 也无法伪造该头；Origin 缺失一律拒绝，保持 fail-closed。
+// 安全方法没有副作用，不在此拦截。
+func RequireOriginMatch(publicOrigin string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		switch c.Request.Method {
+		case http.MethodGet, http.MethodHead, http.MethodOptions:
+			c.Next()
+			return
+		}
+		origin, err := url.Parse(c.GetHeader("Origin"))
+		expected, expectedErr := url.Parse(publicOrigin)
+		if err != nil || expectedErr != nil || origin.Scheme != expected.Scheme || origin.Host != expected.Host {
+			response.Error(c, apperror.ErrForbidden)
+			c.Abort()
+			return
+		}
+		c.Next()
+	}
+}
+
 type machineAuthenticator interface {
 	Authenticate(context.Context, *http.Request) (auth.Principal, error)
 }

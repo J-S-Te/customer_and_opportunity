@@ -28,7 +28,10 @@ func RegisterRoutes(api *gin.RouterGroup, handler *Handler) {
 	presale.GET("/requests/:id/assignments", middleware.RequirePermission("presale.read"), handler.Assignments)
 	presale.POST("/requests/:id/progress", middleware.RequirePermission("presale.progress"), handler.AddProgress)
 	presale.POST("/requests/:id/complete", middleware.RequirePermission("presale.complete"), handler.Complete)
-	presale.POST("/requests/:id/cancel", handler.Cancel)
+	// 取消有两类合法主体：具备 presale.cancel 的管理者，或没有该权限码、只能撤销本人申请的
+	// 发起人（presale.create 持有者）。路由层只做能力粗筛，申请者本人与状态校验仍由
+	// Service.Cancel 在事务内收口，因此“任一满足”不会让弱权限获得更强操作权。
+	presale.POST("/requests/:id/cancel", middleware.RequireAnyPermission("presale.cancel", "presale.create"), handler.Cancel)
 	presale.POST("/requests/:id/worklogs", middleware.RequirePermission("presale.worklog"), handler.AddWorklog)
 	presale.GET("/requests/:id/worklogs", middleware.RequirePermission("presale.read"), handler.Worklogs)
 	presale.GET("/alert-rules", middleware.RequirePermission("presale.alert.config"), handler.AlertRules)

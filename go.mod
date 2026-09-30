@@ -9,6 +9,7 @@ require (
 	github.com/mattn/go-runewidth v0.0.15
 	github.com/pdfcpu/pdfcpu v0.8.0
 	github.com/shopspring/decimal v1.4.0
+	github.com/stretchr/testify v1.10.0
 	go.temporal.io/api v1.63.0
 	go.temporal.io/sdk v1.46.0
 	golang.org/x/oauth2 v0.35.0
@@ -54,7 +55,6 @@ require (
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/robfig/cron v1.2.0 // indirect
 	github.com/stretchr/objx v0.5.2 // indirect
-	github.com/stretchr/testify v1.10.0 // indirect
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
 	github.com/ugorji/go/codec v1.2.12 // indirect
 	golang.org/x/arch v0.8.0 // indirect
