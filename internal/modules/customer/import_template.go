@@ -11,7 +11,7 @@ import (
 const customerImportTemplateContentType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 var customerImportTemplateExample = []string{
-	"示例科技有限公司", "913100001234567890", "企业", "软件", "华东", "请填写负责人用户ID", "请填写负责人组织ID", "张三", "13800138000", "zhangsan@example.com",
+	"示例科技有限公司", "913100001234567890", "企业", "软件", "华东", "张三", "13800138000", "zhangsan@example.com",
 }
 
 // customerImportTemplateWorkbook produces the same macro-free OOXML shape the

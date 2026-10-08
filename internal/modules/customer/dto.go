@@ -287,6 +287,8 @@ type ImportPreviewRowResponse struct {
 	Industry                string           `json:"industry,omitempty"`
 	Region                  string           `json:"region,omitempty"`
 	OwnerUserID             string           `json:"owner_user_id,omitempty"`
+	OwnerDisplayName        string           `json:"owner_display_name,omitempty"`
+	OwnerOrgName            string           `json:"owner_org_name,omitempty"`
 	ContactName             string           `json:"contact_name,omitempty"`
 	ContactPhoneMasked      string           `json:"contact_phone,omitempty"`
 	ContactEmailMasked      string           `json:"contact_email,omitempty"`
