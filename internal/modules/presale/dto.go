@@ -273,6 +273,8 @@ type AlertRuleView struct {
 	ThresholdHours uint32    `json:"threshold_hours"`
 	Enabled        bool      `json:"enabled"`
 	ConfigVersion  uint64    `json:"config_version"`
+	Version        uint64    `json:"version"`
+	Configured     bool      `json:"configured"`
 	UpdatedBy      string    `json:"updated_by"`
 	UpdatedAt      time.Time `json:"updated_at"`
 }

@@ -58,7 +58,7 @@ func TestCustomerImportTemplateDownloadsValidWorkbook(t *testing.T) {
 	if err = validateImportHeader(workbook); err != nil {
 		t.Fatalf("template header error = %v", err)
 	}
-	if len(workbook) != 2 || workbook[1][0].Value != customerImportTemplateExample[0] || workbook[1][9].Value != customerImportTemplateExample[9] {
+	if len(workbook) != 2 || len(workbook[0]) != 8 || workbook[1][0].Value != customerImportTemplateExample[0] || workbook[1][7].Value != customerImportTemplateExample[7] {
 		t.Fatalf("template rows = %#v", workbook)
 	}
 }
@@ -131,7 +131,7 @@ func TestImportHeaderAndRowsFailClosed(t *testing.T) {
 	for index, value := range importHeaders {
 		header[index].Value = value
 	}
-	validData := make([]safexlsx.Cell, len(importHeaders))
+	validData := make([]safexlsx.Cell, len(legacyImportHeaders))
 	values := []string{"示例客户", "913100001234567890", "企业", "科技", "华东", "owner-a", "org-a", "张三", "13800138000", "zhang@example.com"}
 	for index, value := range values {
 		validData[index].Value = value
@@ -154,7 +154,7 @@ func TestImportHeaderAndRowsFailClosed(t *testing.T) {
 }
 
 func TestImportRejectsNumericCustomerMasterDataPlaceholders(t *testing.T) {
-	row := make([]safexlsx.Cell, len(importHeaders))
+	row := make([]safexlsx.Cell, len(legacyImportHeaders))
 	values := []string{"1", "913100001234567890", "1", "科技", "1", "owner-a", "org-a", "张三", "13800138000", "zhang@example.com"}
 	for index, value := range values {
 		row[index].Value = value

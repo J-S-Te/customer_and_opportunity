@@ -56,15 +56,29 @@ func (s *AlertService) ListRules(ctx context.Context, actor Actor) ([]AlertRuleV
 	if err := s.db.WithContext(ctx).Where("tenant_id=? AND deleted_at IS NULL", actor.TenantID).Order("type").Find(&values).Error; err != nil {
 		return nil, err
 	}
-	result := make([]AlertRuleView, 0, len(values))
+	return completeAlertRules(values), nil
+}
+
+// Missing tenant rules are editable definitions, not persisted or enabled
+// policies. Only UpdateRule creates their first audited configuration.
+func completeAlertRules(values []AlertRule) []AlertRuleView {
+	byType := make(map[AlertType]AlertRule, len(values))
 	for _, value := range values {
-		result = append(result, alertRuleView(value))
+		byType[value.Type] = value
 	}
-	return result, nil
+	result := make([]AlertRuleView, 0, len(alertTypes))
+	for _, alertType := range alertTypes {
+		if value, ok := byType[alertType]; ok {
+			result = append(result, alertRuleView(value))
+		} else {
+			result = append(result, AlertRuleView{Type: alertType, Version: 1})
+		}
+	}
+	return result
 }
 
 func alertRuleView(value AlertRule) AlertRuleView {
-	return AlertRuleView{Type: value.Type, ThresholdHours: value.ThresholdHours, Enabled: value.Enabled, ConfigVersion: value.ConfigVersion, UpdatedBy: value.UpdatedBy, UpdatedAt: value.UpdatedAt}
+	return AlertRuleView{Type: value.Type, ThresholdHours: value.ThresholdHours, Enabled: value.Enabled, ConfigVersion: value.ConfigVersion, Version: value.Version, Configured: true, UpdatedBy: value.UpdatedBy, UpdatedAt: value.UpdatedAt}
 }
 
 func (s *AlertService) UpdateRule(ctx context.Context, actor Actor, alertType AlertType, in UpdateAlertRuleInput) (AlertRuleView, error) {

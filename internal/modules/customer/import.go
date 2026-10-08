@@ -12,6 +12,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/ownerdirectory"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/apperror"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/audit"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/auth"
@@ -29,9 +30,10 @@ const (
 )
 
 var importHeaders = []string{
-	"客户名称", "统一社会信用代码", "客户类型", "行业", "区域", "负责人用户ID",
-	"负责人组织ID", "登记联系人姓名", "登记联系人电话", "登记联系人邮箱",
+	"客户名称", "统一社会信用代码", "客户类型", "行业", "区域", "登记联系人姓名", "登记联系人电话", "登记联系人邮箱",
 }
+
+var legacyImportHeaders = []string{"客户名称", "统一社会信用代码", "客户类型", "行业", "区域", "负责人用户ID", "负责人组织ID", "登记联系人姓名", "登记联系人电话", "登记联系人邮箱"}
 
 // ImportFileScanner 是解析工作簿之前的强制信任边界。实现只接收字节，不得通过该接口持久化文件内容。
 type ImportFileScanner interface {
@@ -92,7 +94,7 @@ func (s *Service) PreviewImport(ctx context.Context, file []byte, reason string)
 		return nil, ErrImportScannerUnavailable
 	}
 	// 解压后的归档大小、行列和单元格长度都受限，避免压缩炸弹与超大共享字符串耗尽内存。
-	workbook, err := safexlsx.ParseWorkbook(file, safexlsx.Limits{MaxArchiveBytes: importMaxFileBytes, MaxRows: importMaxDataRows + 1, MaxColumns: len(importHeaders), MaxCellRunes: 500})
+	workbook, err := safexlsx.ParseWorkbook(file, safexlsx.Limits{MaxArchiveBytes: importMaxFileBytes, MaxRows: importMaxDataRows + 1, MaxColumns: len(legacyImportHeaders), MaxCellRunes: 500})
 	if err != nil {
 		return nil, ErrImportInvalidFile
 	}
@@ -104,9 +106,14 @@ func (s *Service) PreviewImport(ctx context.Context, file []byte, reason string)
 		return nil, ErrImportInvalidFile
 	}
 	parsed := make([]parsedImportRow, 0, len(workbook)-1)
+	legacy := len(workbook[0]) == len(legacyImportHeaders)
+	resolver := newImportOwnerResolver(s.owners, principal.UserID)
 	nameCounts, codeCounts := make(map[string]int), make(map[string]int)
 	for index, cells := range workbook[1:] {
 		row := parseImportRow(uint32(index+2), cells)
+		if len(cells) != len(workbook[0]) {
+			row.issues = append(row.issues, ImportRowIssue{Column: "行", Code: "INVALID_COLUMN_COUNT", Message: "数据列数量必须与所选模板表头一致"})
+		}
 		parsed = append(parsed, row)
 		if row.command.Name != "" {
 			nameCounts[normalizeName(row.command.Name)]++
@@ -118,6 +125,9 @@ func (s *Service) PreviewImport(ctx context.Context, file []byte, reason string)
 	for index := range parsed {
 		// 先做文件内重复检查，再访问数据库；有结构性错误的行不继续发起昂贵的重复查询。
 		row := &parsed[index]
+		if !hasImportError(row.issues) {
+			resolver.resolveRow(ctx, row, legacy)
+		}
 		if row.command.UnifiedCreditCode != "" && codeCounts[s.codec.HMAC(row.command.UnifiedCreditCode)] > 1 {
 			row.issues = append(row.issues, ImportRowIssue{Column: "统一社会信用代码", Code: "DUPLICATE_CODE_IN_FILE", Message: "统一社会信用代码在上传文件内重复"})
 		}
@@ -191,11 +201,15 @@ func validateImportHeader(rows [][]safexlsx.Cell) error {
 	if len(rows) < 1 || len(rows)-1 > importMaxDataRows {
 		return ErrImportInvalidFile
 	}
-	if len(rows[0]) != len(importHeaders) {
+	if len(rows[0]) != len(importHeaders) && len(rows[0]) != len(legacyImportHeaders) {
 		return apperror.WithDetails(ErrImportInvalidFile, ImportRowIssue{Column: "表头", Code: "INVALID_HEADERS", Message: "表头数量不正确"})
 	}
 	seen := make(map[string]struct{}, len(importHeaders))
-	for index, expected := range importHeaders {
+	headers := importHeaders
+	if len(rows[0]) == len(legacyImportHeaders) {
+		headers = legacyImportHeaders
+	}
+	for index, expected := range headers {
 		cell := rows[0][index]
 		value := strings.TrimSpace(cell.Value)
 		if cell.Formula || csvInjection(value) || value != expected {
@@ -228,9 +242,17 @@ func trimTrailingEmptyImportRows(rows [][]safexlsx.Cell) [][]safexlsx.Cell {
 }
 
 func parseImportRow(rowNo uint32, cells []safexlsx.Cell) parsedImportRow {
-	values := make([]string, len(importHeaders))
+	// Normalize the user-facing eight columns into the legacy internal shape.
+	// Ownership is derived from the importing principal, never from new workbooks.
+	if len(cells) == len(importHeaders) {
+		expanded := make([]safexlsx.Cell, len(legacyImportHeaders))
+		copy(expanded[:5], cells[:5])
+		copy(expanded[7:], cells[5:])
+		cells = expanded
+	}
+	values := make([]string, len(legacyImportHeaders))
 	issues := make([]ImportRowIssue, 0)
-	if len(cells) != len(importHeaders) {
+	if len(cells) != len(legacyImportHeaders) {
 		issues = append(issues, ImportRowIssue{Column: "行", Code: "INVALID_COLUMN_COUNT", Message: "列数量不正确"})
 	}
 	for index := range values {
@@ -239,22 +261,22 @@ func parseImportRow(rowNo uint32, cells []safexlsx.Cell) parsedImportRow {
 		}
 		values[index] = strings.TrimSpace(cells[index].Value)
 		if cells[index].Formula {
-			issues = append(issues, ImportRowIssue{Column: importHeaders[index], Code: "FORMULA_NOT_ALLOWED", Message: "不允许公式单元格"})
+			issues = append(issues, ImportRowIssue{Column: legacyImportHeaders[index], Code: "FORMULA_NOT_ALLOWED", Message: "不允许公式单元格"})
 		}
 		if csvInjection(values[index]) {
-			issues = append(issues, ImportRowIssue{Column: importHeaders[index], Code: "CSV_INJECTION_PREFIX", Message: "不允许公式或 CSV 注入前缀"})
+			issues = append(issues, ImportRowIssue{Column: legacyImportHeaders[index], Code: "CSV_INJECTION_PREFIX", Message: "不允许公式或 CSV 注入前缀"})
 		}
 	}
 	command := importCommand{Name: values[0], UnifiedCreditCode: values[1], CustomerType: values[2], Industry: values[3], Region: values[4], OwnerUserID: values[5], OwnerOrgID: values[6], ContactName: values[7], ContactPhone: values[8], ContactEmail: values[9]}
 	required := []struct {
 		index int
 		max   int
-	}{{0, 200}, {2, 64}, {3, 64}, {4, 64}, {5, 64}, {7, 100}, {8, 32}}
+	}{{0, 200}, {2, 64}, {3, 64}, {4, 64}, {7, 100}, {8, 32}}
 	for _, field := range required {
 		if values[field.index] == "" {
-			issues = append(issues, ImportRowIssue{Column: importHeaders[field.index], Code: "REQUIRED", Message: "必填字段为空"})
+			issues = append(issues, ImportRowIssue{Column: legacyImportHeaders[field.index], Code: "REQUIRED", Message: "必填字段为空"})
 		} else if utf8.RuneCountInString(values[field.index]) > field.max || unsafeText(values[field.index]) {
-			issues = append(issues, ImportRowIssue{Column: importHeaders[field.index], Code: "INVALID_VALUE", Message: "字段格式或长度不正确"})
+			issues = append(issues, ImportRowIssue{Column: legacyImportHeaders[field.index], Code: "INVALID_VALUE", Message: "字段格式或长度不正确"})
 		}
 	}
 	for _, field := range []struct {
@@ -262,15 +284,15 @@ func parseImportRow(rowNo uint32, cells []safexlsx.Cell) parsedImportRow {
 		max   int
 	}{{0, 200}, {2, 64}, {3, 64}, {4, 64}} {
 		if values[field.index] != "" && !validCustomerBusinessText(values[field.index], field.max) {
-			issues = append(issues, ImportRowIssue{Column: importHeaders[field.index], Code: "INVALID_VALUE", Message: "基础资料不能是纯数字或无意义占位值"})
+			issues = append(issues, ImportRowIssue{Column: legacyImportHeaders[field.index], Code: "INVALID_VALUE", Message: "基础资料不能是纯数字或无意义占位值"})
 		}
 	}
 	for _, field := range []struct {
 		index int
 		max   int
-	}{{1, 64}, {6, 64}, {9, 200}} {
+	}{{1, 64}, {5, 100}, {6, 200}, {9, 200}} {
 		if utf8.RuneCountInString(values[field.index]) > field.max || unsafeText(values[field.index]) {
-			issues = append(issues, ImportRowIssue{Column: importHeaders[field.index], Code: "INVALID_VALUE", Message: "字段格式或长度不正确"})
+			issues = append(issues, ImportRowIssue{Column: legacyImportHeaders[field.index], Code: "INVALID_VALUE", Message: "字段格式或长度不正确"})
 		}
 	}
 	if command.ContactPhone != "" && !validPhone(command.ContactPhone) {
@@ -483,6 +505,16 @@ func (s *Service) commitImportRow(ctx context.Context, principal auth.Principal,
 	}
 	var command importCommand
 	if err = json.Unmarshal([]byte(plaintext), &command); err != nil {
+		return err
+	}
+	// Directory membership may be revoked after preview; never use a stored ID
+	// pair as permanent write authorization.
+	if err = s.validateImportOwner(ctx, command.OwnerUserID, command.OwnerOrgID); err != nil {
+		if errors.Is(err, ownerdirectory.ErrSelectionInvalid) {
+			row.Status, row.ErrorColumn, row.ErrorCode, row.ErrorMessage, row.CommandCipher = "FAILED", "负责人", "OWNER_SELECTION_INVALID", "当前导入人已失效或主组织已变化，请重新上传预检", nil
+			row.UpdatedAt = s.now()
+			return s.imports.UpdateImportRow(ctx, row)
+		}
 		return err
 	}
 	// 预览到提交之间数据可能变化，因此必须在每行事务内重新检查重复项，不能把预览当写入授权。
