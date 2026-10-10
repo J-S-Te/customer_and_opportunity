@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	core "github.com/J-S-Te/license-core"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/workerlicense"
 	"log"
 	"strings"
 	"time"
@@ -65,6 +67,9 @@ func (w *Worker) Run(ctx context.Context) error {
 }
 
 func (w *Worker) RunOnce(ctx context.Context) (int, error) {
+	if !workerlicense.Allowed(ctx, core.MUTATE_BUSINESS) {
+		return 0, nil
+	}
 	events, err := w.store.claim(ctx, w.workerID, w.now(), w.leaseDuration, w.batchSize)
 	if err != nil {
 		return 0, err
@@ -79,6 +84,11 @@ func (w *Worker) RunOnce(ctx context.Context) (int, error) {
 }
 
 func (w *Worker) dispatch(ctx context.Context, event report.Outbox) error {
+	// Leave a claimed task leased rather than marking success/dead-letter; it
+	// becomes claimable again after lease expiry when authorization recovers.
+	if err := workerlicense.Require(ctx, core.MUTATE_BUSINESS); err != nil {
+		return err
+	}
 	if event.EventType != "PORTAL_REPORT_SUBMITTED" || event.AggregateID == 0 || strings.TrimSpace(event.EventID) == "" || strings.TrimSpace(event.TenantID) == "" {
 		return w.fail(ctx, event, errors.New("invalid Portal report outbox event"))
 	}

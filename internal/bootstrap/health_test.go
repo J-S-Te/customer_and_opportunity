@@ -10,7 +10,6 @@ import (
 )
 
 func TestHealthHandlersSeparateLivenessAndReadiness(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	router.GET("/livez", livenessHandler)
 	router.GET("/readyz", readinessHandler(func(context.Context) bool { return false }))

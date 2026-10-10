@@ -3,6 +3,8 @@ package portalprojectworker
 import (
 	"context"
 	"errors"
+	core "github.com/J-S-Te/license-core"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/workerlicense"
 	"log"
 	"time"
 )
@@ -52,6 +54,9 @@ func (w *Worker) Run(ctx context.Context) error {
 }
 
 func (w *Worker) RunOnce(ctx context.Context) (int, error) {
+	if !workerlicense.Allowed(ctx, core.MUTATE_BUSINESS) {
+		return 0, nil
+	}
 	// 每轮先发现新授权客户，使新增 Portal 映射无需重启 Worker 即可进入同步队列。
 	now := w.now()
 	if err := w.store.seedCustomers(ctx, w.tenantID, now); err != nil {
@@ -64,12 +69,18 @@ func (w *Worker) RunOnce(ctx context.Context) (int, error) {
 	updated := 0
 	for {
 		// 游标页逐页落账并续租；源端失败只让当前客户退避，不会回滚已经成功提交的前序页。
+		if err := workerlicense.Require(ctx, core.MUTATE_BUSINESS); err != nil {
+			return updated, err
+		}
 		page, fetchErr := w.source.changed(ctx, state.TenantID, state.CustomerID, state.Cursor)
 		if fetchErr != nil {
 			if projectionErr := w.store.failed(ctx, state, w.workerID, w.now(), w.retryInterval, fetchErr.Error()); projectionErr != nil {
 				return updated, errors.Join(fetchErr, projectionErr)
 			}
 			return updated, fetchErr
+		}
+		if err := workerlicense.Require(ctx, core.MUTATE_BUSINESS); err != nil {
+			return updated, err
 		}
 		count, applyErr := w.store.applyPage(ctx, state, w.workerID, page, w.now(), !page.HasMore, w.syncInterval, w.leaseDuration)
 		updated += count

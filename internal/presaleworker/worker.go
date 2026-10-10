@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	core "github.com/J-S-Te/license-core"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/workerlicense"
 	"log"
 	"strconv"
 	"strings"
@@ -64,6 +66,9 @@ func (w *Worker) Run(ctx context.Context) error {
 }
 
 func (w *Worker) RunOnce(ctx context.Context) (int, error) {
+	if !workerlicense.Allowed(ctx, core.MUTATE_BUSINESS) {
+		return 0, nil
+	}
 	now := w.now()
 	events, err := w.store.claim(ctx, w.workerID, now, w.leaseDuration, w.batchSize)
 	if err != nil {
@@ -83,6 +88,11 @@ func (w *Worker) RunOnce(ctx context.Context) (int, error) {
 }
 
 func (w *Worker) dispatch(ctx context.Context, event presale.OutboxEvent) error {
+	// Leave a claimed task leased rather than marking success/dead-letter; it
+	// becomes claimable again after lease expiry when authorization recovers.
+	if err := workerlicense.Require(ctx, core.MUTATE_BUSINESS); err != nil {
+		return err
+	}
 	var err error
 	switch event.EventType {
 	case "PRESALE_APPROVAL_START_REQUESTED":

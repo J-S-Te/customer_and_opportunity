@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	core "github.com/J-S-Te/license-core"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/workerlicense"
 	"path"
 	"strconv"
 	"strings"
@@ -61,6 +63,9 @@ func (w *Worker) Run(ctx context.Context) error {
 }
 
 func (w *Worker) RunOnce(ctx context.Context) (bool, error) {
+	if !workerlicense.Allowed(ctx, core.EXPORT_HISTORY) {
+		return false, nil
+	}
 	now := w.now().UTC()
 	job, err := w.store.Claim(ctx, w.workerID, now, w.leaseDuration)
 	if err != nil || job == nil {

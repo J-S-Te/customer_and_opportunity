@@ -8,6 +8,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	core "github.com/J-S-Te/license-core"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/workerlicense"
 	"strconv"
 	"strings"
 	"time"
@@ -117,7 +119,7 @@ func (a *App) Close() error {
 }
 
 func (a *App) Run(ctx context.Context) error {
-	if _, err := a.RunOnce(ctx); err != nil && !errors.Is(err, context.Canceled) {
+	if _, err := a.RunOnce(ctx); err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, workerlicense.ErrDenied) {
 		return err
 	}
 	ticker := time.NewTicker(a.config.PollInterval)
@@ -127,7 +129,7 @@ func (a *App) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
-			if _, err := a.RunOnce(ctx); err != nil && !errors.Is(err, context.Canceled) {
+			if _, err := a.RunOnce(ctx); err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, workerlicense.ErrDenied) {
 				return err
 			}
 		}
@@ -135,6 +137,9 @@ func (a *App) Run(ctx context.Context) error {
 }
 
 func (a *App) RunOnce(ctx context.Context) (int, error) {
+	if !workerlicense.Allowed(ctx, core.MUTATE_BUSINESS) {
+		return 0, nil
+	}
 	processed := 0
 	for processed < a.config.BatchSize {
 		// token 按“本次领取”生成而不是按进程固定，避免同一 WorkerID 重启后接受旧进程的迟到写回。
@@ -196,6 +201,11 @@ func (s *gormTransferStore) claimOne(ctx context.Context, now time.Time, lease t
 }
 
 func (a *App) process(ctx context.Context, event opportunity.OutboxEvent, token string) error {
+	// Leave a claimed task leased rather than marking success/dead-letter; it
+	// becomes claimable again after lease expiry when authorization recovers.
+	if err := workerlicense.Require(ctx, core.MUTATE_BUSINESS); err != nil {
+		return err
+	}
 	now := a.now().UTC()
 	command, permanentReason, err := a.store.authoritativeCommand(ctx, event, now, token)
 	if err != nil {
@@ -207,6 +217,9 @@ func (a *App) process(ctx context.Context, event opportunity.OutboxEvent, token 
 	if permanentReason != "" {
 		// 事件身份或商机终态已经不成立时，重试不会改变结果，直接进入死信便于人工审计。
 		return a.store.finish(ctx, event, now, token, statusDeadLetter, "", permanentReason)
+	}
+	if err := workerlicense.Require(ctx, core.MUTATE_BUSINESS); err != nil {
+		return err
 	}
 	result, err := a.client.deliver(ctx, command)
 	finishedAt := a.now().UTC()

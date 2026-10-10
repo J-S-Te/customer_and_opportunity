@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	core "github.com/J-S-Te/license-core"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/workerlicense"
 	"log"
 	"strings"
 	"time"
@@ -74,6 +76,9 @@ func (a *App) Run(ctx context.Context) error {
 }
 
 func (a *App) runOnce(ctx context.Context) error {
+	if !workerlicense.Allowed(ctx, core.MUTATE_BUSINESS) {
+		return nil
+	}
 	now := a.now().UTC()
 	from, to := aggregateWindow(now, a.lookbackDays)
 	acquired, leaseUntil, err := a.acquireLease(ctx, now)
@@ -88,6 +93,9 @@ func (a *App) runOnce(ctx context.Context) error {
 		}
 	}
 	for _, tenantID := range tenants {
+		if !workerlicense.Allowed(ctx, core.MUTATE_BUSINESS) {
+			return nil
+		}
 		// 每个租户在全局租约内独立重建，并把查询截止时间压在租约前一秒，避免失租后继续写入。
 		if err = validateTenantID(tenantID); err != nil {
 			return err
@@ -182,6 +190,9 @@ func leaseRenewSQL() string {
 }
 
 func (a *App) aggregateTenant(ctx context.Context, tenantID string, from, to time.Time) error {
+	if !workerlicense.Allowed(ctx, core.MUTATE_BUSINESS) {
+		return nil
+	}
 	startedAt := a.now().UTC()
 	run := dailyMetricRun{
 		TenantID: tenantID, WindowStart: from, WindowEndExclusive: to,

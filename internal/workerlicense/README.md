@@ -1,0 +1,11 @@
+# CRM and Portal task authorization
+
+Production Worker commands bind a commercial runtime Check to their cancellation context using a compiled application code, not a caller-controlled override. Every polling task checks current authorization; a startup check is not enough. Unit/embed callers without this context retain existing constructor behavior, while production startup always binds either the explicit disabled compatibility consumer or configured fail-closed consumer.
+
+New CRM approval/action/worklog delivery, contract transfer, engineer-pool synchronization, new SLA alerts and aggregate recomputation require `MUTATE_BUSINESS`. Portal project synchronization, report submission/ingestion, feedback SLA escalation and identity provisioning compensation also require mutation authorization. Claimed queue work denied before business execution stays leased for subsequent recovery; it is not marked sent or dead-lettered merely because a license expired.
+
+Existing owner/assignment/progress/notification deliveries are `ESSENTIAL_SERVICE`; they consume previously committed events and do not authorize new alert scans. Portal project PDF export is `EXPORT_HISTORY` and uses the existing frozen job snapshot. The separate Portal access-disable worker remains a safety operation. The mixed invite compensation worker preserves `DISABLE_PLATFORM_CUSTOMER` safety work but denies role/mapping/binding creation and automatic compensation generation when mutation is unavailable.
+
+Temporal Activity instances receive the same runtime checker before polling starts and recheck on each Activity execution. A typed license-only deferral uses durable workflow timers and the same EventID; it does not exhaust normal external-operation retries or complete the workflow falsely. Authorization is re-evaluated when the timer schedules the Activity again. Transactions/external business operations already started while allowed may finish their existing atomic/idempotent completion path; a license is not used to roll back completed external business.
+
+No business database migration or historical data changes are introduced by these gates. Production Compose must supply a distinct component identity/credential and durable state, and Portal compensation components must be enrolled under `customer_portal` even when their physical tables are in the CRM database.

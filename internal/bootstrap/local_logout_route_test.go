@@ -32,7 +32,6 @@ func TestLocalLogoutRouteRequiresSameOriginGuard(t *testing.T) {
 
 func TestRequireOriginMatchBlocksCrossSiteLocalLogout(t *testing.T) {
 	t.Parallel()
-	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	router.POST("/auth/local-logout", middleware.RequireOriginMatch("https://crm.example.com"), func(c *gin.Context) { c.Status(http.StatusNoContent) })
 	tests := []struct {

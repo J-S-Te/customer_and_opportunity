@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	core "github.com/J-S-Te/license-core"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/workerlicense"
 	"strconv"
 	"time"
 
@@ -147,6 +149,9 @@ func (a *App) acquireLease(ctx context.Context, now time.Time) (bool, error) {
 }
 
 func (a *App) scanRequest(ctx context.Context, request scanRequest, now time.Time) error {
+	if !workerlicense.Allowed(ctx, core.MUTATE_BUSINESS) {
+		return nil
+	}
 	return a.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var locked scanRequest
 		if err := tx.Table("crm_presale_requests").Clauses(clause.Locking{Strength: "UPDATE"}).Select("id,tenant_id,request_no,applicant_id,status,current_approval_node,expected_end,created_at,updated_at").Where("tenant_id=? AND id=? AND deleted_at IS NULL", request.TenantID, request.ID).Take(&locked).Error; err != nil {

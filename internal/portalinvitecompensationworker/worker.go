@@ -3,6 +3,8 @@ package portalinvitecompensationworker
 import (
 	"context"
 	"errors"
+	core "github.com/J-S-Te/license-core"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/workerlicense"
 	"log"
 	"strings"
 	"time"
@@ -93,6 +95,9 @@ func (w *Worker) Run(ctx context.Context) error {
 }
 
 func (w *Worker) RunOnce(ctx context.Context) (int, error) {
+	if !workerlicense.Allowed(ctx, core.ESSENTIAL_SERVICE) {
+		return 0, nil
+	}
 	tasks, err := w.store.claim(ctx, w.workerID, w.now(), w.leaseDuration, w.batchSize)
 	if err != nil {
 		return 0, err
@@ -109,7 +114,7 @@ func (w *Worker) RunOnce(ctx context.Context) (int, error) {
 	} else if len(tasks) > 0 || stats.DeadLetter > 0 {
 		log.Printf("Portal invite compensation queue: claimed=%d pending=%d processing=%d retry_wait=%d dead_letter=%d", len(tasks), stats.Pending, stats.Processing, stats.RetryWait, stats.DeadLetter)
 	}
-	if w.reconciler != nil && (w.nextReconcile.IsZero() || !w.now().Before(w.nextReconcile)) {
+	if w.reconciler != nil && workerlicense.Allowed(ctx, core.MUTATE_BUSINESS) && (w.nextReconcile.IsZero() || !w.now().Before(w.nextReconcile)) {
 		metrics, reconciliationErr := w.reconciler.RunOnce(ctx)
 		w.nextReconcile = w.now().Add(w.reconcileEvery)
 		if reconciliationErr != nil {
@@ -126,6 +131,15 @@ type queueStats struct {
 }
 
 func (w *Worker) dispatch(ctx context.Context, task portalinvite.CompensationTask) error {
+	// Leave a claimed task leased rather than marking success/dead-letter; it
+	// becomes claimable again after lease expiry when authorization recovers.
+	op := core.MUTATE_BUSINESS
+	if task.TaskType == portalinvite.CompensationBindingDisable {
+		op = core.ESSENTIAL_SERVICE
+	}
+	if err := workerlicense.Require(ctx, op); err != nil {
+		return err
+	}
 	if invalidTask(task) {
 		return w.fail(ctx, task, failure{code: "INVALID_TASK", summary: "compensation task is invalid"})
 	}

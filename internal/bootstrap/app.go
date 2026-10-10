@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/commercial"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/filegateway"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/middleware"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/contractreference"
@@ -32,15 +33,27 @@ import (
 )
 
 type App struct {
-	Config      Config
-	DB          *gorm.DB
-	Router      *gin.Engine
-	Server      *http.Server
-	auditCancel context.CancelFunc
-	auditDone   chan struct{}
+	licenseCancel context.CancelFunc
+	Config        Config
+	DB            *gorm.DB
+	Router        *gin.Engine
+	Server        *http.Server
+	auditCancel   context.CancelFunc
+	auditDone     chan struct{}
 }
 
 func New(config Config) (*App, error) {
+	licenseCtx, licenseCancel := context.WithCancel(context.Background())
+	started := false
+	defer func() {
+		if !started {
+			licenseCancel()
+		}
+	}()
+	licenseCheck, err := commercial.Start(licenseCtx, "customer_and_opportunity")
+	if err != nil {
+		return nil, err
+	}
 	// 这里仅完成连接池装配，健康检查再执行真实 Ping；这样依赖未就绪会体现在健康状态，
 	// 而配置、密钥或协议适配器错误仍会让进程在开放端口前失败。
 	db, err := gorm.Open(mysql.Open(config.MySQLDSN), &gorm.Config{DisableAutomaticPing: true})
@@ -74,6 +87,7 @@ func New(config Config) (*App, error) {
 		middleware.Recovery(slog.Default(), "crm"),
 	)
 	base := router.Group(strings.TrimRight(config.PathPrefix, "/"))
+	base.Use(commercial.Middleware(licenseCheck, "crm", config.PathPrefix))
 	databaseHealthy := func(ctx context.Context) bool {
 		sqlDB, pingErr := db.DB()
 		return pingErr == nil && sqlDB.PingContext(ctx) == nil
@@ -413,10 +427,14 @@ func New(config Config) (*App, error) {
 			slog.Default().Warn("platform audit publisher preflight failed", "error_code", requestaudit.DeliveryErrorCode(err))
 		}
 	}()
-	return &App{Config: config, DB: db, Router: router, Server: server, auditCancel: auditCancel, auditDone: auditDone}, nil
+	started = true
+	return &App{Config: config, DB: db, Router: router, Server: server, auditCancel: auditCancel, auditDone: auditDone, licenseCancel: licenseCancel}, nil
 }
 
 func (a *App) Close(ctx context.Context) error {
+	if a.licenseCancel != nil {
+		a.licenseCancel()
+	}
 	// 先让 HTTP 在途请求收敛，再关闭共享连接池，避免请求持有的事务在优雅停机期间被截断。
 	shutdownErr := a.Server.Shutdown(ctx)
 	if a.auditCancel != nil {

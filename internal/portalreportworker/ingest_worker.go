@@ -6,6 +6,8 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	core "github.com/J-S-Te/license-core"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/workerlicense"
 	"io"
 	"log"
 	"strings"
@@ -40,6 +42,9 @@ func newIngestWorker(store ingestStore, service ingestProjection, protector repo
 }
 
 func (w *IngestWorker) RunOnce(ctx context.Context) (int, error) {
+	if !workerlicense.Allowed(ctx, core.MUTATE_BUSINESS) {
+		return 0, nil
+	}
 	jobs, err := w.store.claim(ctx, w.workerID, w.now(), w.leaseDuration, w.batchSize)
 	if err != nil {
 		return 0, err
@@ -54,6 +59,11 @@ func (w *IngestWorker) RunOnce(ctx context.Context) (int, error) {
 }
 
 func (w *IngestWorker) dispatch(ctx context.Context, job report.IngestJob) error {
+	// Leave a claimed task leased rather than marking success/dead-letter; it
+	// becomes claimable again after lease expiry when authorization recovers.
+	if err := workerlicense.Require(ctx, core.MUTATE_BUSINESS); err != nil {
+		return err
+	}
 	if job.ID == 0 || job.RequestID == 0 || strings.TrimSpace(job.EventID) == "" || strings.TrimSpace(job.TenantID) == "" || len(job.DescriptorCipher) == 0 || strings.TrimSpace(job.DescriptorHash) == "" {
 		return w.fail(ctx, job, errors.New("invalid Portal report ingest job"))
 	}

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/commercial"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/middleware"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/portal/account"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/portal/capability"
@@ -39,6 +40,7 @@ const (
 )
 
 type RouterDependencies struct {
+	LicenseCheck          commercial.Check
 	Config                Config
 	RequestAudit          gin.HandlerFunc
 	Account               *account.Service
@@ -119,6 +121,7 @@ func NewRouter(deps RouterDependencies) *gin.Engine {
 	)
 	router.Use(globalMiddleware...)
 	base := router.Group(deps.Config.PathPrefix)
+	base.Use(commercial.Middleware(deps.LicenseCheck, "portal", deps.Config.PathPrefix))
 	base.GET("/livez", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "alive"})
 	})

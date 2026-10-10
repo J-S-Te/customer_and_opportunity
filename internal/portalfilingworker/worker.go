@@ -8,6 +8,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	core "github.com/J-S-Te/license-core"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/workerlicense"
 	"log"
 	"strings"
 	"time"
@@ -116,6 +118,9 @@ func (w *Worker) Run(ctx context.Context) error {
 }
 
 func (w *Worker) RunOnce(ctx context.Context) (int, error) {
+	if !workerlicense.Allowed(ctx, core.MUTATE_BUSINESS) {
+		return 0, nil
+	}
 	if _, err := w.store.Activate(ctx, contractVersion, w.now().UTC(), w.batchSize); err != nil {
 		return 0, err
 	}
@@ -211,6 +216,9 @@ ORDER BY o.created_at,o.id LIMIT ? FOR UPDATE SKIP LOCKED`, contractVersion, now
 }
 
 func (w *Worker) dispatch(ctx context.Context, event filing.SubmissionOutbox) error {
+	if err := workerlicense.Require(ctx, core.MUTATE_BUSINESS); err != nil {
+		return err
+	}
 	now := w.now().UTC()
 	if event.Status != "PROCESSING" || event.LockedBy != w.workerID || event.LockedUntil == nil || !event.LockedUntil.After(now.Add(time.Second)) {
 		return errors.New("Portal filing submission event has no usable lease")

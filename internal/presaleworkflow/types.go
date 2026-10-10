@@ -2,7 +2,11 @@ package presaleworkflow
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	core "github.com/J-S-Te/license-core"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/commercial"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/workerlicense"
 	"time"
 
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/presale"
@@ -20,6 +24,7 @@ const (
 	ActivityStartApproval      = "StartApproval"
 	ActivityApprovalAction     = "ApprovalAction"
 	ActivityPublishWorklog     = "PublishWorklog"
+	licenseDeferredType        = "COMMERCIAL_LICENSE_DEFERRED"
 )
 
 type EventInput struct {
@@ -27,13 +32,17 @@ type EventInput struct {
 }
 
 type Activities struct {
-	Approval presale.ApprovalCommandPort
-	PMS      presale.PMSPublisher
+	LicenseCheck commercial.Check
+	Approval     presale.ApprovalCommandPort
+	PMS          presale.PMSPublisher
 }
 
 func (a *Activities) StartApproval(ctx context.Context, in EventInput) (presale.ApprovalStartResult, error) {
 	if a == nil || a.Approval == nil {
 		return presale.ApprovalStartResult{}, fmt.Errorf("presale approval activity is not configured")
+	}
+	if err := workerlicense.RequireCheck(ctx, a.LicenseCheck, core.MUTATE_BUSINESS); err != nil {
+		return presale.ApprovalStartResult{}, temporal.NewNonRetryableApplicationError("commercial license task deferred", licenseDeferredType, err)
 	}
 	return a.Approval.Start(ctx, in.Event)
 }
@@ -42,12 +51,18 @@ func (a *Activities) ApprovalAction(ctx context.Context, in EventInput) error {
 	if a == nil || a.Approval == nil {
 		return fmt.Errorf("presale approval activity is not configured")
 	}
+	if err := workerlicense.RequireCheck(ctx, a.LicenseCheck, core.MUTATE_BUSINESS); err != nil {
+		return temporal.NewNonRetryableApplicationError("commercial license task deferred", licenseDeferredType, err)
+	}
 	return a.Approval.Act(ctx, in.Event)
 }
 
 func (a *Activities) PublishWorklog(ctx context.Context, in EventInput) (string, error) {
 	if a == nil || a.PMS == nil {
 		return "", fmt.Errorf("presale PMS activity is not configured")
+	}
+	if err := workerlicense.RequireCheck(ctx, a.LicenseCheck, core.MUTATE_BUSINESS); err != nil {
+		return "", temporal.NewNonRetryableApplicationError("commercial license task deferred", licenseDeferredType, err)
 	}
 	return a.PMS.PublishWorklog(ctx, in.Event)
 }
@@ -66,18 +81,34 @@ func activityOptions() workflow.ActivityOptions {
 
 func StartApprovalWorkflow(ctx workflow.Context, in EventInput) (presale.ApprovalStartResult, error) {
 	var result presale.ApprovalStartResult
-	err := workflow.ExecuteActivity(workflow.WithActivityOptions(ctx, activityOptions()), ActivityStartApproval, in).Get(ctx, &result)
+	err := executeLicensedActivity(ctx, ActivityStartApproval, in, &result)
 	return result, err
 }
 
 func ApprovalActionWorkflow(ctx workflow.Context, in EventInput) error {
-	return workflow.ExecuteActivity(workflow.WithActivityOptions(ctx, activityOptions()), ActivityApprovalAction, in).Get(ctx, nil)
+	return executeLicensedActivity(ctx, ActivityApprovalAction, in, nil)
 }
 
 func WorklogWorkflow(ctx workflow.Context, in EventInput) (string, error) {
 	var result string
-	err := workflow.ExecuteActivity(workflow.WithActivityOptions(ctx, activityOptions()), ActivityPublishWorklog, in).Get(ctx, &result)
+	err := executeLicensedActivity(ctx, ActivityPublishWorklog, in, &result)
 	return result, err
+}
+
+// License deferral is not a business failure: keep the existing workflow and
+// stable EventID pending, without consuming its external-operation retry budget.
+// Use durable Temporal timers, never host sleeps or workflow clock reads.
+func executeLicensedActivity(ctx workflow.Context, name string, in EventInput, result any) error {
+	for {
+		err := workflow.ExecuteActivity(workflow.WithActivityOptions(ctx, activityOptions()), name, in).Get(ctx, result)
+		var deferred *temporal.ApplicationError
+		if err == nil || !errors.As(err, &deferred) || deferred.Type() != licenseDeferredType {
+			return err
+		}
+		if err := workflow.Sleep(ctx, time.Minute); err != nil {
+			return err
+		}
+	}
 }
 
 func Register(w interface {

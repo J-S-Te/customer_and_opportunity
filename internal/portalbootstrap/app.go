@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/commercial"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/filegateway"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/middleware"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/portal/account"
@@ -29,14 +30,26 @@ import (
 )
 
 type App struct {
-	Config      Config
-	DB          *gorm.DB
-	Server      *http.Server
-	auditCancel context.CancelFunc
-	auditDone   chan struct{}
+	licenseCancel context.CancelFunc
+	Config        Config
+	DB            *gorm.DB
+	Server        *http.Server
+	auditCancel   context.CancelFunc
+	auditDone     chan struct{}
 }
 
 func New(ctx context.Context, config Config) (*App, error) {
+	licenseCtx, licenseCancel := context.WithCancel(ctx)
+	started := false
+	defer func() {
+		if !started {
+			licenseCancel()
+		}
+	}()
+	licenseCheck, err := commercial.Start(licenseCtx, "customer_portal")
+	if err != nil {
+		return nil, err
+	}
 	// Portal 在开放端口前真实探测数据库并构造所有信任边界；认证、密钥或机器验签材料有误时
 	// 直接失败，避免部分路由在不完整安全配置下运行。
 	db, err := gorm.Open(mysql.Open(config.MySQLDSN), &gorm.Config{DisableAutomaticPing: true})
@@ -142,7 +155,7 @@ func New(ctx context.Context, config Config) (*App, error) {
 		filingMaterialScanner = filing.NewLocalMaterialScanner(filingMaterialStore)
 	}
 	filingMaterialService := filing.NewMaterialService(filingRepository, filingProtector{codec: codec}, filingMaterialStore, filingMaterialScanner, systemClock{}, requestIDGenerator{})
-	router := NewRouter(RouterDependencies{Config: config, RequestAudit: middleware.RequestAudit(auditStore, middleware.RequestAuditOptions{
+	router := NewRouter(RouterDependencies{Config: config, LicenseCheck: licenseCheck, RequestAudit: middleware.RequestAudit(auditStore, middleware.RequestAuditOptions{
 		TenantID: config.TenantID, ApplicationCode: config.PlatformApplicationCode, EnvironmentCode: config.PlatformEnvironmentCode,
 	}), Account: accountService, BackchannelLogout: newPortalBackchannelLogoutHandler(oidcAdapter, accountRepository, config.OIDCIssuer, config.OIDCClientID, config.BackchannelLogoutTTL).Handle, Projects: projectService, ProjectExports: projectExportService, ProjectMessages: projectMessageService, Reports: reportService, ReportDownloads: reportDownloadService, WorkerReadiness: workerReadiness, WorkerHeartbeatMaxAge: workerruntime.HeartbeatMaxAge, ReportDownloadError: func(ctx context.Context, err error) {
 		slog.Default().ErrorContext(ctx, "Portal report download completion audit failed", "error", err)
@@ -167,10 +180,14 @@ func New(ctx context.Context, config Config) (*App, error) {
 			slog.Default().Warn("Portal audit publisher preflight failed", "error_code", requestaudit.DeliveryErrorCode(err))
 		}
 	}()
-	return &App{Config: config, DB: db, Server: &http.Server{Addr: config.Address, Handler: router, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second}, auditCancel: auditCancel, auditDone: auditDone}, nil
+	started = true
+	return &App{Config: config, DB: db, Server: &http.Server{Addr: config.Address, Handler: router, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second}, auditCancel: auditCancel, auditDone: auditDone, licenseCancel: licenseCancel}, nil
 }
 
 func (a *App) Close(ctx context.Context) error {
+	if a.licenseCancel != nil {
+		a.licenseCancel()
+	}
 	// HTTP 停机与连接池关闭的错误都要保留，便于编排器区分在途请求超时和数据库释放失败。
 	shutdownErr := a.Server.Shutdown(ctx)
 	if a.auditCancel != nil {

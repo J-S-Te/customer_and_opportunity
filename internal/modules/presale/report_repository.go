@@ -12,6 +12,13 @@ func (r *GORMRepository) ReportSummary(ctx context.Context, scope ReportScope, q
 	// 都复用同一范围构造器，避免同一筛选条件在不同图表中产生不同统计结果。
 	worklogWhere, worklogArgs := reportWorklogWhere(scope, query, "w", "r", "o")
 	result := ReportSummary{WorkHours: "0.00"}
+	// GORM Scan initializes its entire destination struct. Separate projections
+	// preserve earlier aggregates when later queries select different columns.
+	worklogs := struct {
+		WorkHours         string
+		ParticipantCount  int64
+		ValidWorklogCount int64
+	}{WorkHours: "0.00"}
 	if err := database.FromContext(ctx, r.db).Raw(`SELECT
 		COALESCE(CAST(SUM(w.work_hours) AS CHAR), '0.00') AS work_hours,
 		COUNT(DISTINCT w.person_id) AS participant_count,
@@ -19,9 +26,10 @@ func (r *GORMRepository) ReportSummary(ctx context.Context, scope ReportScope, q
 		FROM crm_presale_worklogs w
 		JOIN crm_presale_requests r ON r.tenant_id=w.tenant_id AND r.id=w.request_id
 		JOIN crm_opportunities o ON o.tenant_id=r.tenant_id AND o.id=r.opportunity_id
-		WHERE `+worklogWhere, worklogArgs...).Scan(&result).Error; err != nil {
+		WHERE `+worklogWhere, worklogArgs...).Scan(&worklogs).Error; err != nil {
 		return ReportSummary{}, err
 	}
+	result.WorkHours, result.ParticipantCount, result.ValidWorklogCount = worklogs.WorkHours, worklogs.ParticipantCount, worklogs.ValidWorklogCount
 
 	requestWhere, requestArgs := reportRequestWhere(scope, query, "r", "o")
 	if err := database.FromContext(ctx, r.db).Raw(`SELECT COUNT(DISTINCT r.id)
@@ -37,6 +45,10 @@ func (r *GORMRepository) ReportSummary(ctx context.Context, scope ReportScope, q
 	// 统计窗口内仍有效的售前覆盖，而不是历史上只要创建过申请就永久计入覆盖。
 	opportunityWhere, opportunityArgs := reportOpportunityWhere(scope, query, "o")
 	coverageWhere, coverageArgs := reportCoverageRequestWhere(scope, query, "coverage_request")
+	var coverage struct {
+		ActiveOpportunityCount  int64
+		CoveredOpportunityCount int64
+	}
 	if err := database.FromContext(ctx, r.db).Raw(`SELECT
 		COUNT(DISTINCT o.id) AS active_opportunity_count,
 		COUNT(DISTINCT CASE WHEN EXISTS (
@@ -52,10 +64,15 @@ func (r *GORMRepository) ReportSummary(ctx context.Context, scope ReportScope, q
 		WHERE o.tenant_id=? AND o.deleted_at IS NULL AND o.created_at<?
 		  AND (o.opp_status=? OR (o.opp_status=? AND o.stage_changed_at>=?)
 		       OR (o.opp_status=? AND o.end_date>=DATE(?))) AND `+opportunityWhere,
-		append(append([]any{query.To, StatusCompleted, StatusRejected, StatusCancelled, query.From}, coverageArgs...), append([]any{scope.TenantID, query.To, "FOLLOWING", "CLOSED", query.From, "VOID", query.From}, opportunityArgs...)...)...).Scan(&result).Error; err != nil {
+		append(append([]any{query.To, StatusCompleted, StatusRejected, StatusCancelled, query.From}, coverageArgs...), append([]any{scope.TenantID, query.To, "FOLLOWING", "CLOSED", query.From, "VOID", query.From}, opportunityArgs...)...)...).Scan(&coverage).Error; err != nil {
 		return ReportSummary{}, err
 	}
+	result.ActiveOpportunityCount, result.CoveredOpportunityCount = coverage.ActiveOpportunityCount, coverage.CoveredOpportunityCount
 
+	var pms struct {
+		PMSOutboxWorklogCount int64
+		PMSSuccessCount       int64
+	}
 	if err := database.FromContext(ctx, r.db).Raw(`SELECT
 		COUNT(DISTINCT w.id) AS pms_outbox_worklog_count,
 		COUNT(DISTINCT CASE WHEN w.push_status=? THEN w.id END) AS pms_success_count
@@ -64,9 +81,10 @@ func (r *GORMRepository) ReportSummary(ctx context.Context, scope ReportScope, q
 		JOIN crm_presale_requests r ON r.tenant_id=w.tenant_id AND r.id=w.request_id
 		JOIN crm_opportunities o ON o.tenant_id=r.tenant_id AND o.id=r.opportunity_id
 		WHERE e.tenant_id=? AND e.event_type=? AND `+worklogWhere,
-		append([]any{PushSuccess, "presale_worklog", scope.TenantID, "PRESALE_WORKLOG_CREATED"}, worklogArgs...)...).Scan(&result).Error; err != nil {
+		append([]any{PushSuccess, "presale_worklog", scope.TenantID, "PRESALE_WORKLOG_CREATED"}, worklogArgs...)...).Scan(&pms).Error; err != nil {
 		return ReportSummary{}, err
 	}
+	result.PMSOutboxWorklogCount, result.PMSSuccessCount = pms.PMSOutboxWorklogCount, pms.PMSSuccessCount
 	return result, nil
 }
 
