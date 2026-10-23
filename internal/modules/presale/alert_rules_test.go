@@ -9,8 +9,8 @@ import (
 
 func TestAlertRuleDefinitionsAreEditableWithoutEnablingPolicies(t *testing.T) {
 	values := completeAlertRules(nil)
-	if len(values) != 5 {
-		t.Fatalf("expected five supported rule definitions, got %d", len(values))
+	if len(values) != 6 {
+		t.Fatalf("expected six supported rule definitions, got %d", len(values))
 	}
 	for i, value := range values {
 		if value.Type != alertTypes[i] || value.Enabled || value.Configured || value.ConfigVersion != 0 || value.Version != 1 || !value.UpdatedAt.IsZero() {
@@ -35,6 +35,22 @@ func TestAlertRuleDefinitionsPreservePersistedValuesAndSeparateVersions(t *testi
 	}
 	if configured != 1 {
 		t.Fatalf("expected only existing rule configured, got %d", configured)
+	}
+}
+
+func TestExecutionAssignmentOverdueRuleIsEditable(t *testing.T) {
+	if !validAlertType(AlertExecutionAssignmentOverdue) {
+		t.Fatal("execution-assignment overdue rule must be a supported alert type")
+	}
+	found := false
+	for _, value := range completeAlertRules(nil) {
+		if value.Type == AlertExecutionAssignmentOverdue {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("execution-assignment overdue rule must be exposed without enabling a policy")
 	}
 }
 

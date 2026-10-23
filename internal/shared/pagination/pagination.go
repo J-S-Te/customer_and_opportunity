@@ -30,9 +30,9 @@ func Normalize(page, pageSize int) (int, int) {
 	return page, pageSize
 }
 
-// ParseQuery validates the common page/page_size query pair used by list
-// endpoints. Keeping this in the shared pagination package prevents handlers
-// from drifting on bounds and default semantics.
+// ParseQuery 校验列表端点通用的 page/page_size 查询
+// 参数对。统一放在共享分页包中，防止处理器
+// 在边界和默认语义上产生偏差。
 func ParseQuery(pageRaw, pageSizeRaw string) (int, int, error) {
 	page, err := strconv.Atoi(pageRaw)
 	if err != nil || page < 1 {

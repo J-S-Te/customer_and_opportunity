@@ -24,9 +24,9 @@ var (
 	ErrUnavailable   = errors.New("authorization context is unavailable")
 )
 
-// Response is the platform authorization-context wire contract. Application
-// identity is validated independently from user identity so a valid token for
-// another subsystem can never be promoted into the current subsystem session.
+// Response 是平台授权上下文传输契约。应用
+// 身份独立于用户身份校验，确保其他子系统的有效令牌
+// 绝不能升级为当前子系统会话。
 type Response struct {
 	Subject                    string                 `json:"sub"`
 	SubjectID                  string                 `json:"subject_id"`
@@ -60,10 +60,10 @@ type ScopeDecision struct {
 	ProjectIDs      []string
 }
 
-// Validate performs the fail-closed structural and application-boundary checks
-// shared by CRM and Portal. It intentionally does not derive permissions from
-// roles: the platform response is the effective authorization result, while a
-// subsystem catalog is only an upper-bound allow-list.
+// Validate 执行 CRM 和 Portal 共享的结构及应用边界检查，
+// 失败时安全拒绝。它不从角色推导权限：
+// 平台响应才是有效授权结果，
+// 子系统目录仅是权限上限允许列表。
 func Validate(response Response, expected Expectation) ([]sharedauth.DataScope, ScopeDecision, error) {
 	if response.Subject == "" || response.Subject != strings.TrimSpace(response.Subject) ||
 		response.IdentityID == "" || response.IdentityID != strings.TrimSpace(response.IdentityID) || response.TenantID == "" ||
@@ -131,9 +131,9 @@ func containsCanonical(values []string, expected string) bool {
 	return found
 }
 
-// ValidateScopes can be reused at the service boundary after an adapter has
-// decoded a response. Keeping this second validation prevents a test double or
-// alternate adapter from bypassing the same data-scope rules.
+// ValidateScopes 可在适配器解码响应后，复用于
+// 服务边界。保留二次校验，防止测试替身或
+// 其他适配器绕过同一数据范围规则。
 func ValidateScopes(input []sharedauth.DataScope, inputRoles []string, environmentCode, identityID, personID string) ([]sharedauth.DataScope, ScopeDecision, error) {
 	if strings.TrimSpace(environmentCode) == "" || environmentCode != strings.TrimSpace(environmentCode) {
 		return nil, ScopeDecision{}, errors.New("authorization context environment expectation is invalid")
@@ -166,9 +166,9 @@ func ValidateScopes(input []sharedauth.DataScope, inputRoles []string, environme
 		}
 		switch scope.ScopeType {
 		case ScopeApplication, ScopeTenant:
-			// The platform exposes historical TENANT role bindings as APPLICATION.
-			// Both represent all data in the current application and carry no
-			// business scope identifier or environment code.
+			// 平台将历史 TENANT 角色绑定暴露为 APPLICATION。
+			// 两者均表示当前应用内全部数据，不携带
+			// 业务范围标识或环境编码。
 			if scope.ScopeID != "" || scope.EnvironmentCode != "" {
 				return nil, ScopeDecision{}, errors.New("application data scope must not carry scope_id or environment_code")
 			}

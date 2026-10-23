@@ -12,7 +12,7 @@ import (
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/filegatewayclient"
 )
 
-// AttachmentGatewayMode 控制商机附件从既有存储向独立 File Gateway 的渐进迁移。
+// AttachmentGatewayMode 控制商机附件从既有存储向独立 文件网关 的渐进迁移。
 type AttachmentGatewayMode string
 
 const (

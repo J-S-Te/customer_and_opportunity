@@ -321,12 +321,11 @@ func scopedCustomer(db *gorm.DB, principal auth.Principal) *gorm.DB {
 	// 租户条件始终存在；组织范围必须使用令牌中经平台确认的组织集合，空集合按无权限处理，
 	// 不能退化为租户全量或信任请求参数中的组织标识。
 	db = db.Where("crm_customers.tenant_id = ? AND crm_customers.deleted_at IS NULL", principal.TenantID)
-	// 销售角色的客户归属是“创建人本人”，即使平台授权上下文带有
+	// 销售角色的客户归属是“当前负责人”，交接后旧负责人必须立即失去访问；
+	// created_by 只保留创建历史，不能作为访问依据。即使平台授权上下文带有
 	// application/tenant 级数据范围，也不能因此放大 CRM 客户可见范围。
-	// 只有明确的管理角色才可查看全租户客户；这样既保持平台范围语义，
-	// 又满足 CRM 的销售隔离业务规则。
 	if salesOnlyPrincipal(principal) {
-		return db.Where("crm_customers.created_by = ?", principal.UserID)
+		return db.Where("crm_customers.owner_user_id = ?", principal.UserID)
 	}
 	switch principal.ScopeMode {
 	case auth.ScopeAll:
@@ -377,27 +376,23 @@ func (r *GORMRepository) FindByID(ctx context.Context, principal auth.Principal,
 }
 
 func (r *GORMRepository) FindDuplicates(ctx context.Context, tenantID, normalizedName, creditHMAC string, excludeID uint64) ([]DuplicateCandidate, error) {
-	return r.findDuplicates(ctx, tenantID, normalizedName, creditHMAC, excludeID, "")
+	query := database.FromContext(ctx, r.db).Table("crm_customers").Where("tenant_id = ? AND deleted_at IS NULL", tenantID)
+	return r.scanDuplicates(query, normalizedName, creditHMAC, excludeID)
 }
 
 // FindDuplicatesScoped 仅返回当前主体有权看到的重复候选，避免销售通过重复检查接口枚举其他销售的客户。
+// 它与客户读取共用 scopedCustomer 数据范围：纯销售只命中本人负责的客户，组织范围主体只命中本组织客户。
 func (r *GORMRepository) FindDuplicatesScoped(ctx context.Context, principal auth.Principal, normalizedName, creditHMAC string, excludeID uint64) ([]DuplicateCandidate, error) {
-	createdBy := ""
-	if salesOnlyPrincipal(principal) {
-		createdBy = principal.UserID
-	}
-	return r.findDuplicates(ctx, principal.TenantID, normalizedName, creditHMAC, excludeID, createdBy)
+	query := scopedCustomer(database.FromContext(ctx, r.db).Table("crm_customers"), principal)
+	return r.scanDuplicates(query, normalizedName, creditHMAC, excludeID)
 }
 
-func (r *GORMRepository) findDuplicates(ctx context.Context, tenantID, normalizedName, creditHMAC string, excludeID uint64, createdBy string) ([]DuplicateCandidate, error) {
+func (r *GORMRepository) scanDuplicates(query *gorm.DB, normalizedName, creditHMAC string, excludeID uint64) ([]DuplicateCandidate, error) {
 	type row struct {
 		ID                                              uint64
 		CustomerNo, Name, Status, UnifiedCreditCodeHMAC string
 	}
-	query := database.FromContext(ctx, r.db).Table("crm_customers").Select("id,customer_no,name,status,unified_credit_code_hmac").Where("tenant_id = ? AND deleted_at IS NULL", tenantID)
-	if createdBy != "" {
-		query = query.Where("created_by = ?", createdBy)
-	}
+	query = query.Select("id,customer_no,name,status,unified_credit_code_hmac")
 	if excludeID != 0 {
 		query = query.Where("id <> ?", excludeID)
 	}
@@ -537,10 +532,10 @@ func (r *GORMRepository) List(ctx context.Context, principal auth.Principal, que
 	return pagination.Page[Response]{Items: items, Page: query.Page, PageSize: query.PageSize, Total: total}, nil
 }
 
-// customerListUsesSummaryJoin keeps aggregate filtering and aggregate sorting
-// in SQL, while the common list path enriches only the current page below.
-// This avoids scanning every follow-up and opportunity in a tenant merely to
-// render the first page of customers.
+// customerListUsesSummaryJoin 将聚合筛选和聚合排序保留
+// 在 SQL 中，而下方普通列表路径仅补全当前页。
+// 避免仅为展示第一页客户就扫描租户内
+// 全部跟进和商机。
 func customerListUsesSummaryJoin(query ListQuery) bool {
 	return query.LastFollowupFrom != nil || query.LastFollowupTo != nil ||
 		query.SortBy == "last_followup_at" || query.SortBy == "opportunity_amount_sum"
@@ -631,10 +626,10 @@ func buildCustomerListQuery(db *gorm.DB, principal auth.Principal, query ListQue
 		normalized := normalizeName(keyword)
 		pattern := "%" + keyword + "%"
 		normalizedPattern := "%" + normalized + "%"
-		// Search the display value as well as its canonical form.  The display
-		// column keeps the result intuitive for existing rows whose normalized
-		// value was created by an older migration, while the canonical expression
-		// makes names with spaces/case differences searchable.
+		// 同时搜索显示值及规范值。显示
+		// 列使由旧迁移创建规范值的已有行
+		// 仍能获得直观结果；规范表达式
+		// 使包含空格或大小写差异的名称也可被搜索。
 		db = db.Where(`crm_customers.customer_no LIKE ? OR crm_customers.name LIKE ? OR crm_customers.normalized_name LIKE ? OR LOWER(REPLACE(crm_customers.name, ' ', '')) LIKE ?`, pattern, pattern, normalizedPattern, normalizedPattern)
 	}
 	if query.CustomerType != "" {

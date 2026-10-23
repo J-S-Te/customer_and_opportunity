@@ -21,22 +21,22 @@ type Principal struct {
 	PrimaryOrgID string
 	Roles        []string
 	Permissions  map[string]struct{}
-	// DataScopes are supplied by the basic platform authorization-context and
-	// carried only by the authenticated server-side session. Existing CRM
-	// callers remain unaffected when this slice is empty.
+	// DataScopes 由基础平台授权上下文提供，
+	// 仅由已认证的服务端会话携带。当切片为空时，现有 CRM
+	// 调用方不受影响。
 	DataScopes      []DataScope
 	ScopeMode       ScopeMode
 	OrganizationIDs []string
 	RoleConfigHash  string
 	AuthzRevision   uint64
-	// LoginIP is the canonical user login address supplied by a trusted
-	// server-side session or platform authorization context. It is optional:
-	// authenticators must never populate it from an arbitrary request header.
+	// LoginIP 是可信服务端会话或平台授权上下文
+	// 提供的规范用户登录地址。该字段可选：
+	// 认证器不得从任意请求头填入该值。
 	LoginIP string
 }
 
-// DataScope keeps the authorization-context wire contract available to
-// subsystem business code without coupling it to an OIDC adapter.
+// DataScope 为子系统业务代码保留授权上下文的传输契约，
+// 无需将其耦合到 OIDC 适配器。
 type DataScope struct {
 	RoleCode        string `json:"role_code"`
 	ScopeType       string `json:"scope_type"`
@@ -49,11 +49,11 @@ func (p Principal) HasPermission(permission string) bool {
 	return ok
 }
 
-// HasPermissionOrRole is a narrowly-scoped compatibility check for routes whose
-// signed role is the business authority and whose older sessions may not yet
-// contain the corresponding catalog permission. Callers must provide an
-// explicit allow-list; this is intentionally not a general role-to-permission
-// expansion mechanism.
+// HasPermissionOrRole 是范围严格受限的路由兼容检查：路由以
+// 签名角色为业务授权依据，而旧会话可能尚未
+// 包含对应目录权限。调用方必须提供
+// 明确的允许列表；此机制有意不作为通用的角色到权限
+// 扩展机制。
 func HasPermissionOrRole(p Principal, permission string, roles ...string) bool {
 	if p.HasPermission(permission) {
 		return true

@@ -34,7 +34,8 @@ func Operation(kind, method, path string) core.Operation {
 	}
 	if kind == "crm" {
 		switch method + " " + path {
-		case "POST /api/v1/customers/duplicate-check":
+		case "POST /api/v1/customers/duplicate-check", "GET /api/v1/internal/portal-report/download-identity",
+			"GET /api/v1/internal/handover/responsibilities", "GET /api/v1/internal/handover/transfers/:itemID":
 			return core.READ_HISTORY
 		case "POST /api/v1/customer-exports", "POST /api/v1/presale/reports/exports":
 			return core.EXPORT_HISTORY
@@ -61,7 +62,7 @@ func Middleware(check Check, kind, prefix string) gin.HandlerFunc {
 		if check == nil {
 			c.Next()
 			return
-		} // Test/embed callers only; production startup always installs a gate.
+		} // 仅供测试或嵌入调用方使用；生产启动始终安装门禁。
 		path := strings.TrimPrefix(c.FullPath(), strings.TrimRight(prefix, "/"))
 		if err := check(c.Request.Context(), Operation(kind, c.Request.Method, path)); err != nil {
 			response.Error(c, apperror.New(http.StatusForbidden, "COMMERCIAL_LICENSE_DENIED", "商业授权不允许此操作，请联系管理员"))

@@ -98,8 +98,8 @@ func (d *Dispatcher) Run(ctx context.Context) {
 	var lastFailureLog time.Time
 	for {
 		if err := d.runOnce(ctx); err != nil && !errors.Is(err, context.Canceled) {
-			// Bound failure logging during an outage. Never emit raw database or
-			// HTTP errors, which may contain audit payloads or credentials.
+			// 故障期间限制失败日志量。禁止输出可能包含审计载荷或凭据的
+			// 原始数据库或 HTTP 错误。
 			if lastFailureLog.IsZero() || time.Since(lastFailureLog) >= time.Minute {
 				slog.ErrorContext(ctx, "request audit dispatch failed", "application_code", d.application,
 					"environment_code", d.environment, "worker_id", d.workerID, "error_code", deliveryErrorCode(err))
@@ -114,10 +114,10 @@ func (d *Dispatcher) Run(ctx context.Context) {
 	}
 }
 
-// ValidateConfiguration performs a read-only, authenticated preflight against
-// the platform audit contract. Callers should report its error but must not use
-// it to block business startup: the durable Outbox remains the fallback while
-// the platform is temporarily unavailable.
+// ValidateConfiguration 根据平台审计契约执行已认证的只读
+// 预检。调用方应报告错误，但不得据此
+// 阻止业务启动：平台临时不可用时，持久化 Outbox
+// 仍作为回退保障。
 func (d *Dispatcher) ValidateConfiguration(ctx context.Context) error {
 	token, err := d.accessToken(ctx)
 	if err != nil {
@@ -173,10 +173,10 @@ func (d *Dispatcher) runOnce(ctx context.Context) error {
 			matching = append(matching, value)
 		}
 	}
-	// A configuration mismatch cannot heal by replaying the same event. Keep
-	// its evidence in RETRY with no scheduled attempt; operators can explicitly
-	// reschedule it after establishing a valid source. Do not poison good rows
-	// that happened to share this claim batch.
+	// 配置不匹配无法靠重放同一事件恢复。将其
+	// 证据保留在 RETRY，且不安排重试；操作员建立
+	// 有效来源后可显式重新排期。不要影响恰好处于
+	// 同一认领批次的正常记录。
 	if len(mismatched) > 0 {
 		if err := d.store.HoldSourceMismatch(ctx, d.workerID, mismatched, now); err != nil {
 			return fmt.Errorf("hold audit source mismatch: %w", err)
@@ -224,8 +224,17 @@ func (d *Dispatcher) deliver(ctx context.Context, values []Record) error {
 		if value.ActorName != "" {
 			event["actor_name"] = value.ActorName
 		}
+		// 统一审计来源协议：登录地址、操作地址与来源标记分别上报。旧字段
+		// user_login_ip 继续保留，保证滚动升级期间平台两种读法都能工作。
 		if value.UserLoginIP != "" {
+			event["login_ip"] = value.UserLoginIP
 			event["user_login_ip"] = value.UserLoginIP
+		}
+		if value.ClientIP != "" {
+			event["client_ip"] = value.ClientIP
+		}
+		if value.IPSource != "" {
+			event["ip_source"] = value.IPSource
 		}
 		events = append(events, event)
 	}
@@ -379,7 +388,7 @@ func deliveryErrorCode(err error) string {
 	return "PLATFORM_AUDIT_DELIVERY_FAILED"
 }
 
-// DeliveryErrorCode provides a stable, credential-free diagnostic category for
-// health endpoints and structured logs. It never returns remote response
-// bodies, which could contain sensitive implementation details.
+// DeliveryErrorCode 为健康端点及结构化日志提供稳定、无凭据的
+// 诊断分类。绝不返回可能包含敏感实现细节的
+// 远程响应体。
 func DeliveryErrorCode(err error) string { return deliveryErrorCode(err) }

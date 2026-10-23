@@ -59,6 +59,14 @@ var baseFiles = map[Schema][]string{
 		"000108_unbounded_credit_application_reason.up.sql",
 		"000110_opportunity_catalog.up.sql",
 		"000111_opportunity_catalog_initializations.up.sql",
+		"000112_handover_protocol.up.sql",
+		"000113_request_audit_ip_provenance.up.sql",
+		"000114_presale_two_level_assignment.up.sql",
+		"000115_presale_execution_assignment_notifications.up.sql",
+		"000116_credit_payment_reversal.up.sql",
+		"000117_presale_multi_approval_nodes.up.sql",
+		"000120_customer_import_source_lifecycle.up.sql",
+		"000121_presale_notification_identity.up.sql",
 	},
 	Portal: {
 		"000008_create_portal_core.up.sql", "000011_portal_session_claims.up.sql", "000016_portal_project_sync.up.sql",
@@ -74,7 +82,8 @@ var baseFiles = map[Schema][]string{
 		"000079_portal_session_data_scopes.up.sql",
 		"000095_add_user_login_ip_to_portal_request_audit_outbox.up.sql", "000097_add_login_ip_to_portal_sessions.up.sql", "000102_portal_project_account_bindings.up.sql",
 		"000104_portal_oidc_backchannel_logout.up.sql",
-		"000109_portal_report_revision_ledger.up.sql",
+		"000109_portal_report_revision_ledger.up.sql", "000118_portal_project_permission_modes.up.sql",
+		"000119_add_ip_provenance_to_portal_request_audit_outbox.up.sql",
 	},
 }
 

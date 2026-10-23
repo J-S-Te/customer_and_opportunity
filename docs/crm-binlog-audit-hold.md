@@ -1,5 +1,7 @@
 # CRM 审计重试与 binlog 优化
 
+> 2026-10-13核验：暂停语义与当前Store/Dispatcher一致；2026-09-07数量、备份和binlog速率保留历史含义，本轮没有实时数据库检查或重放。
+
 ## 暂停语义
 
 来源不匹配的审计事件保留 `delivery_status=RETRY`、原始事件 ID、来源环境和 attempts，设置 `next_attempt_at=NULL` 并清除领取租约。该状态不自动重试、不算投递成功，也不删除证据。现有领取条件 `next_attempt_at<=now` 排除 NULL；恢复流程仅恢复 STARTED 和超时 PROCESSING，不会激活暂停事件。无需 schema 迁移，也兼容旧投递器。
@@ -32,3 +34,11 @@
 - `go test ./...`、`go build ./...`、`go vet ./...`。
 - `REQUESTAUDIT_TEST_DSN` 指向一次性 MySQL 的 `requestaudit_test` 数据库时，运行 `go test ./internal/shared/requestaudit -count=1`，验证暂停后不被领取/恢复、租约归属、证据保留、租户隔离和正常投递。
 - 未提供专用测试 DSN 时，MySQL 集成用例跳过；普通单元用例仍执行。不要把测试 DSN 指向业务数据库。
+
+## 当前只读核对和处置边界
+
+操作者应有customer.audit.read；登录CRM后读取 /customer-opportunity/api/v1/audit-outbox/status，按当前租户核对retry_count、held_count、oldest_undelivered_at。held_count属于retry_count，暂停后oldest可能仍很旧；这不是投递器故障或清空积压的充分判断。CRM与Portal分别使用application_request_audit_outbox和portal_application_request_audit_outbox，不可混领。
+
+先核对应用/环境来源和正确目标投递器，再比较正常来源事件是否继续收到平台回执。SOURCE_MISMATCH保留RETRY并去掉调度；401/403不按来源暂停处理，须查机器凭据和平台绑定。当前API装配会启动内置Dispatcher，预检平台暂时失败只告警并保留outbox，配置必填缺失仍可让构造失败。
+
+历史脚本限定2026-09-07故障范围，不是通用日常暂停按钮；默认inspect只读。任何apply、恢复调度或重放应另行获得目标环境变更授权、备份并核对精确event_id集合。成功必须有原事件ID的ACCEPTED/DUPLICATE回执与本地送达状态，不能以held_count减少宣称已送达。本轮只静态核验下列源码：internal/shared/requestaudit/store.go、dispatcher.go、internal/bootstrap/app.go、internal/portalbootstrap/app.go。详细依据见 [核验记录](../../.ai/modules/operation-docs-crm-20261013.md)。

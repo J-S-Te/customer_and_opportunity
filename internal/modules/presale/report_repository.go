@@ -12,8 +12,8 @@ func (r *GORMRepository) ReportSummary(ctx context.Context, scope ReportScope, q
 	// 都复用同一范围构造器，避免同一筛选条件在不同图表中产生不同统计结果。
 	worklogWhere, worklogArgs := reportWorklogWhere(scope, query, "w", "r", "o")
 	result := ReportSummary{WorkHours: "0.00"}
-	// GORM Scan initializes its entire destination struct. Separate projections
-	// preserve earlier aggregates when later queries select different columns.
+	// GORM Scan 会初始化整个目标结构体。采用独立投影，
+	// 避免后续查询选择不同列时覆盖之前的聚合结果。
 	worklogs := struct {
 		WorkHours         string
 		ParticipantCount  int64
@@ -142,6 +142,10 @@ func (r *GORMRepository) ReportDistribution(ctx context.Context, scope ReportSco
 		return nil, ErrInvalidInput
 	}
 	var values []ReportDistributionRow
+	limit := 500
+	if query.distributionLimit == 10001 {
+		limit = query.distributionLimit
+	}
 	err := database.FromContext(ctx, r.db).Raw(fmt.Sprintf(`SELECT %s,
 		COALESCE(CAST(SUM(w.work_hours) AS CHAR), '0.00') AS work_hours,
 		COUNT(DISTINCT w.person_id) AS participant_count,
@@ -149,13 +153,13 @@ func (r *GORMRepository) ReportDistribution(ctx context.Context, scope ReportSco
 		FROM crm_presale_worklogs w
 		JOIN crm_presale_requests r ON r.tenant_id=w.tenant_id AND r.id=w.request_id
 		JOIN crm_opportunities o ON o.tenant_id=r.tenant_id AND o.id=r.opportunity_id
-		WHERE %s GROUP BY %s ORDER BY SUM(w.work_hours) DESC,dimension_id ASC LIMIT 500`, selection, where, groups[dimension]), args...).Scan(&values).Error
+		WHERE %s GROUP BY %s ORDER BY SUM(w.work_hours) DESC,dimension_id ASC LIMIT %d`, selection, where, groups[dimension], limit), args...).Scan(&values).Error
 	return values, err
 }
 
-// ReportFilterOptions uses the same worklog/time/person scope as the report
-// itself. This is deliberately separate from the request-list filter options:
-// “参与人员” means a person who recorded valid work, not merely an assignee.
+// ReportFilterOptions 使用与报表自身相同的工时、时间及人员范围，
+// 有意与请求列表筛选选项分离：
+// “参与人员”指记录了有效工作的人，而不仅是被指派人。
 func (r *GORMRepository) ReportFilterOptions(ctx context.Context, scope ReportScope, query ReportQuery) (RequestFilterOptions, error) {
 	where, args := reportWorklogWhere(scope, query, "w", "r", "o")
 	result := RequestFilterOptions{}

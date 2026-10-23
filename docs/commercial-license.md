@@ -21,7 +21,7 @@ must be per component; secrets must not enter source control or logs.
 
 API policy uses a concrete reviewed route map, not the HTTP method as a license
 policy. Unknown routes are business mutations. Existing historical queries and
-customer/report/project/filing export remain allowed after expiry, with unchanged
+customer/report/project export policy remains allowed after expiry, with unchanged
 identity, permission and data-scope checks. Portal GET /activate is a business
 operation, whereas login/logout, account safety revocation, personal read markers
 and CRM invite verification remain operational. Invite consumption and new account
@@ -41,3 +41,15 @@ workspace is required for production builds.
 Code integration does not prove enrollment or deployment. Platform must deliver
 each component's binding and verify ready/snapshot/ACK before ENFORCED. Current
 tests use isolated in-memory fixtures; they do not write the CRM business database.
+
+## 操作步骤、导出限制与验收（2026-10-13）
+
+CRM和门户独立售卖。管理员通过受控流程下发每个选中组件的独立身份，许可按实际批准集合核对，不能固定写CRM8/门户2。当前生产runtime_services为CRM API加8个Worker，Portal为API/report-worker/invite-compensation-worker；env_file消费者用于重载，不等于许可批准集合。成功须部署READY、ENFORCED、snapshot_current=true与全部选中成员当期ACK，API确认不能代替其他成员。
+
+到期立即限制新客户、导入预览/提交、商机推进、售前业务、门户邀请消费/新账号及新报告申请，没有写入宽限。既有授权项保留且生效、可信快照及原权限正常才有历史读/导出；客户导出是真实同步CSV，frontend customer_opportunity/api/customer.js → POST customer-exports → routes权限/前缀及商业EXPORT_HISTORY → customer.Service.CreateExport分页List/范围和负责人解析 → 临时CSV响应后清理，不依赖导出Worker。
+
+分类允许EXPORT_HISTORY不制造功能：售前报表RequestExport仍CRM_PRESALE_REPORT_EXPORT_UNAVAILABLE；备案PDF已有真实渲染器，需PDF配置/字体、权限、版本及加密审计，缺依赖PORTAL_FILING_EXPORT_UNAVAILABLE。已有报告下载和新申请不同；项目PDF需独立Worker/字体/任务快照及真实文件，不能以任务号代替。当前生产清单未启动的Worker需另走受控接入，不据许可分类宣称已运行。
+
+失效邀请验证/审计、账号安全撤销、个人已读及既有通知投递保留；邀请consume/provision、角色映射、新owner/派工/进度通知投影仍受业务门禁。失败区分业务权限、缺授权/到期、未实现导出、Worker/文件依赖及数据范围；修真实配置后重试，不停所有Worker或伪造成功。
+
+依据：internal/bootstrap/app.go/portalbootstrap装配 → commercial/gate.go和routes.go → modules/customer handler/service/repository、presale/report.go、portalbootstrap/router.go → workerlicense、projectexportworker/worker.go、presaleworkflow及portalinvitecompensationworker任务复核 → 数据/队列。当前前端商业授权未提交改动只隐藏未购买许可卡片，不改变CRM售卖或权限。此轮未执行导出、Worker或业务库验收。

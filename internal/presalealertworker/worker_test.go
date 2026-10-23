@@ -28,6 +28,24 @@ func TestEvaluateRuleBoundaries(t *testing.T) {
 	}
 }
 
+func TestExecutionAssignmentOverdueRuleNotifiesSelectedTeamLead(t *testing.T) {
+	t.Parallel()
+	entered := time.Date(2026, 10, 18, 1, 0, 0, 0, time.UTC)
+	request := scanRequest{Status: presale.StatusPendingExecutionAssignment, TeamLeadPersonID: "lead-1", StatusEnteredAt: entered}
+	rule := presale.AlertRule{Type: presale.AlertExecutionAssignmentOverdue, ThresholdHours: 24}
+	basis, due, recipients, active := evaluate(rule, request, nil, entered.Add(24*time.Hour))
+	if !active || !basis.Equal(entered) || !due.Equal(entered.Add(24*time.Hour)) {
+		t.Fatalf("evaluation=(%v,%s,%s)", active, basis, due)
+	}
+	if len(recipients) != 1 || recipients[0] != (recipientTarget{Kind: presale.AlertRecipientUser, ID: "lead-1"}) {
+		t.Fatalf("recipients=%v", recipients)
+	}
+	request.Status = presale.StatusApprovedPendingAssignment
+	if _, _, _, active = evaluate(rule, request, nil, entered.Add(25*time.Hour)); active {
+		t.Fatal("execution-assignment overdue must not fire before a team lead is selected")
+	}
+}
+
 func TestExecutionRulesAndRecipientDeduplication(t *testing.T) {
 	t.Parallel()
 	end := time.Date(2026, 8, 2, 8, 0, 0, 0, time.UTC)
@@ -148,8 +166,8 @@ func TestPendingAndUnreadAlertsAreCancelledAfterTerminalTransition(t *testing.T)
 
 func TestAlertIdentityIsStableForDatabaseDeduplication(t *testing.T) {
 	t.Parallel()
-	// The unique key is tenant/request/type/rule-version/recipient. This pure
-	// assertion guards the business identity used by INSERT ... ON CONFLICT.
+	// 唯一键由租户、请求、类型、规则版本及接收者组成。此纯
+	// 断言保护 INSERT ... ON CONFLICT 使用的业务身份。
 	identity := func(tenant string, requestID uint64, typ presale.AlertType, version uint64, kind, recipient string) string {
 		return tenant + "/" + kind + "/" + recipient + "/" + string(typ) + "/" + time.Unix(int64(requestID), int64(version)).UTC().Format(time.RFC3339Nano)
 	}

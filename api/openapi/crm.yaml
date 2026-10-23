@@ -146,6 +146,10 @@ paths:
     put: {$ref: '#/components/x-operations/completeOpportunityTerminalTodo'}
   /api/v1/opportunities/{id}/contract-transfer:
     post: {$ref: '#/components/x-operations/transferOpportunityContract'}
+  /api/v1/contract-transfer-outbox/failed:
+    get: {$ref: '#/components/x-operations/listContractTransferOutboxFailed'}
+  /api/v1/contract-transfer-outbox/failed/{id}/retry:
+    post: {$ref: '#/components/x-operations/retryContractTransferOutboxFailed'}
   /api/v1/internal/opportunities/{id}/contract-link:
     post: {$ref: '#/components/x-operations/receiveOpportunityContractLink'}
   /api/v1/internal/contract-references/customers/{customerID}:
@@ -196,6 +200,12 @@ paths:
     put: {$ref: '#/components/x-operations/replacePresaleAssignments'}
   /api/v1/presale/requests/{id}/execution-department:
     put: {$ref: '#/components/x-operations/selectPresaleExecutionDepartment'}
+  /api/v1/presale/requests/{id}/executor-assignments:
+    put: {$ref: '#/components/x-operations/replacePresaleExecutorAssignments'}
+  /api/v1/presale/requests/{id}/execution-takeover:
+    put: {$ref: '#/components/x-operations/takeoverExecutingTeamLead'}
+  /api/v1/presale/requests/{id}/executor-assignment-rejection:
+    post: {$ref: '#/components/x-operations/rejectPresaleExecutionAssignment'}
   /api/v1/presale/requests/{id}/progress:
     post: {$ref: '#/components/x-operations/addPresaleProgress'}
   /api/v1/presale/requests/{id}/complete:
@@ -594,7 +604,7 @@ components:
       operationId: listOwnerDirectory
       tags: [Owner directory]
       security: [{crmSession: []}]
-      x-permission: customer.create|customer.update|opportunity.create|opportunity.owner.change
+      x-permission: customer.read|customer.create|customer.update|opportunity.create|opportunity.owner.change|opportunity.team.manage|presale.report|presale.assign
       description: |-
         Proxies the platform machine directory and returns only active internal
         OIDC subjects paired with their effective CRM-authorized organization
@@ -603,6 +613,7 @@ components:
       parameters:
         - {name: keyword, in: query, schema: {type: string, maxLength: 100}, description: Display-name search or exact user ID.}
         - {name: user_id, in: query, schema: {type: string, minLength: 1, maxLength: 64}, description: Exact OIDC subject lookup; mutually exclusive with keyword.}
+        - {name: assignment_duty, in: query, schema: {type: string, enum: [TEAM_LEAD, EXECUTOR]}, description: Project eligible roles from the published CRM permission catalog before directory pagination. Saving still revalidates current eligibility.}
         - {name: page, in: query, schema: {type: integer, minimum: 1, default: 1}}
         - {name: page_size, in: query, schema: {type: integer, minimum: 1, maximum: 50, default: 20}}
       responses:
@@ -693,6 +704,19 @@ components:
     launchBid: {<<: *opportunityIDRead, operationId: launchBid, x-permission: opportunity.update, description: Returns 503 unless the signed short-lived launch adapter is configured.}
     completeOpportunityTerminalTodo: {<<: *opportunityIDRead, operationId: completeOpportunityTerminalTodo, x-permission: opportunity.stage.change}
     transferOpportunityContract: {<<: *opportunityIDRead, operationId: transferOpportunityContract, x-permission: opportunity.contract.transfer, parameters: [{$ref: '#/components/parameters/OpportunityID'}, {$ref: '#/components/parameters/IdempotencyKey'}]}
+    listContractTransferOutboxFailed:
+      operationId: listContractTransferOutboxFailed
+      tags: [Opportunity]
+      x-permission: opportunity.contract.transfer
+      security: [{crmSession: []}]
+      responses: {'200': {description: Failed contract-transfer outbox rows for the authenticated tenant.}, '403': {$ref: '#/components/responses/Error'}}
+    retryContractTransferOutboxFailed:
+      operationId: retryContractTransferOutboxFailed
+      tags: [Opportunity]
+      x-permission: opportunity.contract.transfer
+      security: [{crmSession: []}]
+      parameters: [{name: id, in: path, required: true, schema: {type: integer, minimum: 1}}]
+      responses: {'200': {description: Event reset to PENDING.}, '403': {$ref: '#/components/responses/Error'}, '404': {$ref: '#/components/responses/Error'}}
     receiveOpportunityContractLink: {<<: *opportunityIDRead, operationId: receiveOpportunityContractLink, x-permission: opportunity.signed.write, parameters: [{$ref: '#/components/parameters/OpportunityID'}, {$ref: '#/components/parameters/IdempotencyKey'}]}
     getOpportunityAttachmentCapabilities: {<<: *opportunityIDRead, operationId: getOpportunityAttachmentCapabilities, x-permission: opportunity.attachment.read}
     listOpportunityAttachments: {<<: *opportunityIDRead, operationId: listOpportunityAttachments, x-permission: opportunity.attachment.read}
@@ -739,7 +763,10 @@ components:
     presaleApprovalHistory: {<<: *presaleIDRead, operationId: presaleApprovalHistory}
     listPresaleAssignments: {<<: *presaleIDRead, operationId: listPresaleAssignments}
     replacePresaleAssignments: {<<: *presaleIDRead, operationId: replacePresaleAssignments, x-permission: presale.assign, parameters: [{$ref: '#/components/parameters/NumericID'}, {$ref: '#/components/parameters/IdempotencyKey'}]}
-    selectPresaleExecutionDepartment: {<<: *presaleIDRead, operationId: selectPresaleExecutionDepartment, x-permission: presale.assign, parameters: [{$ref: '#/components/parameters/NumericID'}, {$ref: '#/components/parameters/IdempotencyKey'}]}
+    replacePresaleExecutorAssignments: {<<: *presaleIDRead, operationId: replacePresaleExecutorAssignments, x-permission: presale.assign, parameters: [{$ref: '#/components/parameters/NumericID'}, {$ref: '#/components/parameters/IdempotencyKey'}], description: TS-011 level two. Only the team lead recorded on the request may replace current executors; the technical director and other team leads receive 403.}
+    takeoverExecutingTeamLead: {<<: *presaleIDRead, operationId: takeoverExecutingTeamLead, x-permission: presale.assign, parameters: [{$ref: '#/components/parameters/NumericID'}, {$ref: '#/components/parameters/IdempotencyKey'}], description: Technical director or CRM super admin replaces the team lead of an EXECUTING request; current executors, worklogs and status are preserved.}
+    rejectPresaleExecutionAssignment: {<<: *presaleIDRead, operationId: rejectPresaleExecutionAssignment, x-permission: presale.assign, parameters: [{$ref: '#/components/parameters/NumericID'}, {$ref: '#/components/parameters/IdempotencyKey'}], description: TS-011 Q4. The recorded team lead rejects the execution assignment and the request returns to APPROVED_PENDING_ASSIGNMENT for reselection.}
+    selectPresaleExecutionDepartment: {<<: *presaleIDRead, operationId: selectPresaleExecutionDepartment, x-permission: presale.assign, parameters: [{$ref: '#/components/parameters/NumericID'}, {$ref: '#/components/parameters/IdempotencyKey'}], description: Without team_lead_person_id this keeps the historical TS-003 department-only behavior. A two-level rule snapshot requires department_id and team_lead_person_id and advances to PENDING_EXECUTION_ASSIGNMENT.}
     addPresaleProgress: {<<: *presaleIDRead, operationId: addPresaleProgress, x-permission: presale.progress, parameters: [{$ref: '#/components/parameters/NumericID'}, {$ref: '#/components/parameters/IdempotencyKey'}]}
     completePresaleRequest: {<<: *presaleIDRead, operationId: completePresaleRequest, x-permission: presale.complete, parameters: [{$ref: '#/components/parameters/NumericID'}], requestBody: {$ref: '#/components/requestBodies/PresaleComplete'}}
     cancelPresaleRequest: {<<: *presaleIDRead, operationId: cancelPresaleRequest, x-permission: service applies applicant/manager policy, parameters: [{$ref: '#/components/parameters/NumericID'}, {$ref: '#/components/parameters/IdempotencyKey'}]}

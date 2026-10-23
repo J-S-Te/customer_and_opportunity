@@ -2,6 +2,7 @@ package presale
 
 import (
 	"encoding/json"
+	"errors"
 	"testing"
 )
 
@@ -73,5 +74,31 @@ func TestAssignmentActionAllowedFollowsRuleSnapshot(t *testing.T) {
 	}
 	if assignmentActionAllowed(actor, instance, ApprovalNodeDepartment) {
 		t.Fatal("technical director should not be allowed to select a department")
+	}
+}
+
+func TestApprovalReplaySupportsThirdAndLaterApprovalNodes(t *testing.T) {
+	nodes, err := json.Marshal([]ApprovalNode{
+		{ID: "a1", Name: "销售", Type: ApprovalNodeApproval, RoleCode: "sales_director"},
+		{ID: "a2", Name: "技术", Type: ApprovalNodeApproval, RoleCode: "technical_director"},
+		{ID: "a3", Name: "复核", Type: ApprovalNodeApproval, RoleCode: "sales_director"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	instance := &ApprovalInstance{RequestID: 9, NodesJSON: nodes}
+	actor := Actor{TenantID: "tenant-a", UserID: "sales", Roles: map[string]bool{"sales_director": true}}
+	if next, ok := nextApprovalNode(instance, 2); !ok || next != 3 {
+		t.Fatalf("next approval node=%d ok=%v, want 3", next, ok)
+	}
+	if got := approvalReplayAction(3, "PASS"); got != "NODE_3_PASS" {
+		t.Fatalf("replay action=%s", got)
+	}
+	replay := &MutationReplay{RequestID: 9, ActorID: "sales", Operation: "APPROVAL_ACTION", Action: "NODE_3_PASS", RequestHash: "hash"}
+	if err := validateApprovalReplay(replay, actor, 9, "PASS", "hash", instance); err != nil {
+		t.Fatalf("third-node replay rejected: %v", err)
+	}
+	if err := validateApprovalReplay(replay, actor, 9, "REJECT", "hash", instance); !errors.Is(err, ErrIdempotencyConflict) {
+		t.Fatalf("wrong action replay err=%v", err)
 	}
 }

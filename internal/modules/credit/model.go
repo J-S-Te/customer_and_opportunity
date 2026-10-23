@@ -9,17 +9,24 @@ const (
 	LevelD = "D"
 )
 
+const (
+	PaymentEventCompleted = "customer.credit.payment.completed.v1"
+	PaymentEventReversed  = "customer.credit.payment.reversed.v1"
+)
+
 type PaymentEvent struct {
-	EventID      string     `json:"event_id" binding:"required,max=128"`
-	PaymentID    string     `json:"payment_id" binding:"required,max=128"`
-	CustomerID   uint64     `json:"customer_id" binding:"required"`
-	DueDate      time.Time  `json:"due_date" binding:"required"`
-	PaidDate     *time.Time `json:"paid_date"`
-	DueAmount    string     `json:"due_amount" binding:"required"`
-	PaidAmount   string     `json:"paid_amount" binding:"required"`
-	ContractNo   string     `json:"contract_no" binding:"max=64"`
-	PeriodNo     string     `json:"period_no" binding:"max=64"`
-	SourceSystem string     `json:"source_system" binding:"max=64"`
+	EventID             string     `json:"event_id" binding:"required,max=128"`
+	EventType           string     `json:"event_type"`
+	PaymentID           string     `json:"payment_id" binding:"required,max=128"`
+	ReversalOfPaymentID string     `json:"reversal_of_payment_id"`
+	CustomerID          uint64     `json:"customer_id" binding:"required"`
+	DueDate             time.Time  `json:"due_date" binding:"required"`
+	PaidDate            *time.Time `json:"paid_date"`
+	DueAmount           string     `json:"due_amount" binding:"required"`
+	PaidAmount          string     `json:"paid_amount" binding:"required"`
+	ContractNo          string     `json:"contract_no" binding:"max=64"`
+	PeriodNo            string     `json:"period_no" binding:"max=64"`
+	SourceSystem        string     `json:"source_system" binding:"max=64"`
 }
 
 type LevelResponse struct {
@@ -35,30 +42,55 @@ type LevelResponse struct {
 }
 
 type PaymentRecord struct {
-	ID           uint64     `json:"id"`
-	EventID      string     `json:"event_id"`
-	PaymentID    string     `json:"payment_id"`
-	Evaluation   string     `json:"evaluation"`
-	GraceDays    int        `json:"grace_days"`
-	DueDate      *time.Time `json:"due_date,omitempty"`
-	PaidDate     *time.Time `json:"paid_date,omitempty"`
-	DueAmount    string     `json:"due_amount"`
-	PaidAmount   string     `json:"paid_amount"`
-	ContractNo   string     `json:"contract_no,omitempty"`
-	PeriodNo     string     `json:"period_no,omitempty"`
-	SourceSystem string     `json:"source_system,omitempty"`
-	IgnoreReason string     `json:"ignore_reason,omitempty"`
-	EvaluatedAt  time.Time  `json:"evaluated_at"`
+	ID                  uint64     `json:"id"`
+	EventID             string     `json:"event_id"`
+	PaymentID           string     `json:"payment_id"`
+	EventType           string     `json:"event_type,omitempty"`
+	ReversalOfPaymentID string     `json:"reversal_of_payment_id,omitempty"`
+	Evaluation          string     `json:"evaluation"`
+	GraceDays           int        `json:"grace_days"`
+	DueDate             *time.Time `json:"due_date,omitempty"`
+	PaidDate            *time.Time `json:"paid_date,omitempty"`
+	DueAmount           string     `json:"due_amount"`
+	PaidAmount          string     `json:"paid_amount"`
+	ContractNo          string     `json:"contract_no,omitempty"`
+	PeriodNo            string     `json:"period_no,omitempty"`
+	SourceSystem        string     `json:"source_system,omitempty"`
+	IgnoreReason        string     `json:"ignore_reason,omitempty"`
+	EvaluatedAt         time.Time  `json:"evaluated_at"`
+	ReversedAt          *time.Time `json:"reversed_at,omitempty"`
+	ReversalEventID     string     `json:"reversal_event_id,omitempty"`
 }
 
 type creditPaymentRecord struct {
-	ID                                                                      uint64 `gorm:"primaryKey"`
-	TenantID, EventID, PaymentID, Evaluation                                string
-	CustomerID                                                              uint64
-	DueDate, PaidDate                                                       *time.Time
-	DueAmount, PaidAmount, ContractNo, PeriodNo, SourceSystem, IgnoreReason string
-	GraceDays                                                               int
-	EvaluatedAt, CreatedAt                                                  time.Time
+	ID                  uint64     `gorm:"primaryKey"`
+	TenantID            string     `gorm:"column:tenant_id"`
+	EventID             string     `gorm:"column:event_id"`
+	PaymentID           string     `gorm:"column:payment_id"`
+	EventType           string     `gorm:"column:event_type"`
+	ReversalOfPaymentID string     `gorm:"column:reversal_of_payment_id"`
+	CustomerID          uint64     `gorm:"column:customer_id"`
+	DueDate             *time.Time `gorm:"column:due_date"`
+	PaidDate            *time.Time `gorm:"column:paid_date"`
+	DueAmount           string     `gorm:"column:due_amount"`
+	PaidAmount          string     `gorm:"column:paid_amount"`
+	ContractNo          string     `gorm:"column:contract_no"`
+	PeriodNo            string     `gorm:"column:period_no"`
+	SourceSystem        string     `gorm:"column:source_system"`
+	Evaluation          string     `gorm:"column:evaluation"`
+	IgnoreReason        string     `gorm:"column:ignore_reason"`
+	GraceDays           int        `gorm:"column:grace_days"`
+	PrevLevel           *string    `gorm:"column:prev_level"`
+	PrevOntimeCount     *uint32    `gorm:"column:prev_ontime_count"`
+	PrevLateCount       *uint32    `gorm:"column:prev_late_count"`
+	PrevLastEvalAt      *time.Time `gorm:"column:prev_last_eval_at"`
+	ResultLevel         *string    `gorm:"column:result_level"`
+	ResultOntimeCount   *uint32    `gorm:"column:result_ontime_count"`
+	ResultLateCount     *uint32    `gorm:"column:result_late_count"`
+	ReversedAt          *time.Time `gorm:"column:reversed_at"`
+	ReversalEventID     string     `gorm:"column:reversal_event_id"`
+	EvaluatedAt         time.Time  `gorm:"column:evaluated_at"`
+	CreatedAt           time.Time  `gorm:"column:created_at"`
 }
 
 func (creditPaymentRecord) TableName() string { return "crm_customer_credit_payment_records" }
@@ -123,7 +155,7 @@ type PendingApplication struct {
 
 type ApplyRequest struct {
 	TargetLevel    string `json:"target_level"`
-	Reason         string `json:"reason"`
+	Reason         string `json:"reason" binding:"omitempty,max=500"`
 	IdempotencyKey string `json:"-"`
 }
 type RuleSettings struct {
@@ -145,8 +177,8 @@ type UpdateRuleSettingsRequest struct {
 	LevelStep       int    `json:"level_step"`
 	Enabled         bool   `json:"enabled"`
 	Reason          string `json:"reason"`
-	// UpdatedAt is the snapshot timestamp returned by GET. It is required when
-	// replacing an existing rule so concurrent administrator edits fail closed.
+	// UpdatedAt 是 GET 返回的快照时间戳。替换
+	// 现有规则时必须提供，以在管理员并发编辑时安全拒绝冲突。
 	UpdatedAt *time.Time `json:"updated_at"`
 }
 type Statistics struct {
@@ -191,6 +223,6 @@ type ApprovalTask struct {
 func (ApprovalTask) TableName() string { return "crm_approval_tasks" }
 
 type DecisionRequest struct {
-	Opinion string `json:"opinion"`
+	Opinion string `json:"opinion" binding:"omitempty,max=500"`
 	Version uint64 `json:"version"`
 }

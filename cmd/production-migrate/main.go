@@ -1,6 +1,6 @@
-// Command production-migrate applies the immutable CRM or Portal migration plan
-// with a durable checkpoint for every SQL statement. It is intended only for the
-// controlled production release container and refuses unmanaged existing schemas.
+// Command production-migrate 应用不可变的 CRM 或 Portal 迁移计划，
+// 并为每条 SQL 语句持久化检查点。该命令仅用于
+// 受控生产发布容器，拒绝未纳管的既有数据库结构。
 package main
 
 import (

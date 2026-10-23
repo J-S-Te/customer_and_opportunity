@@ -23,6 +23,14 @@ func TestPresaleActorUsesPlatformUserIDForInternalAssignmentIdentity(t *testing.
 	}
 }
 
+func TestPresaleActorWithoutPMSIdentityUsesPlatformUserID(t *testing.T) {
+	principal := auth.Principal{TenantID: "tenant-a", UserID: "user-a"}
+	actor, err := (presaleActorResolver{}).Resolve(auth.WithPrincipal(context.Background(), principal))
+	if err != nil || actor.UserID != "user-a" || actor.PersonID != "user-a" {
+		t.Fatalf("actor=%+v error=%v", actor, err)
+	}
+}
+
 func TestPresaleOpportunityPrincipalPreservesSignedDataScope(t *testing.T) {
 	t.Parallel()
 	for _, test := range []struct {

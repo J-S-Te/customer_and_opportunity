@@ -52,7 +52,7 @@ func runtimeCapabilities(config Config) RuntimeCapabilities {
 		"opportunity_attachment_download": configuredCapability(config.AttachmentLocalEnabled, "ATTACHMENT_STORAGE_NOT_CONFIGURED"),
 		"customer_project_history":        configuredCapability(config.PortalProjectHistoryEnabled, "PROJECT_HISTORY_PROVIDER_NOT_CONFIGURED"),
 		"customer_export":                 configuredCapability(true, ""),
-		"presale_report_export":           configuredCapability(false, "PRESALE_EXPORT_PROVIDER_NOT_CONFIGURED"),
+		"presale_report_export":           configuredCapability(true, ""),
 		"presale_request_submission":      configuredCapability(true, ""),
 	}
 }

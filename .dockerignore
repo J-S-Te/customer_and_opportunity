@@ -17,6 +17,9 @@
 !internal/**
 !migrations/
 !migrations/**
+!assets/
+!assets/fonts/
+!assets/fonts/**
 **/.env
 **/.env.*
 **/*.pem

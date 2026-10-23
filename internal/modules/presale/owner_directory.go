@@ -12,9 +12,9 @@ const (
 	ownerDirectoryMaxPages = 200
 )
 
-// listOwnerDirectoryUsers follows the platform owner-directory contract, whose maximum page
-// size is 50. Department selection and validation must use the same complete, paginated view;
-// requesting an oversized page makes the platform correctly reject the query with 422.
+// listOwnerDirectoryUsers 遵循平台 owner-directory 契约，每页最多
+// 50 条。部门选择及校验必须使用同一个完整分页视图；
+// 请求超大分页时，平台会正确地以 422 拒绝查询。
 func listOwnerDirectoryUsers(ctx context.Context, catalog ownerdirectory.Catalog) ([]ownerdirectory.User, error) {
 	result := make([]ownerdirectory.User, 0)
 	for pageNumber := 1; pageNumber <= ownerDirectoryMaxPages; pageNumber++ {
@@ -30,9 +30,9 @@ func listOwnerDirectoryUsers(ctx context.Context, catalog ownerdirectory.Catalog
 	return nil, ownerdirectory.ErrUnavailable
 }
 
-// resolveOwnerDisplayNames fills user names from the platform's authoritative user
-// directory. CRM tokens do not require the optional OIDC name claim, so business
-// snapshots and read models must not assume that Actor.UserName is always present.
+// resolveOwnerDisplayNames 从平台权威用户目录补全
+// 用户名。CRM 令牌不要求可选的 OIDC name 声明，因此业务
+// 快照及读取模型不得假设 Actor.UserName 始终存在。
 func resolveOwnerDisplayNames(ctx context.Context, catalog ownerdirectory.Catalog, userIDs []string) (map[string]string, error) {
 	names := make(map[string]string)
 	if catalog == nil {

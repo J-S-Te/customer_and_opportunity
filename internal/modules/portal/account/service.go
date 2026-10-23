@@ -104,9 +104,9 @@ type ReconciliationSnapshot struct {
 	Version         uint64         `json:"version,omitempty"`
 }
 
-// ReconciliationSnapshots is a bounded, machine-only read projection. Missing
-// subjects are returned explicitly and no search, contact details, tokens or
-// display names are exposed.
+// ReconciliationSnapshots 是有界、仅供机器调用的读取投影。缺失
+// 主体会显式返回，不暴露搜索、联系方式、令牌或
+// 显示名称。
 func (s *Service) ReconciliationSnapshots(ctx context.Context, tenantID string, subjects []string) ([]ReconciliationSnapshot, error) {
 	tenantID = strings.TrimSpace(tenantID)
 	if tenantID == "" || tenantID != strings.TrimSpace(tenantID) || len(subjects) == 0 || len(subjects) > 100 {
@@ -315,8 +315,8 @@ func (s *Service) CompleteLogin(ctx context.Context, state, code string, metadat
 		return LoginResult{}, ErrInvalidClaims
 	}
 	if claims.IdentityID == "" {
-		// Compatibility for in-process legacy adapters; the production OIDC
-		// adapter always requires identity_id in the ID token/context.
+		// 兼容进程内旧版适配器；生产 OIDC
+		// 适配器始终要求 ID 令牌及上下文包含 identity_id。
 		claims.IdentityID = claims.Subject
 	}
 	if activation.ExpectedPlatformUserID != "" && claims.IdentityID != activation.ExpectedPlatformUserID {
@@ -474,10 +474,10 @@ func validPortalAuthorization(claims Claims, environmentCode string) bool {
 		// 客户上下文与管理员身份混淆。
 		return decision.AllowAll && len(decision.SelfIDs) == 0
 	}
-	// Portal data is always bound to the server-side IdentityLink customer.
-	// APPLICATION/TENANT/ENVIRONMENT and a matching SELF scope may authorize
-	// that customer; ORG/PROJECT-only scopes cannot be safely translated to a
-	// customer and therefore fail closed.
+	// Portal 数据始终绑定服务端 IdentityLink 客户。
+	// APPLICATION/TENANT/ENVIRONMENT 及匹配的 SELF 范围可授权
+	// 该客户；仅有 ORG/PROJECT 的范围无法安全映射为
+	// 客户，因此安全拒绝。
 	return decision.AllowAll || len(decision.SelfIDs) > 0
 }
 

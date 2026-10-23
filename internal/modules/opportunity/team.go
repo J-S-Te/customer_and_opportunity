@@ -43,6 +43,9 @@ func (s *Service) ChangeOwner(ctx context.Context, id uint64, input ChangeOwnerR
 	if reason == "" {
 		return nil, apperror.New(422, "CRM_OPPORTUNITY_CHANGE_REASON_REQUIRED", "change reason is required")
 	}
+	if err = s.ensureOwnerNotFrozen(ctx, principal.TenantID, ownerID); err != nil {
+		return nil, err
+	}
 	if s.owners != nil {
 		if err = s.owners.Validate(ctx, ownerID, ownerOrgID); err != nil {
 			return nil, err
@@ -212,6 +215,18 @@ func (s *Service) ReplaceMembers(ctx context.Context, id uint64, input ReplaceMe
 	}
 	if model.Version != input.Version {
 		return nil, ErrVersionConflict
+	}
+	existingMembers := map[string]struct{}{}
+	for _, member := range current {
+		existingMembers[member.UserID] = struct{}{}
+	}
+	for _, member := range desired {
+		if _, exists := existingMembers[member.UserID]; exists {
+			continue
+		}
+		if err = s.ensureOwnerNotFrozen(ctx, principal.TenantID, member.UserID); err != nil {
+			return nil, err
+		}
 	}
 	before := memberResponses(current)
 	now := s.now()

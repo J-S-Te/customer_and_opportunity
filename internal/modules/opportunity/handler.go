@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"mime"
+	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/apperror"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/auth"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/requestbody"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/response"
 )
@@ -19,6 +21,56 @@ type Handler struct {
 	service     *Service
 	alerts      *StageAlertService
 	attachments *AttachmentService
+	outbox      *GORMRepository
+}
+
+func (h *Handler) UseOutboxAdmin(repo *GORMRepository) *Handler {
+	h.outbox = repo
+	return h
+}
+
+func outboxTenant(c *gin.Context) string {
+	p, _ := auth.FromContext(c.Request.Context())
+	return p.TenantID
+}
+
+func (h *Handler) ListFailedContractTransfers(c *gin.Context) {
+	if h.outbox == nil {
+		response.Error(c, apperror.New(http.StatusServiceUnavailable, "CRM_OUTBOX_UNAVAILABLE", "转合同队列运维未配置"))
+		return
+	}
+	rows, err := h.outbox.ListFailedContractTransfers(c.Request.Context(), outboxTenant(c), 100)
+	if err != nil {
+		response.Error(c, err)
+		return
+	}
+	items := make([]gin.H, 0, len(rows))
+	for _, row := range rows {
+		items = append(items, gin.H{"id": row.ID, "event_id": row.EventID, "status": row.Status, "retry_count": row.RetryCount, "last_error": row.LastErrorSummary, "created_at": row.CreatedAt})
+	}
+	response.OK(c, gin.H{"items": items})
+}
+
+func (h *Handler) RetryFailedContractTransfer(c *gin.Context) {
+	if h.outbox == nil {
+		response.Error(c, apperror.New(http.StatusServiceUnavailable, "CRM_OUTBOX_UNAVAILABLE", "转合同队列运维未配置"))
+		return
+	}
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		response.Error(c, apperror.New(http.StatusBadRequest, "CRM_OUTBOX_ID_INVALID", "队列事件 ID 不合法"))
+		return
+	}
+	ok, err := h.outbox.RetryFailedContractTransfer(c.Request.Context(), outboxTenant(c), id)
+	if err != nil {
+		response.Error(c, err)
+		return
+	}
+	if !ok {
+		response.Error(c, apperror.New(http.StatusNotFound, "CRM_OUTBOX_NOT_FOUND", "未找到可重试的转合同事件"))
+		return
+	}
+	response.OK(c, gin.H{"id": id, "status": "PENDING"})
 }
 
 func (h *Handler) UseAttachments(service *AttachmentService) *Handler {
@@ -788,9 +840,9 @@ func (h *Handler) ContractLinkCallback(c *gin.Context) {
 		response.Error(c, invalidJSON())
 		return
 	}
-	// The event ID is the durable business idempotency coordinate. Requiring
-	// the transport key to carry the same value prevents a proxy or caller from
-	// accidentally replaying a different payload under an unrelated key.
+	// 事件 ID 是持久业务幂等坐标。要求
+	// 传输键采用相同值，可防止代理或调用方
+	// 意外以无关键重放不同载荷。
 	if key := strings.TrimSpace(c.GetHeader("Idempotency-Key")); key == "" || key != strings.TrimSpace(input.EventID) {
 		response.Error(c, apperror.New(422, "CRM_CONTRACT_LINK_INVALID", "Idempotency-Key must match event_id"))
 		return

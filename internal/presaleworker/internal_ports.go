@@ -7,10 +7,10 @@ import (
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/presale"
 )
 
-// internalPorts is used only by the explicitly enabled Temporal internal mode.
-// The approval state is projected by the CRM service; these deterministic
-// receipts keep the outbox/Temporal activities idempotent without requiring an
-// external approval engine or PMS during the migration period.
+// internalPorts 仅用于显式启用的 Temporal 内部模式。
+// 审批状态由 CRM 服务投影；这些确定性
+// 回执保证 Outbox/Temporal 活动幂等，迁移期间
+// 无需外部审批引擎或 PMS。
 type internalPorts struct{}
 
 func (internalPorts) Start(_ context.Context, event presale.OutboxEvent) (presale.ApprovalStartResult, error) {

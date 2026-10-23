@@ -38,15 +38,29 @@ func TestPortalAuthorizationContextCarriesDataScopes(t *testing.T) {
 	}
 }
 
-func TestPortalAuthorizationContextOmitsInvalidLoginIP(t *testing.T) {
+// AUD-IP-2026：办公网/VPN 等私网登录地址是合法来源，必须保留；
+// 只有非法字面量才丢弃（见 TestPortalAuthorizationContextOmitsMalformedLoginIP）。
+func TestPortalAuthorizationContextKeepsPrivateLoginIP(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, `{"sub":"subject-a","identity_id":"subject-a","tenant_id":"tenant-a","client_id":"portal-prod-web","application_code":"customer_portal","environment_code":"prod","roles":["portal_customer"],"permissions":["project.read"],"data_scopes":[{"role_code":"portal_customer","scope_type":"APPLICATION","scope_id":"","environment_code":""}],"authorization_revision":7,"user_login_ip":"172.18.0.2"}`)
 	}))
 	defer server.Close()
 	adapter := &OIDCAdapter{platformBaseURL: server.URL, httpClient: server.Client(), expectedContext: sharedauthorization.Expectation{ClientID: "portal-prod-web", ApplicationCode: "customer_portal", EnvironmentCode: "prod"}}
 	claims, err := adapter.authorizationContext(context.Background(), "access-token")
+	if err != nil || claims.LoginIP != "172.18.0.2" {
+		t.Fatalf("claims=%#v err=%v，私网登录地址应保留", claims, err)
+	}
+}
+
+func TestPortalAuthorizationContextOmitsMalformedLoginIP(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"sub":"subject-a","identity_id":"subject-a","tenant_id":"tenant-a","client_id":"portal-prod-web","application_code":"customer_portal","environment_code":"prod","roles":["portal_customer"],"permissions":["project.read"],"data_scopes":[{"role_code":"portal_customer","scope_type":"APPLICATION","scope_id":"","environment_code":""}],"authorization_revision":7,"user_login_ip":"not-an-ip"}`)
+	}))
+	defer server.Close()
+	adapter := &OIDCAdapter{platformBaseURL: server.URL, httpClient: server.Client(), expectedContext: sharedauthorization.Expectation{ClientID: "portal-prod-web", ApplicationCode: "customer_portal", EnvironmentCode: "prod"}}
+	claims, err := adapter.authorizationContext(context.Background(), "access-token")
 	if err != nil || claims.LoginIP != "" {
-		t.Fatalf("claims=%#v err=%v", claims, err)
+		t.Fatalf("claims=%#v err=%v，非法地址必须丢弃", claims, err)
 	}
 }
 

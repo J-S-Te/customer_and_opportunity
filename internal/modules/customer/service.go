@@ -28,6 +28,7 @@ import (
 )
 
 type Service struct {
+	freeze        FreezeChecker
 	db            *gorm.DB
 	repo          Repository
 	create        CreateRepository
@@ -40,6 +41,7 @@ type Service struct {
 	projects      ProjectHistoryReader
 	owners        ownerdirectory.Catalog
 	importGateway ImportFileGateway
+	importSources ImportSourceRepository
 	now           func() time.Time
 }
 
@@ -63,6 +65,9 @@ func NewService(db *gorm.DB, repo Repository, auditWriter audit.Writer, codec *s
 	}
 	if imports, ok := repo.(ImportRepository); ok {
 		service.imports = imports
+	}
+	if sources, ok := repo.(ImportSourceRepository); ok {
+		service.importSources = sources
 	}
 	return service
 }
@@ -117,6 +122,9 @@ func (s *Service) Create(ctx context.Context, request CreateRequest) (*Response,
 		return nil, ErrCreateIdempotencyUnavailable
 	}
 	request = inheritCreateOwner(normalizeCreateRequest(request), principal)
+	if err := s.ensureOwnerNotFrozen(ctx, principal.TenantID, request.OwnerUserID); err != nil {
+		return nil, err
+	}
 	if request.Reason == "" {
 		request.Reason = "创建客户档案"
 	}
@@ -291,19 +299,54 @@ func (s *Service) createRequestHash(principal auth.Principal, input CreateReques
 }
 
 func (s *Service) validateCreateDuplicates(ctx context.Context, principal auth.Principal, request CreateRequest, excludeID uint64) error {
-	duplicates, err := s.repo.FindDuplicates(ctx, principal.TenantID, normalizeName(request.Name), s.codec.HMAC(request.UnifiedCreditCode), excludeID)
+	normalizedName, creditHMAC := normalizeName(request.Name), s.codec.HMAC(request.UnifiedCreditCode)
+	duplicates, err := s.repo.FindDuplicates(ctx, principal.TenantID, normalizedName, creditHMAC, excludeID)
 	if err != nil {
 		return err
 	}
 	for _, candidate := range duplicates {
 		if candidate.ExactCode {
-			return apperror.WithDetails(ErrDuplicateCode, duplicates)
+			return s.duplicateConflictError(ctx, principal, normalizedName, creditHMAC, excludeID, duplicates, ErrDuplicateCode)
 		}
 	}
 	if len(duplicates) > 0 && (!request.DuplicateOverride || !principal.HasPermission("customer.duplicate.override") || request.DuplicateOverrideReason == "") {
-		return apperror.WithDetails(ErrDuplicateName, duplicates)
+		return s.duplicateConflictError(ctx, principal, normalizedName, creditHMAC, excludeID, duplicates, ErrDuplicateName)
 	}
 	return nil
+}
+
+// duplicateConflictError 保留租户级唯一性判定，但错误明细只包含调用者数据范围内
+// 的候选；范围外命中只返回受限冲突和需管理员处理的提示，不披露名称、编号、状态或 ID。
+func (s *Service) duplicateConflictError(ctx context.Context, principal auth.Principal, normalizedName, creditHMAC string, excludeID uint64, tenantDuplicates []DuplicateCandidate, base *apperror.Error) error {
+	visible := make([]DuplicateCandidate, 0)
+	// 仓储未实现可见范围扩展点时不回退到租户全量明细，宁可只给安全冲突提示。
+	if scoped, ok := s.repo.(ScopedDuplicateRepository); ok {
+		result, err := scoped.FindDuplicatesScoped(ctx, principal, normalizedName, creditHMAC, excludeID)
+		if err != nil {
+			return err
+		}
+		visible = append(visible, result...)
+	}
+	visibleIDs := make(map[uint64]struct{}, len(visible))
+	for _, candidate := range visible {
+		visibleIDs[candidate.ID] = struct{}{}
+	}
+	restricted := false
+	for _, candidate := range tenantDuplicates {
+		if _, exists := visibleIDs[candidate.ID]; !exists {
+			restricted = true
+			break
+		}
+	}
+	// 保留基础错误作为 Cause，调用方仍可用 errors.Is 判断冲突类型；明细另行附加。
+	conflict := *base
+	conflict.Details = DuplicateConflictDetails{
+		VisibleCandidates:   visible,
+		RestrictedConflict:  restricted,
+		AdminReviewRequired: restricted,
+	}
+	conflict.Cause = base
+	return &conflict
 }
 
 func (s *Service) replayCreate(ctx context.Context, principal auth.Principal, request CreateRequest, requestHash string, prior *CreateIdempotency) (*Response, error) {
@@ -392,23 +435,29 @@ func (s *Service) Update(ctx context.Context, id uint64, request UpdateRequest) 
 	if current.Version != request.Version {
 		return nil, ErrVersionConflict
 	}
+	if current.OwnerUserID != request.OwnerUserID {
+		if err := s.ensureOwnerNotFrozen(ctx, principal.TenantID, request.OwnerUserID); err != nil {
+			return nil, err
+		}
+	}
 	creditHMACValue := ""
 	if request.UnifiedCreditCode != nil {
 		creditHMACValue = s.codec.HMAC(*request.UnifiedCreditCode)
 	} else if current.UnifiedCreditCodeHMAC != nil {
 		creditHMACValue = *current.UnifiedCreditCodeHMAC
 	}
-	duplicates, err := s.repo.FindDuplicates(ctx, principal.TenantID, normalizeName(request.Name), creditHMACValue, id)
+	normalizedName := normalizeName(request.Name)
+	duplicates, err := s.repo.FindDuplicates(ctx, principal.TenantID, normalizedName, creditHMACValue, id)
 	if err != nil {
 		return nil, err
 	}
 	for _, candidate := range duplicates {
 		if candidate.ExactCode {
-			return nil, apperror.WithDetails(ErrDuplicateCode, duplicates)
+			return nil, s.duplicateConflictError(ctx, principal, normalizedName, creditHMACValue, id, duplicates, ErrDuplicateCode)
 		}
 	}
 	if len(duplicates) > 0 && (!request.DuplicateOverride || !principal.HasPermission("customer.duplicate.override") || strings.TrimSpace(request.DuplicateOverrideReason) == "") {
-		return nil, apperror.WithDetails(ErrDuplicateName, duplicates)
+		return nil, s.duplicateConflictError(ctx, principal, normalizedName, creditHMACValue, id, duplicates, ErrDuplicateName)
 	}
 	creditCipher, creditHMAC := current.UnifiedCreditCodeCipher, current.UnifiedCreditCodeHMAC
 	if request.UnifiedCreditCode != nil {
@@ -603,8 +652,8 @@ func validateCustomerMasterData(name, customerType, industry, region, reason str
 	return nil
 }
 
-// validCustomerBusinessText rejects placeholder values such as "1" while keeping
-// legitimate historical values (for example, "3M公司" and "制造业") editable.
+// validCustomerBusinessText 拒绝“1”等占位值，同时保留
+// 合法历史值（例如“3M公司”和“制造业”）的可编辑性。
 func validCustomerBusinessText(value string, max int) bool {
 	value = strings.TrimSpace(value)
 	if value == "" || utf8.RuneCountInString(value) > max || unsafeText(value) {
@@ -651,8 +700,8 @@ func (s *Service) List(ctx context.Context, query ListQuery) (pagination.Page[Re
 	return page, nil
 }
 
-// withOwnerDisplayNames enriches read responses with the authoritative directory
-// name. A temporary directory failure must not block otherwise authorized reads.
+// withOwnerDisplayNames 使用权威目录名称补全读取响应。
+// 目录临时故障不得阻塞其他条件已授权的读取。
 func (s *Service) withOwnerDisplayNames(ctx context.Context, responses []Response) []Response {
 	if s.owners == nil || len(responses) == 0 {
 		return responses
@@ -827,8 +876,8 @@ type exportOwnerName struct {
 	userName, organizationName string
 }
 
-// exportOwnerNames resolves the current authoritative display labels. Exported
-// files deliberately never expose internal user or organization identifiers.
+// exportOwnerNames 解析当前权威显示名称。导出
+// 文件有意不暴露内部用户或组织标识。
 func (s *Service) exportOwnerNames(ctx context.Context, items []Response) (map[uint64]exportOwnerName, error) {
 	if s.owners == nil {
 		return nil, ownerdirectory.ErrUnavailable

@@ -127,22 +127,54 @@ func validateApprovalRule(rule ApprovalRule) error {
 		return ErrInvalidInput
 	}
 	seen := map[string]bool{}
-	assignmentRoles := map[string]ApprovalNodeType{}
+	assignmentTypes := map[ApprovalNodeType]bool{}
+	roleActions := map[string]map[ApprovalNodeType]bool{}
 	for _, node := range rule.Nodes {
-		if strings.TrimSpace(node.ID) == "" || strings.TrimSpace(node.Name) == "" || seen[node.ID] || (node.Type != ApprovalNodeApproval && node.Type != ApprovalNodeDepartment && node.Type != ApprovalNodePerson) {
+		if strings.TrimSpace(node.ID) == "" || strings.TrimSpace(node.Name) == "" || seen[node.ID] ||
+			(node.Type != ApprovalNodeApproval && !IsAssignmentNodeType(node.Type)) {
 			return ErrInvalidInput
 		}
-		if node.Type == ApprovalNodeDepartment || node.Type == ApprovalNodePerson {
+		if IsAssignmentNodeType(node.Type) {
 			roleCode := strings.TrimSpace(node.RoleCode)
 			if roleCode == "" {
 				return ErrInvalidInput
 			}
-			if _, exists := assignmentRoles[roleCode]; exists {
+			// 同一角色可以同时承担部门和团队负责人两个动作，但同一动作类型
+			// 只能配置一次，避免出现两个互相竞争的部门或执行人节点。
+			if assignmentTypes[node.Type] {
 				return ErrInvalidInput
 			}
-			assignmentRoles[roleCode] = node.Type
+			assignmentTypes[node.Type] = true
+			if roleActions[roleCode] == nil {
+				roleActions[roleCode] = map[ApprovalNodeType]bool{}
+			}
+			roleActions[roleCode][node.Type] = true
 		}
 		seen[node.ID] = true
+	}
+	// 历史一级指派与两级执行指派不能混用在同一条规则里。
+	if assignmentTypes[ApprovalNodePerson] &&
+		(assignmentTypes[ApprovalNodeTeamLead] || assignmentTypes[ApprovalNodeExecutor]) {
+		return ErrInvalidInput
+	}
+	// 两级执行指派必须完整配置：选部门 -> 选团队负责人 -> 选执行人。
+	if assignmentTypes[ApprovalNodeTeamLead] != assignmentTypes[ApprovalNodeExecutor] ||
+		(assignmentTypes[ApprovalNodeTeamLead] && !assignmentTypes[ApprovalNodeDepartment]) {
+		return ErrInvalidInput
+	}
+	if assignmentTypes[ApprovalNodeTeamLead] {
+		// 第①级是同一个人的原子操作；如果部门和团队负责人分属两个角色，
+		// 任何单一主体都无法完成提交，规则不可用。
+		combined := false
+		for _, actions := range roleActions {
+			if actions[ApprovalNodeDepartment] && actions[ApprovalNodeTeamLead] {
+				combined = true
+				break
+			}
+		}
+		if !combined {
+			return ErrInvalidInput
+		}
 	}
 	return nil
 }

@@ -491,8 +491,8 @@ func TestRiskFreezeCreatesScopedAlertAndReviewIsIdempotent(t *testing.T) {
 	if len(repo.riskAlerts) != 1 || repo.riskAlerts[0].TenantID != actor.TenantID || repo.riskAlerts[0].CustomerID != actor.CustomerID || repo.riskAlerts[0].AccountID != actor.AccountID || repo.riskAlerts[0].RiskCode != "TRUSTED_GATEWAY_RULE" || repo.riskAlerts[0].Status != RiskAlertOpen {
 		t.Fatalf("risk alert=%+v", repo.riskAlerts)
 	}
-	// The in-memory repository must reflect the transaction's optimistic update
-	// before the independently authenticated operator can review the alert.
+	// 内存仓储必须反映事务的乐观更新，
+	// 之后独立认证的操作员才能审查告警。
 	repo.grant.Status, repo.grant.ActiveSlot, repo.grant.RiskState, repo.grant.Version = GrantFrozen, nil, "TRUSTED_GATEWAY_RULE", 2
 	command := RiskReviewCommand{ExpectedVersion: 1, Action: RiskActionUnfreeze, Reason: "reviewed trusted gateway evidence", IdempotencyKey: "review-1"}
 	view, err := service.ReviewRiskAlert(context.Background(), actor.TenantID, "machine:operator", "risk-alert-1", command)

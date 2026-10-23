@@ -11,4 +11,12 @@
 - `Idempotency-Key` 只标注真实 handler 消费该头的命令；乐观锁使用请求体内 `version` 或 `expected_version`，当前 handler 不读取 `If-Match`，文档不虚构该头。
 - 下载接口成功响应是二进制流，不使用 JSON envelope；健康检查也是独立简单 JSON。其余 JSON 接口统一使用 `code/message/request_id/data/details` envelope。
 
-对象存储、扫描、加密水印、风险网关、基础平台管理、审批、PMS、报价/投标和公安提交均为外部 Provider；本文档只覆盖本仓库当前入口，不声明这些尚未签版的正式 Provider 字段。
+本文只覆盖本仓库当前入口，不替外部Provider签版字段。静态文件校验、AES-GCM私有存储、审计风控和PDF水印已有本地实现/装配，不把它们全部归为未交付外部Provider；已有外部报告服务的真实协议见[接入说明](../../docs/portal-report-service-integration.md)。
+
+## 2026-10-13操作口径核对
+
+调用者先分清CRM浏览器/api/v1、CRM机器/api/v1/internal、Portal浏览器/api/v1、Portal机器/internal。机器Client不能当浏览器角色使用；每个Handler/Service仍校验资源、scope、版本或幂等条件，OpenAPI覆盖路由不证明外部Provider可用。
+
+新增信用/目录/两级指派及execution-takeover路由须核对当前routes.go；multipart与二进制响应不同于JSON。信用决定未消费幂等键重放，依靠PENDING/version，不凭请求头宣称全接口持久幂等。备案exports已有真实渲染器，报告下载可完整装配风险/水印；缺配置失败关闭，路径存在仍不证明目标环境可用。
+
+操作成功以资源状态/历史、实际文件或外部回执为准。400/422纠正输入，401登录，403核对权限范围，409刷新版本/查询原结果，503核对capability与运行依赖；记录request_id并保持敏感头不入文档。本轮静态源码依据见 [核验记录](../../../.ai/modules/operation-docs-crm-20261013.md)。

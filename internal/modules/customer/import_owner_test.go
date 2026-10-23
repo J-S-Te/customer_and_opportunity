@@ -168,8 +168,8 @@ func TestCommitImportRowRejectsRevokedOwnerBeforeCustomerWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	row := &ImportRow{Status: "READY", CommandCipher: cipher}
-	// No customer repository is provided: reaching duplicate lookup or writes
-	// would panic and fail this test instead of hiding a revoked-owner bypass.
+	// 不提供客户仓储：若进入查重或写入路径，
+	// 测试将 panic 并失败，避免掩盖已撤销负责人的授权绕过。
 	if err = service.commitImportRow(ctx, principal, &ImportJob{}, row); err != nil {
 		t.Fatal(err)
 	}

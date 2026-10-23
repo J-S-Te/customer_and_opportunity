@@ -1,7 +1,7 @@
 package commercial
 
-// These exact historical read routes are reviewed against OpenAPI and handlers.
-// Unknown routes remain MUTATE_BUSINESS, regardless of their HTTP method.
+// 这些精确匹配的历史读取路由已对照 OpenAPI 和处理器审查。
+// 未知路由始终归为 MUTATE_BUSINESS，与 HTTP 方法无关。
 var historicalRoutes = map[string]map[string]bool{
 	"crm": {
 		"GET /api/v1/customers/:id/credit":                 true,
@@ -20,6 +20,7 @@ var historicalRoutes = map[string]map[string]bool{
 		"GET /api/v1/capabilities":                                        true,
 		"GET /api/v1/audit-outbox/status":                                 true,
 		"GET /api/v1/owner-directory":                                     true,
+		"GET /api/v1/contract-transfer-outbox/failed":                     true,
 		"GET /api/v1/customers":                                           true,
 		"GET /api/v1/customers/imports/template":                          true,
 		"GET /api/v1/customers/imports/:jobNo/errors":                     true,

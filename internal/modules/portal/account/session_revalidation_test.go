@@ -189,9 +189,9 @@ func TestAuthenticateSessionRevokesAllSubjectSessionsWhenDataScopesChange(t *tes
 		t.Fatalf("unchanged data scopes error=%v", err)
 	}
 
-	// Data ranges are part of the authorization snapshot, even when the Portal
-	// currently remains customer-bound through its identity link. A changed
-	// scope must not be silently retained by an already-issued local session.
+	// 数据范围属于授权快照，即使 Portal 当前
+	// 仍通过身份关联绑定客户。已签发的本地会话
+	// 不得静默保留已变更的范围。
 	oidc.claims.DataScopes[0].ScopeID = "customer-8"
 	repo.session.AuthorizationCheckedAt = now.Add(-authorizationCheckInterval - time.Second)
 	if _, err := service.AuthenticateSession(context.Background(), "tenant-a", "session-token", true); !errors.Is(err, ErrInvalidLoginState) {

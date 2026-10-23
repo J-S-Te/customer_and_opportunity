@@ -13,10 +13,10 @@ import (
 	"time"
 )
 
-// brokerVerifier records a successful CRM Keycloak login with the base
-// platform.  The access token is used only by the CRM server: it carries the
-// platform session (sid) and subject which the receiving endpoint binds to the
-// supplied identity_id.  It is never exposed to the browser.
+// brokerVerifier 向基础平台登记成功的 CRM Keycloak 登录。
+// 访问令牌仅由 CRM 服务端使用，携带
+// 平台会话（sid）和主体；接收端点将其绑定到
+// 传入的 identity_id。令牌绝不暴露给浏览器。
 type brokerVerifier interface {
 	Verify(context.Context, verifiedClaims) error
 }

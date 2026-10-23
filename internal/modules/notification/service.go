@@ -123,18 +123,23 @@ func personalInboxQuery(db *gorm.DB, principal auth.Principal) *gorm.DB {
 		scopes = append(scopes, "(type IN (?,?,?,?,?,?) AND recipient_id=?)")
 		args = append(args, TypeCreditRuleChanged, TypeCreditRuleCapReached, TypeCreditApplicationPending, TypeCreditApplicationApproved, TypeCreditApplicationRejected, TypeCreditApplicationInvalidated, principal.UserID)
 	}
-	if principal.HasPermission("presale.read") && principal.PersonID != "" {
-		scopes = append(scopes, "(type IN (?,?,?) AND recipient_id=?)")
-		args = append(args, TypePresaleAssigneeAdded, TypePresaleAssigneeRemoved, TypePresaleProgressAssignee, principal.PersonID)
+	if principal.HasPermission("presale.read") {
+		scopes = append(scopes, "(type IN (?,?,?) AND recipient_namespace=? AND recipient_id=?)")
+		args = append(args, TypePresaleAssigneeAdded, TypePresaleAssigneeRemoved, TypePresaleProgressAssignee, "USER", principal.UserID)
+		// 旧通知/旧 PERSON 事件未可靠区分平台用户和 PMS 人员，禁止跨命名空间猜测。
+		// 仅两种已认证身份相同的主体可兼容读取未标记历史记录；其余等待受控身份核对。
+		if principal.PersonID != "" && principal.PersonID == principal.UserID {
+			scopes = append(scopes, "(type IN (?,?,?) AND recipient_namespace IN (?,?) AND recipient_id=?)")
+			args = append(args, TypePresaleAssigneeAdded, TypePresaleAssigneeRemoved, TypePresaleProgressAssignee, "", "PERSON", principal.UserID)
+		}
 	}
 	if principal.HasPermission("presale.read") {
 		scopes = append(scopes, "(type=? AND recipient_id=?)")
 		args = append(args, TypePresaleProgressApplicant, principal.UserID)
-		scopes = append(scopes, "(type IN (?,?,?) AND recipient_id=?)")
-		args = append(args, TypePresaleApprovalPending, TypePresaleApprovalApproved, TypePresaleApprovalRejected, principal.UserID)
+		scopes = append(scopes, "(type IN (?,?,?,?,?,?) AND recipient_id=?)")
+		args = append(args, TypePresaleApprovalPending, TypePresaleApprovalApproved, TypePresaleApprovalRejected,
+			TypePresaleExecutorPending, TypePresaleExecutionRejected, TypePresaleTeamLeadInvalid, principal.UserID)
 	}
-	// 即使主体拥有售前权限，缺少平台签发的人员标识时也不能查看人员维度的指派通知；
-	// 返回空集比拿用户 ID 猜测人员身份更安全。
 	if len(scopes) == 0 {
 		return query.Where("1=0")
 	}

@@ -27,6 +27,22 @@ func validPortalConfig() Config {
 	}
 }
 
+func TestPortalPDFConfigMustBePaired(t *testing.T) {
+	config := validPortalConfig()
+	config.PDFConfigRoot = "/tmp/portal-pdf"
+	if err := config.validate(); err == nil {
+		t.Fatal("unpaired PDF config accepted")
+	}
+	config.CJKFontPath = "/opt/fonts/approved-cjk.ttf"
+	if err := config.validate(); err != nil {
+		t.Fatal(err)
+	}
+	config.PDFConfigRoot = ""
+	if err := config.validate(); err == nil {
+		t.Fatal("font without config root accepted")
+	}
+}
+
 func TestPortalConfigRejectsUntrimmedIdentityProviderHint(t *testing.T) {
 	config := validPortalConfig()
 	config.OIDCIdentityProviderHint = " basic-platform"

@@ -237,7 +237,7 @@ func NewRouter(deps RouterDependencies) *gin.Engine {
 	api.POST("/filings/:id/material-uploads", requirePermission("filing.update"), originAndCSRF(deps.Config), createFilingMaterialUpload(deps))
 	api.PUT("/filings/:id/materials/:materialID/content", requirePermission("filing.update"), originAndCSRF(deps.Config), uploadFilingMaterialContent(deps))
 	api.POST("/filings/:id/materials/:materialID/complete", requirePermission("filing.update"), originAndCSRF(deps.Config), completeFilingMaterialUpload(deps))
-	api.POST("/filings/:id/exports", requirePermission("filing.read"), originAndCSRF(deps.Config), unsupported("PORTAL_FILING_EXPORT_NOT_CONFIGURED"))
+	api.POST("/filings/:id/exports", requirePermission("filing.read"), originAndCSRF(deps.Config), exportFiling(deps))
 	return router
 }
 
@@ -270,6 +270,9 @@ func capabilities(deps RouterDependencies) gin.HandlerFunc {
 		}
 		if deps.FilingMaterials != nil && deps.FilingMaterials.RuntimeAvailable() {
 			value.FilingMaterialUpload = runtimeCapability{Available: true, Mode: "READY"}
+		}
+		if deps.Filings != nil && deps.Filings.ExportAvailable() {
+			value.FilingExport = runtimeCapability{Available: true, Mode: "READY"}
 		}
 		if deps.CustomerCapabilities != nil {
 			options, optionsErr := deps.CustomerCapabilities.Get(c.Request.Context(), deps.Config.TenantID, currentSession(c).CustomerID)
@@ -1257,7 +1260,7 @@ func readReportNotification(deps RouterDependencies) gin.HandlerFunc {
 }
 
 func contentDisposition(fileName string) string {
-	// RFC 5987 编码避免 quoted-string 注入，ASCII 回退文件名不依赖回调返回的任意字符。
+	// RFC 5987 编码避免 引号字符串注入，ASCII 回退文件名不依赖回调返回的任意字符。
 	return "attachment; filename=report.pdf; filename*=UTF-8''" + url.PathEscape(fileName)
 }
 
@@ -1330,6 +1333,36 @@ func feedbackActor(c *gin.Context) feedback.CustomerActor {
 func filingActor(c *gin.Context) filing.Actor {
 	session := currentSession(c)
 	return filing.Actor{TenantID: session.TenantID, CustomerID: session.CustomerID, AccountID: session.PlatformUserID}
+}
+
+func exportFiling(deps RouterDependencies) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if deps.Filings == nil {
+			response.Error(c, filing.ErrExportUnavailable)
+			return
+		}
+		if len(c.Request.URL.RawQuery) != 0 {
+			response.Error(c, filing.ErrValidation)
+			return
+		}
+		var body struct {
+			ExpectedVersion uint64 `json:"expected_version"`
+		}
+		if err := requestbody.DecodeJSONWithLimit(c, &body, 4096); err != nil {
+			response.Error(c, filing.ErrValidation)
+			return
+		}
+		file, err := deps.Filings.Export(c.Request.Context(), filingActor(c), c.Param("id"), body.ExpectedVersion)
+		if err != nil {
+			response.Error(c, err)
+			return
+		}
+		c.Header("Cache-Control", "private, no-store")
+		c.Header("X-Content-Type-Options", "nosniff")
+		c.Header("X-Content-SHA256", file.SHA256)
+		c.Header("Content-Disposition", `attachment; filename="`+file.FileName+`"`)
+		c.Data(http.StatusOK, "application/pdf", file.Content)
+	}
 }
 
 func listFilings(deps RouterDependencies) gin.HandlerFunc {

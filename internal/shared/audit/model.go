@@ -29,6 +29,8 @@ type Event struct {
 	Result            string    `gorm:"size:32;not null"`
 	RequestID         string    `gorm:"size:64;not null;index"`
 	OccurredAt        time.Time `gorm:"precision:3;not null"`
+	// 统一审计来源协议：调用方可显式提供；未提供时由 audit.Meta 补齐。
+	UserLoginIP, ClientIP, IPSource string `gorm:"-"`
 }
 
 func (Event) TableName() string { return "crm_audit_events" }
@@ -79,12 +81,26 @@ func (w *GORMWriter) Write(ctx context.Context, event Event) error {
 	} else if event.ActorID == "" || strings.HasPrefix(event.ActorID, "system") {
 		actorType = "SYSTEM"
 	}
+	// AUD-IP-2026：业务事件默认不带地址（服务层拿不到请求），由入口写入上下文后在此补齐；
+	// 调用方显式提供的值优先，避免覆盖更精确的来源。
+	meta := MetaFrom(ctx)
+	loginIP, clientIP, ipSource := event.UserLoginIP, event.ClientIP, event.IPSource
+	if loginIP == "" {
+		loginIP = meta.LoginIP
+	}
+	if clientIP == "" {
+		clientIP = meta.ClientIP
+	}
+	if ipSource == "" {
+		ipSource = meta.IPSource
+	}
 	return w.platformOutbox.Publish(ctx, requestaudit.BusinessEvent{
 		EventID: event.EventID, TenantID: event.TenantID, ApplicationCode: event.ApplicationCode,
 		EnvironmentCode: w.environmentCode, ActorType: actorType, ActorID: event.ActorID,
 		ActorName: event.ActorNameSnapshot, Action: event.Module + "." + event.Operation,
 		ResourceType: event.ResourceType, ResourceID: event.ResourceID, RequestID: event.RequestID,
 		Result: result, RiskLevel: "HIGH", OccurredAt: event.OccurredAt,
+		UserLoginIP: loginIP, ClientIP: clientIP, IPSource: ipSource,
 	})
 }
 

@@ -1,5 +1,7 @@
 # 后端、数据库与 API 统一规范
 
+本文为实现/验收规范，示意中间件、错误码及通用幂等要求不保证所有旧接口已具备。当前注册以bootstrap/app.go、portalbootstrap/router.go及各routes.go为准。信用审批决定未提供持久幂等，不能仅因浏览器发送Idempotency-Key就宣称可重放。
+
 ## 1. Gin 路由
 
 业务 API 统一为 `<path_prefix>/api/v1`。中间件顺序：
@@ -9,7 +11,7 @@ Recovery → RequestID → AccessLog → SecureHeaders → Session/Auth
 → TenantContext → Permission → DataScope → CSRF/Idempotency → Handler
 ```
 
-健康检查 `/healthz` 不经过登录，但只返回依赖状态，不暴露配置。
+healthz不经登录，但全局请求审计先预留持久证据，缺审计表或000119列可使Portal探针503。探针不证明可选文件/报告/审批可用。
 
 ## 2. 响应格式
 

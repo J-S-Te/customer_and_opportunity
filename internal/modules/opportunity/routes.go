@@ -35,6 +35,8 @@ func RegisterRoutes(router *gin.RouterGroup, handler *Handler) {
 	opportunities.POST("/:id/launch/bid", middleware.RequirePermission("opportunity.update"), handler.LaunchBid)
 	opportunities.PUT("/:id/terminal-todo", middleware.RequirePermission("opportunity.stage.change"), handler.CompleteTerminalTodo)
 	opportunities.POST("/:id/contract-transfer", middleware.RequirePermission("opportunity.contract.transfer"), handler.ContractTransfer)
+	router.GET("/contract-transfer-outbox/failed", middleware.RequirePermission("opportunity.contract.transfer"), handler.ListFailedContractTransfers)
+	router.POST("/contract-transfer-outbox/failed/:id/retry", middleware.RequirePermission("opportunity.contract.transfer"), handler.RetryFailedContractTransfer)
 	opportunities.GET("/:id/attachment-capabilities", middleware.RequirePermission("opportunity.attachment.read"), handler.AttachmentCapabilities)
 	opportunities.GET("/:id/attachments", middleware.RequirePermission("opportunity.attachment.read"), handler.ListAttachments)
 	opportunities.POST("/:id/attachments", middleware.RequirePermission("opportunity.attachment.upload"), handler.CreateAttachmentUpload)

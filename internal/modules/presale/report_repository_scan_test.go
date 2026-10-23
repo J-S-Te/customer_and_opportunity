@@ -17,9 +17,9 @@ import (
 	"gorm.io/gorm/logger"
 )
 
-// Scripted SQL rows exercise the real MySQL GORM Scan implementation without a
-// business database or a new mocking dependency. SQL and bound scope are also
-// checked, so the regression cannot pass by replacing repository aggregates.
+// 脚本化 SQL 行验证真实 MySQL GORM Scan 实现，无需
+// 业务数据库或新增模拟依赖。同时检查 SQL 及绑定范围，
+// 防止通过替换仓储聚合而错误通过回归。
 type reportScanStep struct {
 	contains []string
 	columns  []string

@@ -332,8 +332,8 @@ func TestMessageReplayRechecksLockedRecipientBeforeReturningLatestPage(t *testin
 func TestManagerSendRechecksLockedAuthoritativeAssignment(t *testing.T) {
 	service, repo, actor := messageFixture()
 	conversation, _ := service.Create(context.Background(), actor, "P/1", CreateCommand{IdempotencyKey: "create-key-1"})
-	// Simulate reassignment after the manager's initial conversation lookup and
-	// before the message transaction locks the authoritative snapshot.
+	// 模拟负责人首次查询会话后、
+	// 消息事务锁定权威快照前发生重新分配。
 	repo.recipient.ManagerPortalAccountID = "manager-new"
 	if _, err := service.SendManager(context.Background(), ManagerActor{TenantID: "tenant-a", AccountID: "manager-sub"}, conversation.PublicID, SendCommand{Content: "旧经理回复", IdempotencyKey: "manager-key-1"}); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("err=%v", err)

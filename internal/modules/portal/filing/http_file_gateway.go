@@ -11,8 +11,8 @@ import (
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/filegatewayclient"
 )
 
-// HTTPFileGatewayStore keeps the Portal business ACL in Portal while all bytes are written to the
-// independent gateway. The object key is an opaque encrypted Portal reference, never a disk path.
+// HTTPFileGatewayStore 将 Portal 业务 ACL 保留在 Portal，所有文件字节均写入
+// 独立网关。对象键是不透明的加密 Portal 引用，绝非磁盘路径。
 type HTTPFileGatewayStore struct{ client *filegatewayclient.Client }
 
 func NewHTTPFileGatewayStore(client *filegatewayclient.Client) *HTTPFileGatewayStore {

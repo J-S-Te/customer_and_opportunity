@@ -61,7 +61,7 @@ func RequireSameOriginWrite(publicOrigin string) gin.HandlerFunc {
 
 // RequireOriginMatch 只做精确 Origin 校验，用于无法要求自定义 CSRF 头的清理型 POST
 // （如 /auth/local-logout）。浏览器同源 POST 会自动携带 Origin，跨站盲 POST 即便借
-// SameSite 放行 Cookie 也无法伪造该头；Origin 缺失一律拒绝，保持 fail-closed。
+// SameSite 放行 Cookie 也无法伪造该头；Origin 缺失一律拒绝，保持 失败时安全拒绝。
 // 安全方法没有副作用，不在此拦截。
 func RequireOriginMatch(publicOrigin string) gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -118,10 +118,10 @@ func RequirePermission(permission string) gin.HandlerFunc {
 	}
 }
 
-// RequirePermissionOrRoles supports a deliberately explicit compatibility
-// path for signed role claims from sessions created before a permission catalog
-// update. It must only be used where the listed roles are independently
-// authorized to perform the exact operation.
+// RequirePermissionOrRoles 为权限目录更新前创建的会话
+// 所携带的签名角色声明提供显式兼容路径。
+// 仅当所列角色本身独立获准执行
+// 该精确操作时，才可使用。
 func RequirePermissionOrRoles(permission string, roles ...string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		principal, ok := auth.FromContext(c.Request.Context())

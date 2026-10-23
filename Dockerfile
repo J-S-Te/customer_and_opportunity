@@ -1,4 +1,4 @@
-FROM golang:1.25.4-alpine AS builder
+FROM golang:1.25.4-alpine@sha256:d3f0cf7723f3429e3f9ed846243970b20a2de7bae6a5b66fc5914e228d831bbb AS builder
 
 ARG GOPROXY=https://goproxy.cn|https://proxy.golang.org|direct
 ARG GOSUMDB=sum.golang.google.cn
@@ -41,7 +41,7 @@ RUN set -eu; \
       CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w' -o "/out/${command}" "./cmd/${command}"; \
     done
 
-FROM alpine:3.21 AS runtime-base
+FROM alpine:3.21@sha256:bbfcd601d7cd20d35bb0b8b866ad1a8a0d107ca3e1c20870c75c5ce2c1186d30 AS runtime-base
 ARG APP_VERSION
 LABEL org.opencontainers.image.version=${APP_VERSION} com.basic-platform.license.protocol="1"
 
@@ -87,6 +87,9 @@ EXPOSE 8092
 CMD ["./presale-integration-mock"]
 
 FROM runtime-base AS portal-runtime
+
+COPY assets/fonts/ ./assets/fonts/
+RUN cd assets/fonts && sha256sum -c SHA256SUMS
 
 COPY --from=builder /out/portal-server ./portal-server
 COPY --from=builder /out/*-worker ./

@@ -95,9 +95,9 @@ func WorklogWorkflow(ctx workflow.Context, in EventInput) (string, error) {
 	return result, err
 }
 
-// License deferral is not a business failure: keep the existing workflow and
-// stable EventID pending, without consuming its external-operation retry budget.
-// Use durable Temporal timers, never host sleeps or workflow clock reads.
+// 许可证延后不属于业务失败：保持现有工作流及
+// 稳定 EventID 待处理，不消耗外部操作重试预算。
+// 使用持久化 Temporal 定时器，禁止宿主机休眠或读取工作流时钟。
 func executeLicensedActivity(ctx workflow.Context, name string, in EventInput, result any) error {
 	for {
 		err := workflow.ExecuteActivity(workflow.WithActivityOptions(ctx, activityOptions()), name, in).Get(ctx, result)
@@ -115,8 +115,8 @@ func Register(w interface {
 	RegisterWorkflowWithOptions(interface{}, workflow.RegisterOptions)
 	RegisterActivity(interface{})
 }, activities *Activities) {
-	// Kept as a small adapter so tests can use a Temporal worker without exposing
-	// the rest of the presale worker implementation.
+	// 保持为小型适配器，使测试可使用 Temporal 工作器，
+	// 无需暴露其他售前工作器实现。
 	w.RegisterWorkflowWithOptions(StartApprovalWorkflow, workflow.RegisterOptions{Name: StartApprovalWorkflowName})
 	w.RegisterWorkflowWithOptions(ApprovalActionWorkflow, workflow.RegisterOptions{Name: ApprovalActionWorkflowName})
 	w.RegisterWorkflowWithOptions(WorklogWorkflow, workflow.RegisterOptions{Name: WorklogWorkflowName})
@@ -144,8 +144,8 @@ func (c Client) execute(ctx context.Context, event presale.OutboxEvent, workflow
 		WorkflowIDReusePolicy: enums.WORKFLOW_ID_REUSE_POLICY_REJECT_DUPLICATE,
 	}, workflowName, EventInput{Event: event})
 	if err != nil {
-		// A retry after a process/network interruption may find the already-started
-		// workflow. Reading it is safe because the event ID is the idempotency key.
+		// 进程或网络中断后的重试可能发现工作流已启动。
+		// 读取它是安全的，因为事件 ID 就是幂等键。
 		run = c.Temporal.GetWorkflow(ctx, workflowID, "")
 	}
 	return run.Get(ctx, result)

@@ -1,8 +1,10 @@
 # 开发与运行说明
 
+> 2026-10-22：本文核验当前源码装配；所有运行/发布命令供获授权的目标环境操作者使用，本轮没有启动、部署或动态验收。用户流程见 [CRM 操作手册](../sharedDocs/10_操作手册/客户与商机管理操作手册.md)、[Portal 操作手册](../sharedDocs/10_操作手册/客户自助门户操作手册.md)，逐项依据见 [核验记录](../.ai/modules/operation-docs-crm-20261013.md)。
+
 > 2026-09-07 文件策略更新：ClamAV 病毒引擎已从源码、配置和可选部署服务移除；保留静态文件校验、权限、对象一致性和文件网关。历史扫描状态保持兼容，但不代表病毒检测。本文较早的病毒扫描要求以 [当前文件校验策略](docs/file-validation-policy.md) 为准；本地代码修改尚未发布生产镜像。
 
-本业务域包含十六个 Go 进程：
+本业务域提供两个API与多种独立Worker命令；镜像包含命令不表示目标环境均已启动。已列出的运行入口如下：
 
 - `cmd/crm-server`：客户、商机、售前和 Portal 邀请管理 API，默认监听 `:8090`；
 - `cmd/portal-server`：独立客户 Portal API，默认监听 `:8091`；
@@ -19,6 +21,8 @@
 - `cmd/portal-report-worker`：报告申请 outbox 投递进程；
 - `cmd/portal-feedback-worker`：客户反馈首次响应 SLA 扫描和内部待办投影进程；
 - `cmd/portal-invite-compensation-worker`：Portal 邀请映射补偿进程。
+- `cmd/presale-report-aggregate-worker`：售前 UTC 日报事实聚合；当前在线报表仍读取权威明细。
+- `cmd/notification-delivery-worker`：将 CRM 本地通知投递至平台中央收件箱。
 - `cmd/portal-access-disable-worker`：Portal 访问禁用 Saga 自动恢复进程；使用数据库 `SKIP LOCKED` 有限租约，只持有 `portal.identity_mapping.disable` 与 `application_role.revoke` 两组相互独立的最小权限凭据，第 8 次失败进入可观测死信。
 
 前端位于仓库级 `frontend` 工程，客户商机模块和 Portal 模块分别在 `frontend/src/modules/customer_opportunity`、`frontend/src/modules/customer_portal`。
@@ -42,7 +46,7 @@ bash scripts/subsystem.sh onboard \
   --account admins
 ```
 
-该流程自动创建 Portal 独立 MySQL、执行 Portal migration、登记并发布 OIDC/权限目录、创建六个单 scope 服务 Client，写入 CRM/Portal 运行配置并启动 `portal-api`。外部客户预置同时创建 HUMAN/LOCAL 登录账号但不创建密码；平台 migration `000071` 为升级前记录补齐账号并建立数据库外键/唯一约束。平台管理员随后在账号管理中显式初始化只显示一次的临时密码。已有接入只执行 `bash scripts/docker-local.sh refresh-portal-api`，不能重复 onboard。完整说明见 [`../platform/docs/subsystem-onboarding.md`](../platform/docs/subsystem-onboarding.md)。
+该流程自动创建 Portal 独立 MySQL、执行 Portal migration、登记并发布 OIDC/权限目录、创建六个单 scope 服务 Client，写入 CRM/Portal 运行配置并启动 `portal-api`。外部客户预置同时创建 HUMAN/LOCAL 登录账号但不创建密码；平台 migration `000071` 为升级前记录补齐账号并建立数据库外键/唯一约束。平台管理员随后在账号管理中显式初始化只显示一次的临时密码。已有接入只执行 `bash scripts/docker-local.sh refresh-portal-api`，不能重复 onboard。实际接入入口见 `platform/scripts/subsystem.sh`；如需操作目标环境，应先核对当前部署手册与接入状态，不能把旧本地演练推断为生产已就绪。
 
 ### 手工启动进程
 
@@ -82,9 +86,9 @@ Vite 开发代理默认把 `/customer-opportunity` 转发到 `http://localhost:8
 
 CRM 和 Portal 分别提供 `<path_prefix>/healthz`、`<path_prefix>/livez` 和 `<path_prefix>/readyz`，均不经过登录。`healthz` 保留兼容语义并探测 MySQL；`livez` 只表示进程存活；`readyz` 在数据库连接失败或必需依赖未就绪时返回 503。部署网关必须按 CRM、Portal 的独立 `path_prefix` 配置三类探针；探针已纳入 OpenAPI 和 CI 路由契约。
 
-`/customer-opportunity/healthz` 与 `/customer-portal/healthz` 只表示对应进程及核心数据库可用，不代表对象存储、病毒扫描、审批、PMS、报价/投标、公安提交等可选外部能力已经就绪。登录后前端分别读取 `/customer-opportunity/api/v1/capabilities` 与 `/customer-portal/api/v1/capabilities`；服务端只根据本地已注入适配器、启用开关和数据库中的新鲜 Worker 心跳返回稳定的 `available/mode/reason_code`，不在页面请求内探测远端，也不返回 URL、Client、scope、密钥等部署信息。能力查询失败时前端安全关闭相关按钮，实际写接口仍执行同一服务端检查并作为最终权威，不能依靠前端能力位绕过校验。
+`/customer-opportunity/healthz` 与 `/customer-portal/healthz` 只表示对应进程及核心数据库可用，不代表文件存储、静态校验、审批、PMS、报价/投标、公安提交等可选外部能力已经就绪。登录后前端分别读取 `/customer-opportunity/api/v1/capabilities` 与 `/customer-portal/api/v1/capabilities`。CRM 当前能力表主要按配置开关返回，不检查 Worker 心跳；Portal 部分动作还检查已注入依赖和新鲜 Worker 心跳。能力查询不在页面请求内探测远端，也不返回 URL、Client、scope、密钥等部署信息。能力查询失败时前端安全关闭相关按钮；配置位不等于依赖健康或完整装配，业务接口才是最终权威，不能依靠前端能力位绕过校验。
 
-售前申请、Portal 报告申请和项目 PDF 导出只有在对应独立 Worker 存在新鲜数据库心跳时才接受新任务；已有幂等请求仍可安全重放。可选适配器或 Worker 未就绪不会使核心客户、商机、Portal 项目/报告状态查询随之失败，只会让关联动作明确返回 503。OIDC、机器身份验证、数据库以及 Portal 调 CRM 的邀请内部客户端属于相应进程的启动必需依赖；缺少这些正式配置时对应进程不会启动，不能把这种情况误判为“降级后仍完整运行”。
+Portal 报告申请和项目 PDF 导出以对应 Worker 新鲜心跳受理首次任务。CRM默认售前创建/人工审批在内部事务完成，不要求presale_delivery心跳。APPROVAL_TASK_RESOLVER_ENABLED默认false；开启且配置完整时，bootstrap向售前Service和交接服务注入真实HTTP待办解析器，动作等待外部回调。capability不代替任务/回执。CRM 全局附件能力位仅取 AttachmentLocalEnabled；S3/文件网关装配与商机级 attachment-capabilities 仍需分别核对，不能据全局位推断所有适配器可用。可选适配器或 Worker 未就绪不会使核心客户、商机、Portal 项目/报告状态查询随之失败，只会让关联动作明确返回 503。OIDC、机器身份验证、数据库以及 Portal 调 CRM 的邀请内部客户端属于相应进程的启动必需依赖；缺少这些正式配置时对应进程不会启动，不能把这种情况误判为“降级后仍完整运行”。
 
 两个 HTTP 服务使用同一个安全结构化访问日志契约，每个请求只输出一条 JSON `http_request_completed` 事件：`request_id`、已认证的 `tenant_id/user_id`、固定 `module`、稳定 `error_code`、HTTP method、Gin 路由模板、status、duration_ms 和响应 bytes。路由字段使用 `/resources/:id` 模板，不记录原始路径；日志实现不会读取 query、header、body、Cookie、Authorization、IP、User-Agent 或 panic 值。恢复中间件也不再使用 Gin 默认的请求头转储，只记录 `request_id/module` 后返回统一的 `COMMON_INTERNAL_ERROR`。CRM 和 Portal 主进程均将默认 logger 初始化为 JSON `slog`，使访问日志及既有服务端错误进入同一结构化输出。
 
@@ -114,7 +118,7 @@ Portal 调 CRM 校验/消费邀请使用独立的基础平台 `client_credential
 
 `GET /customer-opportunity/api/v1/customers` 支持客户号/名称、类型、行业、区域、负责人、状态、创建时间和最近跟进时间组合筛选，并支持 `NEW`（当前时间前 30 天）、`WON` 与 `FOLLOWUP_DUE` 快捷筛选。时间参数必须为 RFC3339，前端将日期范围转换为 UTC 半开区间；排序只允许 `created_at/updated_at/name/last_followup_at/opportunity_amount_sum`，并使用同方向客户 ID 保证稳定分页。未知 query key、非法分页、未知快捷筛选或排序均返回 400，不忽略调用方错误。
 
-列表与全部详情子资源先按 tenant 及 SELF/ORG/ALL 范围验证客户可见性。联系人只返回脱敏值，本地商机页签只返回最小摘要，操作日志读取共享 append-only 审计流并要求 `customer.audit.read`。当前没有重点客户权威分类字段，因此 `KEY` 返回结构化 503。项目历史已通过独立 `portal.project_history.read` Client Credentials 从 Portal 本地同步投影读取，先校验 CRM 客户可见性，再返回严格分页的最小 DTO；`source_updated_at`、快照行 `synced_at` 与客户同步链路 `sync_last_success_at` 分离，`stale` 只描述同步链路，不声明上游实时。该适配器默认关闭，未配置时返回 503。XLSX 导出 Worker、加密对象存储和短效下载未配置时也分别失败关闭，不生成占位结果。
+列表与全部详情子资源先按 tenant 及 SELF/ORG/ALL 范围验证客户可见性。联系人只返回脱敏值，本地商机页签只返回最小摘要，操作日志读取共享 append-only 审计流并要求 `customer.audit.read`。当前没有重点客户权威分类字段，因此 `KEY` 返回结构化 503。项目历史已通过独立 `portal.project_history.read` Client Credentials 从 Portal 本地同步投影读取，先校验 CRM 客户可见性，再返回严格分页的最小 DTO；`source_updated_at`、快照行 `synced_at` 与客户同步链路 `sync_last_success_at` 分离，`stale` 只描述同步链路，不声明上游实时。该适配器默认关闭，未配置时返回 503。客户导出当前由服务按会话数据范围逐页读取并生成临时 CSV，HTTP 响应结束后删除，不需要 XLSX 导出 Worker。导出不消费当前列表筛选载荷，不能保证只导出画面中的行。
 
 ## 客户档案子记录
 
@@ -122,7 +126,7 @@ Portal 调 CRM 校验/消费邀请使用独立的基础平台 `client_credential
 
 `000049` 和 `internal/modules/opportunity/attachment.go` 实现只存对象引用的附件纵切面。浏览器先读取商机范围内的 capability；只有对象存储与扫描器同时可用才创建上传会话。服务端固定校验文件名、扩展名、MIME、20 MiB 大小和 SHA-256，并在上传完成时重新核对不可变 object version、真实大小、MIME 和摘要。状态固定为 `PENDING_UPLOAD → FINALIZING → SCANNING → CLEAN/REJECTED/SCAN_FAILED`；`FINALIZING` 是并发外部送检抢占状态，扫描器必须以附件 public ID 作为稳定业务幂等键。只有 `CLEAN` 可进入受控下载，下载前后分别写不可变审计；列表、capability、完成和下载都复用父商机 tenant 与 SELF/ORG/ALL 数据范围。
 
-当前仓库没有满足该信任边界的生产对象存储/病毒扫描契约。基础平台现有本地文件服务在写入后直接标记可用，不能用于商机可信附件。CRM bootstrap 因此注入明确 unavailable adapter：在任何上传会话元数据写入前返回 `503 CRM_OPPORTUNITY_ATTACHMENT_UNAVAILABLE`，前端依据 capability 禁用上传；数据库不保存二进制，也绝不把未扫描文件标记为可下载。正式适配器必须经过 signed-upload、不可变对象版本、扫描 callback machine scope、幂等和恶意文件契约测试后才能启用。
+当前 bootstrap 先构造 unavailable adapter，再按 `ATTACHMENT_S3_ENABLED` 或 `ATTACHMENT_LOCAL_ENABLED` 选择真实存储，并注入 `CodeAttachmentScanner`；非 legacy 模式另注入 HTTP 文件网关迁移适配器。生产模板、当前配置与 capability 均需核对；无适配器时返回 `503 CRM_OPPORTUNITY_ATTACHMENT_UNAVAILABLE`，不是所有环境都固定不可上传。CLEAN 只表示静态规则通过。商机附件 20 MiB，允许 PDF、PNG/JPEG、DOCX、XLSX；禁止把门户备案材料的三类格式规则套到商机附件。
 
 商机当前团队与独立任期账本分开保存。`PUT /api/v1/opportunities/{id}/members` 在同一事务中关闭被移除人员或旧角色的活动任期，并为新增、重新加入或角色变化创建新任期；`GET /api/v1/opportunities/{id}/member-terms` 先复核父商机数据范围，再按人员、活状态和分页查询。`000053` 对迁移前数据仅返回 `snapshot_at` 与 `active_at_snapshot`；加入、移出时间及操作人是未知值，不使用可复用成员行的时间或通用审计 JSON 推测。
 
@@ -130,7 +134,7 @@ Portal 调 CRM 校验/消费邀请使用独立的基础平台 `client_credential
 
 `GET/PUT /api/v1/customers/{id}/stakeholders` 与 `GET/PUT /api/v1/customers/{id}/systems` 提供 CM-001 关键干系人和信息系统全量清单。读取先按 tenant 及 SELF/ORG/ALL 验证父客户可见性；写入要求 `customer.update`、父客户为 `ACTIVE`、匹配的客户 `version` 和非空 `reason`，并在事务中锁定父记录、替换子记录、递增客户版本和写入字段审计/共享审计。任何版本冲突均返回 409，调用方必须刷新后重试。
 
-干系人电话/邮箱使用客户敏感字段 AEAD 密钥加密，响应和审计只包含脱敏值；更新已存在记录时省略相应字段表示保留密文，显式空字符串表示清空，禁止把带 `*` 的脱敏显示值写回。信息系统 `protection_level` 仅接受 `LEVEL_1`～`LEVEL_5`，含义固定为网络安全等级保护定级，不是已经删除的客户信用评级。财务扩展尚未完成字段归属和查看权限签版，因此本轮不实现也不伪造。
+干系人电话/邮箱使用客户敏感字段 AEAD 密钥加密，响应和审计只包含脱敏值；更新已存在记录时省略相应字段表示保留密文，显式空字符串表示清空，禁止把带 `*` 的脱敏显示值写回。信息系统 `protection_level` 仅接受 `LEVEL_1`～`LEVEL_5`，含义固定为网络安全等级保护定级，不是客户信用评级。当前信用功能在独立 credit 模块和迁移 `000105`～`000108` 中实现。财务扩展尚未完成字段归属和查看权限签版，因此本轮不实现也不伪造。
 
 CRM 的客户、商机、售前和 Portal 邀请 JSON 写入口，以及 Portal 统一路由中的 JSON 写入口，均使用同一严格解码基线：默认上限 1 MiB，只接受一个 JSON 对象，拒绝空、`null`、数组、标量、未知字段、尾随内容和超限请求，同时执行 Gin binding 校验。错误响应只返回稳定通用错误，不回显解析器详情或请求体内容。
 
@@ -138,7 +142,9 @@ CRM 的客户、商机、售前和 Portal 邀请 JSON 写入口，以及 Portal 
 
 `POST /api/v1/customers/imports/preview` 只接收 `file` 和 `reason` 两个 multipart part，总请求和文件分别有硬上限。Handler 逐 part 有界读取，不调用会把大文件落到临时目录的 `ParseMultipartForm`。工作簿默认经过进程内 `CodeImportScanner` 和 `safexlsx.ParseWorkbook` 的双重有界校验：固定 XLSX ZIP 容器、成员数量/展开体积/压缩比、路径穿越、可执行脚本成员、表头、公式、单元格和行列上限均失败关闭；不依赖外部杀毒服务。`ImportFileScanner` 仍可作为受控扩展点注入，但不是默认可用条件。
 
-扫描通过后，服务端仅解析真实 `.xlsx` OOXML：限制 10 MiB、1000 数据行、压缩展开量、条目数、列数和单元格长度，拒绝加密包、宏、外部关系、危险 ZIP 路径、DTD、公式和 CSV 注入前缀。表头固定为开发需求中的 10 个中文字段。原始工作簿不入库；可提交命令使用客户敏感字段的 AES-256-GCM 密钥加密，预览 DTO、审计和错误 CSV 不包含电话、邮箱或统一社会信用代码明文。
+扫描通过后，服务端仅解析真实 `.xlsx` OOXML：限制 10 MiB、1000 数据行、压缩展开量、条目数、列数和单元格长度，拒绝加密包、宏、外部关系、危险 ZIP 路径、DTD、公式和 CSV 注入前缀。当前下载模板为 8 个固定中文字段：客户名称、统一社会信用代码、客户类型、行业、区域、登记联系人姓名、登记联系人电话、登记联系人邮箱。旧 10 列模板仅兼容读取，不能指定他人负责人/组织；新客户统一归当前导入人与权威主组织。预检有效期 30 分钟，WARNING/ERROR 行不导入。非 legacy 模式在预检通过后将job/rows、审计及加密工作簿恢复任务原子保存（000120），事务提交后由API内后台上传至 `crm.customer.import` 并建立 SOURCE 绑定。后台只处理部署租户，以原操作者、固定请求身份重放，不从请求或任务覆盖网关origin、应用和token scope；上传与释放分别核验商业授权。上传成功但本地确认失败时重放同一网关会话恢复file_id；预览完成或过期后释放原tuple，失败持久退避重试，确认后清除临时工作簿密文。网关长期字节及作业/行/审计不因此删除；legacy模式不新增工作簿留存。可提交命令同样使用客户敏感字段的 AES-256-GCM 密钥加密，预览 DTO、审计和错误 CSV 不包含电话、邮箱或统一社会信用代码明文。
+
+发布前先执行CRM迁移计划中的 `000120_customer_import_source_lifecycle.up.sql`，并确认网关支持 `POST /api/v1/files/{file_id}/bindings/release`（精确tuple、迟到绑定墓碑）。源任务恢复依赖原敏感字段加密密钥、原网关应用/用途策略与机器scope，不能在任务未收敛时随意更换；API内后台随进程启动/取消，每10秒领取任务，不新增部署服务。历史版本已产生但没有作业记录的孤立绑定不能自动归属，本修复不猜测或批量删除历史数据。隔离MySQL事务/租约测试要求显式 `CRM_INTEGRATION_MYSQL_DSN` 且已应用CRM迁移；未配置时跳过。
 
 `POST /api/v1/customers/imports/{jobNo}/commit` 要求预览版本和 `Idempotency-Key`，只允许原租户和原操作人提交。每个 READY 行在独立事务中重新查重、生成客户号、创建客户并写审计，所以一行失败不会回滚已成功行。作业使用可过期接管的数据库租约；每行事务都会锁定作业、校验 token/版本并续租，旧执行器在接管后不能继续写入。`GET /api/v1/customers/imports/{jobNo}/errors` 只向原操作人返回 RFC 4180 CSV，并对可能的表格公式前缀做中和。
 
@@ -152,6 +158,8 @@ CRM 的客户、商机、售前和 Portal 邀请 JSON 写入口，以及 Portal 
 
 时间线在数据库内使用单条 `UNION ALL` 查询聚合申请创建、状态、审批结果、指派增减、进度和有效工时，按 `(occurred_at,type_priority,source_id)` 倒序 keyset 分页，不把全部子表读入内存。Cursor 使用 HMAC-SHA256 签名并绑定租户与申请 ID；篡改或跨任务复用均失败关闭。返回 DTO 不含审批意见、驳回/取消原因、联系人、服务地址、工时备注和幂等摘要；进度链接仅保留已通过服务端规则的 HTTPS 地址。
 
+完成路径须分开核验：AddWorklog 本地保存不调用自动完成，Complete 人工完成不要求工时；ReplaceAssignments 完成目标集合替换及状态更新后会调用 completeIfReady。当任务为 EXECUTING、当前指派非空、全部当前执行人均有同租户/任务且 voided_at IS NULL 的工时记录时，自动写 COMPLETED/completed_at 与 ALL_CURRENT_ASSIGNEES_HAVE_WORKLOG 日志；不要求当前批次工时或 PMS 接收。不可把“登记工时不会自动完成”扩展成“任何操作都不会自动完成”。
+
 前端详情将主档/工时、权威可用动作与时间线分开加载；`available-actions` 失败时不回退到详情旧快照，而是安全关闭所有变更入口。指派、审批、取消、进度、工时或投递重试成功后重新读取主档、可用动作和时间线，不重置列表筛选/分页。`000035` 仅增加指派结束与工时创建的时间线覆盖索引，不回填业务数据；存量大表上线必须使用发布平台认可的在线 DDL，并监控 metadata lock 和副本延迟。
 
 进度新增使用 `Idempotency-Key + 规范载荷摘要`持久防重。Service 在单一事务内先按租户锁定任务，校验权威任务版本和 `EXECUTING` 状态，再锁定当前指派集合并确认操作人仍是当前执行人后才写入，因此与取消/改派并发时不会在旧权限下追加不可变记录。同键同载荷返回原结果，同键异载荷返回 409；前端在失败重试时复用同键，只在载荷改变或成功后轮换。`000036` 只为新进度增加可空幂等元数据/租户唯一索引，不改写存量不可变进度。
@@ -160,27 +168,27 @@ CRM 的客户、商机、售前和 Portal 邀请 JSON 写入口，以及 Portal 
 
 `GET /api/v1/presale/requests`、`GET /api/v1/presale/board` 和 `GET /api/v1/presale/filter-options` 均要求 `presale.read`，且共用从会话 Actor 计算的 `requestScope` 和 Repository 筛选链。请求不接受 `scope=all` 扩权；销售只看本人申请，技术/实施人员只看当前或历史参与任务，多角色用户取两者并集，仅有读权限但无受支持 TS 角色时查询失败关闭；管理/审计角色按已配置范围读取。详情、工时和时间线复用相同角色口径，不能通过猜测任务 ID 扩大列表范围；所有 SQL 始终强制租户条件。
 
-TS-001 创建申请的幂等处理在任何 key 查询之前先调用真实商机可见性适配器，新摘要绑定账号、商机与规范化载荷；事务内二次查询和租户唯一键竞态回收使用同一绑定复核。前端把商机 ID、枚举、去空白文本和 ISO 时间规范化后生成页面内重试签名，显式把同一键交给 API，并只在服务端确认成功后清除；提交期间禁止重复点击。键不进浏览器持久存储，因此整页重载后的结果歧义必须先查询服务端状态。TS-005 工时幂等会先锁定父任务并复核当前执行人，再查询租户键；摘要绑定账号、人员、任务和规范化载荷，精确重放在首笔工时已使任务自动完成后仍可返回原记录，跨账号/任务则统一 409 且不返回旧对象。
+TS-001 创建申请的幂等处理在任何 key 查询之前先调用真实商机可见性适配器，新摘要绑定账号、商机与规范化载荷；事务内二次查询和租户唯一键竞态回收使用同一绑定复核。前端把商机 ID、枚举、去空白文本和 ISO 时间规范化后生成页面内重试签名，显式把同一键交给 API，并只在服务端确认成功后清除；提交期间禁止重复点击。键不进浏览器持久存储，因此整页重载后的结果歧义必须先查询服务端状态。TS-005 工时幂等会先锁定父任务并复核当前执行人，再查询租户键；摘要绑定账号、人员、任务和规范化载荷，精确重放返回原工时记录，新工时不会自动完成任务，跨账号/任务则统一 409 且不返回旧对象。
 
 TS-001 联系电话普通详情始终只返回掩码。独立 `GET /api/v1/presale/requests/:id/contact-phone` 同时校验 `presale.contact_phone.read`、tenant 和当前/历史真实指派关系，或 `sales_director/team_lead/technical_lead` 明确管理角色；`auditor` 为显式拒绝。端点完成 AEAD 解密与掩码绑定校验后，先写不含明文的 `CONTACT_PHONE_VIEW` 隐私审计再响应；解密损坏或审计失败统一 503 并安全关闭。响应带 `Cache-Control: no-store, private`，Vue 仅在权限和服务端能力位同时成立时提供显式按钮，明文只保留在详情组件内存并在关闭或切换任务时清除。
 
 TS-002 人工审批、TS-003 指派/改派和 TS-004 取消均要求调用方显式提供 `Idempotency-Key`。`000040` 的 append-only 协调记录绑定 tenant、父申请、操作人、操作类型、节点动作与规范化载荷摘要，并与对应 outbox、指派/状态更新处于同一事务；审批记录保存 `NODE_1_*`/`NODE_2_*`，所以节点推进后原节点操作人仍能精确重放已受理命令。竞态恢复只接受 `gorm.ErrDuplicatedKey` 或 MySQL 1062，其他数据库错误原样失败。前端在页面生命周期内按操作、任务和规范载荷分别保留所有结果未确认的键，切换或关闭详情不会丢弃；只有对应请求确认成功才清除，prompt 取消和前置校验失败不会分配键。键不写 local/session storage 或 URL，因此整页重载后的结果歧义仍需依靠服务端状态核对，这是非持久浏览器状态的明确边界。
 
-TS-003 替换指派时会为每个新增/移出人员在同一事务追加 `crm_presale_assignment_events` 不可变证据及只含 evidence ID 的 outbox。`presale-assignment-notification-worker` 采用 SKIP LOCKED、租约接管、6 次退避和第 7 次死信；投影前按 tenant 重读任务、指派和证据并校验稳定事件 ID、人员、角色、时间和当前/结束状态，不信任 outbox 展示字段。个人收件箱把商机负责人通知的 `user_id` 与售前通知的 `person_id` 分开，数据范围不受 SELF/ORG/ALL 放大；`person_id` 缺失时失败关闭，不回退到 `user_id`。PMS 指派角色是业务角色，不猜测为 CRM OIDC 角色；具有 `presale.read`、权威非空 `person_id` 且存在真实当前或历史指派关系时，列表、详情和商机内嵌入口使用同一数据域。
+TS-003替换指派同事务保存不可变指派证据与仅含证据ID的outbox，Worker按租户重读任务、指派、时间和事件身份再投影。000121为新指派/事件/通知增加USER；当前售前Actor.PersonID由presaleActorResolver明确取平台user_id，执行不依赖可选PMS映射。新USER通知按principal.UserID匹配；空/PERSON旧通知仅在principal.PersonID非空且等于UserID才兼容，不猜测回填、不受SELF/ORG/ALL放大。
 
-TS-004 新增进度时会在锁定任务和当前指派的同一事务中写入进度、逐收件人不可变证据及只含证据 ID 的 outbox。可信收件人限申请人 CRM `user_id` 和发生时其他当前执行人的 PMS `person_id`，两个命名空间分离且作者只在同一命名空间内排除；没有管理层/组织目录契约时不猜测收件人。`presale-progress-notification-worker` 每条使用随机 fencing token 单独领取，重读并复核 tenant、进度、任务、发生时指派任期和稳定事件 ID，6 次退避后第 7 次死信，以 `(tenant_id,source_event_id)` 唯一约束幂等投影现有个人收件箱。本期不调用或声称送达外部 IM、邮件、短信。
+TS-004进度与收件证据/outbox同事务保存。申请人为USER；当前执行人按指派的assignee_namespace保存USER或历史PERSON，作者在对应命名空间排除。Worker按tenant重读进度、任务、发生时指派及稳定ID，以随机fencing token、租约、6次退避及第7次死信幂等投影。中央投递直接使用recipient_id，未标记历史须另行受控核对，本地兼容边界不证明中央历史映射已清理。
 
-基础平台已通过独立 migration `000068` 显式维护租户内唯一的 `pms_person_id`，并在 Access Token、ID Token、UserInfo 与 Discovery 中签发/声明 `person_id`；CRM `000058` 将该权威值持久化到服务端 OIDC 会话，15 秒 UserInfo 复核发现变化即撤销旧会话。平台维护端、JWT 校验端与 CRM 接收端均使用与 MySQL ASCII 列一致的 64 字节 grammar，绝不从 `sub`、平台用户 ID、账号或员工编号推导。缺少绑定时执行人范围、个人指派通知、进度、工时和 SELF 人员报表继续安全关闭；正式 PMS 人员目录和生产 OIDC Client 仍待联调。负责人/组织目录已签版并接通：平台机器接口 `GET /api/v1/internal/owner-directory`（`owner_directory.read` scope）只返回内部有效 OIDC 用户及其授权组织成员关系，CRM `GET /api/v1/owner-directory` 透传同一投影，客户/商机负责人写操作按该权威配对校验并失败关闭。
+平台可维护独立pms_person_id并签发person_id，CRM会话保存和复核；该外部标识不是现代售前执行身份。presaleActorResolver把平台UserID明确传入售前Actor.PersonID，当前指派、进度、工时及SELF报表使用平台用户。历史PMS队列/人员池和TS-008预警保留独立协议，不能据同名字段批量改绑。owner_directory.read目录返回有效平台用户与授权组织，保存时重新复核。
 
 CRM 现有业务主表和 append-only 审计的 actor 字段统一为 64 字节，因此 CRM OIDC 在完成认证前明确拒绝超过 64 字节的 `sub`，不会建立“可登录但首次业务写入才失败”的会话。Portal 外部账号使用独立 schema 和 128 字节上限；两者不得互相推断。若基础平台未来签版更长的 CRM subject，必须先用单独 migration 扩展全部 CRM actor/created_by/updated_by 外键及索引，再放宽认证边界。
 
-TS-002 已提供独立当前任务查询适配器：`available-actions` 和动作命令均使用专用 `presale.approval.task.read` Client Credentials，按 `engine_instance_id + current_node + authenticated approver` 实时解析权威任务；浏览器只提交 `PASS|REJECT + comment + version`，不接收或提交 `engine_task_id`。`000060` 把解析出的 task、approver、action 与动作 outbox 原子绑定；一个绑定等待回调期间不再发布或覆盖第二个动作，`available-actions` 也不暴露审批按钮。`000065` 为审批日志保存 engine instance 与 event sequence；首次回调和已处理重放都必须与实例、任务、序号、节点、审批人、结果、意见和发生时间完全匹配。审批当前任务、动作和 PMS 端点必须是 HTTPS，OAuth Client 分离且 scope 精确；所有客户端禁止跟随 HTTP 重定向，发送 RFC3339Nano 时间戳、每次 256-bit nonce，并严格验证 JSON Content-Type、成功信封及响应身份。PMS 的 HTTP `Idempotency-Key` 固定使用载荷内业务 `idempotencyKey=worklogId`，与 outbox 重试次数无关。正式审批 OpenAPI、Client、网关、mTLS 证书和真实任务环境未配置时，按钮和动作安全关闭。
+TS-002默认内部事务审批，规则快照支持最多10个审批节点，无规则走兼容节点。APPROVAL_TASK_RESOLVER_ENABLED=true时注入presale.approval.task.read专用解析器，按engine_instance_id、当前节点和真实审批人查询；浏览器只提交PASS/REJECT、comment、version。外部模式的待办绑定、动作outbox和回调复核实例/任务/序号/节点/人/结果/时间；必须HTTPS、禁止重定向、独立scope和nonce。未启用时不把缺外部引擎当作内部审批失败；启用后须真实回执验收。
 
 CRM 与 Portal 的浏览器角色/权限目录现由 `internal/platformcatalog` 分别定义和校验，两个应用使用独立 catalog version、稳定 checksum、角色和发布凭据；业务机器 scope 不进入浏览器角色目录。生产启动会校验配置的 `role_config_hash` 与当前二进制内嵌角色-权限映射一致；CRM OIDC 还会把 Token 权限与全部有效角色的内嵌权限并集做精确集合比对，拒绝目录内但不属于当前角色的越权权限或缺失权限。`customer.duplicate.override` 为 HIGH 权限，仅授予 `sales_director` 与 `customer_admin`，普通 `sales` 仍不能覆盖疑似重名。开启目录发布后，通过基础平台正式 `client_credentials + authorization.catalog.sync` 契约幂等发布，Token 或目录发布失败均阻止服务启动，且 HTTP 重定向不会携带 publisher Secret/Bearer。部署前可运行 `go run ./cmd/authz-catalog crm` 或 `go run ./cmd/authz-catalog portal` 获取 `catalog_checksum` 及 `claims_role_config_hash`；本地部署 Agent 使用 `authz-catalog publish crm` 一次性发布，生产仍建议显式配置并签版。CRM 的 `OIDC_MAX_EFFECTIVE_ROLES` 必须与内嵌目录策略相同。`PLATFORM_AUTHORIZATION_CATALOG_*` 和 `PORTAL_AUTHORIZATION_CATALOG_*` 见各自 env 示例，浏览器、审计、Portal/CRM 机器调用凭据均不得复用。
 
 基础平台现已在 Access Token、ID Token、UserInfo 与 Discovery 中签发/声明 `primary_org_id`、`organization_ids`；只包含当前有效直接任职，稳定排序、最多 100 个且不展开后代。CRM 已严格验签、持久化并在 15 秒 UserInfo 复核中比较组织集合；变化会撤销旧会话，`000055` 也会撤销缺少组织上下文的存量会话。该身份声明没有擅自改变现有角色范围策略：`sales_director/team_lead/technical_lead` 等仍按已确认的租户 `ALL`，其他角色仍按 `SELF`；要启用业务 `ORG` 范围，还需签版角色 scope 模式和售前任务组织归属契约后再修改全部查询适配器。
 
-三个查询统一支持任务号、商机、申请人、当前/历史执行人、状态、场地、紧急度、申请/预期结束 UTC 半开时间区间、逾期和 PMS 推送状态；未知/重复/畸形 query、非法枚举、非法排序或反向时间区间均失败关闭。看板固定 7 个真实状态列，每列默认 20/最多 50 条并返回完整 total，不加载全表；筛选选项仅从当前可见的本地快照产生，每类最多 100 条并以 `truncated` 告知截断，不伪造平台人员目录。`000037` 增加 `(tenant_id,expected_end,status,id)` 索引，无数据回填；仍须以真实 MySQL 8 `EXPLAIN ANALYZE` 和生产规模数据验证 P95 ≤ 2 秒。
+三个查询统一支持任务号、商机、申请人、当前/历史执行人、状态、场地、紧急度、申请/预期结束 UTC 半开时间区间、逾期和 PMS 推送状态；未知/重复/畸形 query、非法枚举、非法排序或反向时间区间均失败关闭。看板固定8个真实状态列（含PENDING_EXECUTION_ASSIGNMENT），每列默认 20/最多 50 条并返回完整 total，不加载全表；筛选选项仅从当前可见的本地快照产生，每类最多 100 条并以 `truncated` 告知截断，不伪造平台人员目录。`000037` 增加 `(tenant_id,expected_end,status,id)` 索引，无数据回填；仍须以真实 MySQL 8 `EXPLAIN ANALYZE` 和生产规模数据验证 P95 ≤ 2 秒。
 
 前端列表和只读看板使用同一组筛选参数，并把视图、分页、每列上限与筛选保存到 URL；不发送任何授权 `scope` 参数。看板只展示服务端返回的有界 items 和完整 total，不拖拽改状态。筛选选项失败时立即清空；列表/看板请求使用递增序列号拒绝过期响应和过期错误覆盖当前视图。
 
@@ -190,7 +198,9 @@ CRM 与 Portal 的浏览器角色/权限目录现由 `internal/platformcatalog` 
 
 售前人员选择统一使用 `GET /api/v1/owner-directory` 的基础平台授权目录。历史 `GET /api/v1/presale/engineers` 与 `POST /api/v1/presale/engineers/sync` HTTP 接口已废弃并移除；底层人员快照和同步 Worker 仍作为内部投递/指派校验数据源保留。
 
-`presale-engineer-sync-worker` 每 6 小时按租户调度，使用 OAuth Client Credentials 的单一 `technician.read` scope、强制 HTTPS、可选私有 CA/mTLS、禁止重定向、时间戳与随机 nonce、`FOR UPDATE SKIP LOCKED` 和有限租约。PMS 数据流 J 是共享权威技术人员池；本地 job tenant 只用于 CRM 缓存分区，不发送给 PMS，也不接受下游 tenant 覆盖。只有 HTTP 200、JSON Content-Type、完整非空、字段全部有效且角色枚举已知的快照才在单一事务内按 personId upsert，并在成功后停用快照缺席人员；HTTP、JSON、尾随内容、未知角色、重复 personId 或空快照均整批失败并保留旧缓存。联系方式只以独立 AEAD 密钥加密落库，API 不返回该字段。
+`presale-engineer-sync-worker` 每 6 小时按租户调度，使用 OAuth Client Credentials 的单一 `technician.read` scope、强制 HTTPS、可选私有 CA/mTLS、禁止重定向、时间戳与随机 nonce、`FOR UPDATE SKIP LOCKED` 和有限租约。PMS 数据流 J 是共享权威技术人员池；本地 job tenant 只用于 CRM 缓存分区，不发送给 PMS，也不接受下游 tenant 覆盖。只有 HTTP 200、JSON Content-Type、完整非空、字段全部有效且角色枚举已知的快照才在单一事务内按 personId upsert，并在成功后停用快照缺席人员；HTTP、JSON、尾随内容、未知角色、重复 personId 或空快照均整批失败并保留旧缓存。联系方式只以独立 AEAD 密钥加密落库，API 不返回该字段。停用人员中若仍有 `PENDING_EXECUTION_ASSIGNMENT` 申请的团队负责人，同一事务通过 `InvalidateTeamLead` 退回待重选，写状态日志、负责人移出证据和技术总监站内消息；任一写入失败回滚整批人员快照。
+
+TS-011 两级执行指派的入口、状态机、通知和超时见 `.ai/modules/presale-two-level-assignment.md`。团队负责人拒绝和失效回退只影响 `PENDING_EXECUTION_ASSIGNMENT`；`EXECUTING` 申请保持执行中，只通知技术总监人工接管，历史 `EXECUTING` / `COMPLETED` 不迁移、不回填。团队负责人待办、技术总监拒绝/失效通知写本地 `crm_notifications`，待负责人指派超时复用 TS-008 预警 Worker 的规则 `EXECUTION_ASSIGNMENT_OVERDUE`。人员交接模块已按方案只做数据隔离：`TEAM_LEAD` 不再进入执行责任清单，负责人转移返回 `CRM_PRESALE_TEAM_LEAD_REQUIRES_RESELECTION`，自动转移仍需业务另行确认；详见 `.ai/qa/ts-011-batch2/handover-integration-plan.md`。
 
 TS-009 日报投影通过 `go run ./cmd/presale-report-aggregate-worker` 运行；发布校验或受控回填可追加 `-once`。必需 `MYSQL_DSN`，可选 `PRESALE_REPORT_AGGREGATE_TENANTS`（逗号分隔；空值时只从查询窗口内的权威工时和既有投影发现租户）、`PRESALE_REPORT_AGGREGATE_WORKER_ID`、`PRESALE_REPORT_AGGREGATE_POLL_INTERVAL`（默认 `1h`）、`PRESALE_REPORT_AGGREGATE_LEASE_DURATION`（默认 `5m`）和 `PRESALE_REPORT_AGGREGATE_LOOKBACK_DAYS`（默认 `32`，范围 1～366）。Worker 使用 UTC 半开日窗口和共享作业租约；每个租户的窗口在单一事务中完整替换，运行失败不会提交部分聚合。该表是可重建投影，当前 API 仍读取权威明细，正式切换必须先签版投影新鲜度和降级策略。
 
@@ -237,7 +247,7 @@ CRM 以 `GET /api/v1/presale/reports/summary|trend|distribution` 提供最长 36
 
 `portal-report-worker` 从 `customer_portal.portal_report_outbox` 使用 `FOR UPDATE SKIP LOCKED` 和有限租约领取申请，使用独立 `report.request.write` OAuth Client Credentials 调用项目服务，稳定发送 `Idempotency-Key=event_id`、RFC3339Nano 时间戳和随机 nonce。平台 token 请求使用 `client_secret_basic`，表单只含 `grant_type` 与 `scope`，不发送 `audience`。
 
-项目服务的 ISSUED 回调不再在数据库事务中执行对象读取、病毒扫描或信封加密。Portal 仅验证白名单描述符，将其以独立 `PORTAL_REPORT_INGEST_DESCRIPTOR_KEY_BASE64`（不得与通用加密 key 复用）的 AES-256-GCM 加密后连同摘要和稳定事件号原子写入 `portal_report_ingest_jobs`，状态先进入 `INGEST_PENDING`。同一 Worker 通过 `FOR UPDATE SKIP LOCKED`、有限租约和六次退避领取作业，正式 provider 必须以 `event_id` 幂等执行；只有 `CLEAN`、不可变对象版本、AES-256-GCM key ref、扫描编号/时间和 SHA-256 全部成立时，才原子发布文件、`ISSUED` 时间线及个人通知。当前 Provider 未交付，作业会重试；第七次失败将作业和报告原子转为 `DEAD_LETTER`/`PROCESSING_FAILED`，不会错误变为可下载。
+ISSUED回调先校验可信描述符，以独立密钥加密写portal_report_ingest_jobs并进入INGEST_PENDING，不在回调事务外部读取。portal-report-worker按稳定事件通过File Gateway验证project.report、租户及PORTAL_REPORT_REQUEST绑定，执行PDF静态校验、独立AES-GCM加密及私有POSIX保存。版本、摘要、CLEAN证据与文件/通知事务成功才发布ISSUED；有限重试后PROCESSING_FAILED。默认INGEST_ONLY仅发布摄取心跳，申请须完整模式和真实外部服务，见docs/portal-report-service-integration.md。
 
 失败后最多重试 6 次，退避窗口为 1 分钟、5 分钟、15 分钟、1 小时、3 小时、6 小时，第 7 次失败进入 `DEAD_LETTER`。项目服务接受后才把本地状态从 `SUBMITTED` 投影为 `APPROVING`；租约过期事件可被其他实例恢复，并继续使用同一 `event_id` 幂等键。
 
@@ -249,7 +259,7 @@ CRM 以 `GET /api/v1/presale/reports/summary|trend|distribution` 提供最长 36
 
 `000043` 增加报告发放站内通知。只有可信文件 `Ingest` 成功后，ISSUED 回调才在文件记录、报告状态、不可变状态事件同一事务内为原申请 `account_id` 创建唯一 UNREAD 通知；摄取失败和回调精确重放不会生成通知。通知列表、未读数和幂等已读按 Portal 会话中的 tenant/customer/account 三重隔离，首次已读追加不可变审计；这只代表 Portal 站内通知，不代表邮件、IM 或外部渠道送达。
 
-当前下载实现不会把解密明文落临时文件。授权事务取出的数据库文件元数据会在申请缓冲槽和调用 reader 前重新限制为 `0 < size <= 50 MiB`；可信 reader 返回后，服务端在该上限内先将内容读入内存并重新校验实际长度与 SHA-256，校验通过后才提交 HTTP 200。进程内固定最多 2 个并发缓冲槽，等待受请求 context 取消，内存主体上界约 100 MiB（不含 Go/runtime 和 reader 自身缓冲）。传输成功后才在一个事务递增次数并写成功事件；客户端中断或成功审计失败会经独立短超时补记并进入服务端错误日志，但响应已经提交时 HTTP 状态无法再改写，这是明确的剩余语义。生产仍必须接入真正遵守 `OpenVerified` 契约、在 context 取消后解除阻塞的对象存储读取、信封解密和水印适配器，并按实例内存/副本数设置网关下载并发限制；当前 `unavailableReportFileReader` 保持明确 503，不能视为真实下载闭环。`000041` 只把报告申请和 grant 的 `created_by/updated_by` 扩到 128 字节，以对齐 Portal OIDC account/subject 标识上限，仍须验证在线 DDL 与回退前的数据长度条件。
+下载在有界读取、版本/摘要/扫描证据、风险及逐页水印成功后返回PDF，最多2个并发槽。完整内容密钥、私有目录、CRM身份和字体配置使app.go/report_security.go注入EncryptedStore、AuditRiskPolicy、PDFWatermarker；半配置拒绝启动，未配置才保留unavailable。完成审计成功才计次数；响应写出后审计失败无法再改HTTP状态，须留日志。直连IP/UA基线及五分钟五次成功限制不是可信GeoIP。
 
 Portal 前端报告中心已接入当前客户真实项目选择、申请、列表、详情和按事件序号展示的中文状态时间线。`report.request`、`report.read` 与 `report.download` 独立门禁；相同规范申请载荷失败重试复用同一 `Idempotency-Key`，字段变化才生成新键；列表、项目和详情各自具备加载/失败/空态及请求代次防旧响应覆盖。安全下载只在 `ISSUED` 状态可用；可信文件 reader 未配置时后端在授权校验后明确返回 503、记录失败审计且不生成伪文件。
 
@@ -293,7 +303,7 @@ CUS-004 浏览器接口位于 `/customer-portal/api/v1/filings`。客户数据�
 
 提交事务以 `FOR UPDATE` 锁定备案头，重新解密并全量校验，生成永久不可变快照后把 Portal 内部状态置为 `WAITING_CONTRACT` 并阻断草稿写入；`SUBMITTED` 专门保留给未来可信公安回执。管理员解锁只开放机器接口 `POST /customer-portal/internal/filings/{id}/unlock`，仅接受单一 `portal.filing.unlock` scope、显式 customer_id、版本、理由和幂等键，可把等待契约或已确认记录恢复为 `DRAFT` 并追加审计。旧提交快照不会被解锁或后续修改覆盖。
 
-`MATERIALS` 已提供受控创建上传、对象直传、完成核验和机器扫描回调；只保存加密对象引用、不可变版本、SHA/MIME/大小和扫描证据，且并发同幂等键会严格重读赢家，不泄露唯一键错误。前端已接真实上传与扫描状态。默认对象存储和扫描适配器为 unavailable，因此正式 Provider 未注入时返回 503；身份证、动态子系统清单等未签版字段、正式 2025 模板、PDF 生成及公安外部提交仍不臆造，`POST /filings/{id}/exports` 继续明确返回 503。
+`MATERIALS` 已提供受控创建上传、对象直传、完成核验和机器扫描回调；只保存加密对象引用、不可变版本、SHA/MIME/大小和扫描证据，且并发同幂等键会严格重读赢家，不泄露唯一键错误。前端已接真实上传与扫描状态。材料可由 HTTP 文件网关或显式本地文件存储配合静态校验器装配；二者均未配置时返回 503；身份证、动态子系统清单等未签版字段、官方完整2025模板仍待签版；PDF已有真实字段/材料清单渲染，配置PDF目录和CJK字体后可用，缺依赖PORTAL_FILING_EXPORT_UNAVAILABLE。当前无公安提交命令入口。
 
 > **范围说明（2026-08-05，已确认）**：客户自助门户**不涉及与公安相关的对接**。本段及下文“公安提交 Worker / 回执 / SUBMITTED”属于超出门户范围的既有实现，按边界保留；门户验收与后续开发不再以公安对接为准，正式公安 Provider 契约与门户无关。
 
@@ -306,8 +316,8 @@ CUS-004 浏览器接口位于 `/customer-portal/api/v1/filings`。客户数据�
 - 平台人员/组织目录的商机预警团队与管理层收件人解析契约；
 - PMS 人员同步正式环境、共享权威池空快照确认和无时区时间字段升级；OIDC `person_id` 权威绑定与签发代码已完成；
 - Portal 项目服务正式环境和报告回调 machine JWT；
-- Portal 报告正式对象 reader、信封解密/文件加密、水印及可信风险网关/GeoIP Provider；安全证据、追踪摘要、download grant、审计和受控路由已实现，Provider 未配置时 503。
-- Portal 备案正式 2025 全字段/schema 与模板签版、正式对象存储/扫描 Provider、PDF 渲染和公安外部提交/回执契约；本地材料纵切面、等待/提交中/失败状态机、稳定投递事件和加密回执持久化已实现。
+- Portal网关只读摄取、私有AES-GCM存储、审计风险和逐页水印已实现/可装配；真实外部服务、来源发布、机器身份及环境E2E仍待验收，直连IP/UA不是GeoIP。
+- Portal 备案正式 2025 全字段/schema 与模板签版、文件网关运行条件和 PDF 渲染；公安外部提交不是当前门户用户动作的成功条件；本地材料纵切面、等待/提交中/失败状态机、稳定投递事件和加密回执持久化已实现。
 
 完整逐需求状态见 [`开发状态.md`](开发状态.md)。
 
@@ -351,4 +361,27 @@ npm test
 npm run build
 ```
 
-当前源码 migration plan 校验结果为 CRM 47 个文件至 `000075`，combined checksum `sha256:994e286df8a5c8152bfff9498d449a089a5ce029cbed47b8314f36f3607afef7`；Portal 30 个文件至 `000077`，combined checksum `sha256:c3f82ff64488ccb9b0218f3594294ae906647d59dd958cd49f454023e9a41299`。该校验只验证文件归属、顺序和 checksum，不等于 MySQL 空库或存量库已执行。2026-08-02 的真实空库/集成证据仍覆盖 CRM 至 `000071`、Portal 至 `000070`；新增迁移仍需补做上一版本增量升级、在线 DDL、metadata lock、回滚和生产规模性能演练。
+当前静态源码计划CRM75文件至000121、Portal39文件至000119；发布时从实际镜像重新生成计划/checksum。计划只读文件，不执行DDL，不证明目标库已升级。历史空库证据保留在migrations/README.md；存量升级、在线DDL、metadata lock、回滚和规模性能仍独立验收。
+
+## 当前生产进程及升级核对（2026-10-22）
+
+生产 Compose 与 `subsystems.d` 声明 CRM 的 customer-api 及 8 个 Worker，Portal 的 portal-api、portal-report-worker、portal-invite-compensation-worker。项目同步、项目 PDF、反馈 SLA、人员同步、日报聚合、禁用恢复等独立命令存在，不证明生产已启动。运行服务、env_file 消费者与商业许可批准组件是不同事实；许可按受控批准集合和每成员独立凭据/状态、镜像覆盖摘要及当期 ACK 核对。
+
+Portal 迁移 000119 配套请求审计 client_ip/ip_source；缺列时审计失败关闭，探针可能 503、网关 502。先按计划、备份、语句检查点升级，再核对审计和业务，不关闭审计或伪造回执。
+
+指派候选 assignment_duty 与保存共用目录职责：TEAM_LEAD 需 presale.assign，EXECUTOR 同时需 presale.progress/worklog/complete；资格不足 422、目录不可用 503。execution-takeover 仅技术总监/超管，须同部门合格负责人、版本和幂等键，保留执行人。审批通知 started_at 按毫秒区分轮次，同轮稳定，重开产生新通知。
+
+## 操作者运行核对与失败处置（2026-10-22）
+
+运维人员先核对目标镜像 digest、CRM/Portal 独立配置和 migration 版本；不要打开或复制 `.env`/凭据到工单。认证目录 hash 必须匹配当前二进制，不能通过关闭权限校验解决登录失败。
+
+1. 只读检查各自 livez/readyz/healthz；当前 readyz 只探测数据库，不探测所有可选 Provider。Portal 启动会真实 Ping 数据库，CRM 则在健康探针执行 Ping。
+2. 用授权业务账号查看 auth/me 的实际角色、权限及数据范围，再读取 capabilities；售前还应打开 available-actions，附件读取商机级 attachment-capabilities。
+3. 配置 `CONTRACT_VERIFICATION_ENABLED` 与精确合同摘要 scope 才能人工签约；`PORTAL_PROJECT_HISTORY_ENABLED` 才注入客户项目历史读取器。错误配置会在启动时失败，依赖请求失败可返回 503。
+4. 对 Portal 报告/项目 PDF 任务，核对对应 Worker 的独立配置、数据库心跳、队列状态与受理回执。报告下载须完整存储、CRM身份、风险、水印及字体，不能只开reader。
+5. CRM 通知先看本地消息，再核对平台投递字段；422 会记录永久失败，其余网络失败继续重试。停止中央投递不会删除本地收件箱。
+6. 401 重新登录；403 核对当前角色/权限/目录和资源范围；409 重新读取版本/状态，结果不明确先查询原操作；503 按 reason_code 核对适配器、心跳或凭据绑定，不手工改数据库为成功。
+
+当前信用申请/审批 Handler 与 Service 没有实现通用严格 JSON 解码或审批幂等重放，不能把其他模块的保障推及所有 credit 命令。信用申请有持久幂等，决定动作依靠 PENDING 与 version；网络结果不明确先刷新待办和历史。
+
+种子与接入命令会写真实数据库/外部身份，只用于已明确批准的隔离开发环境；不得用原型或演示初始化代替生产业务迁移。上文历史测试日期保留，未据此声明本轮验证通过。

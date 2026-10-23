@@ -201,8 +201,8 @@ func (s *gormTransferStore) claimOne(ctx context.Context, now time.Time, lease t
 }
 
 func (a *App) process(ctx context.Context, event opportunity.OutboxEvent, token string) error {
-	// Leave a claimed task leased rather than marking success/dead-letter; it
-	// becomes claimable again after lease expiry when authorization recovers.
+	// 保留已认领任务的租约，不标记为成功或死信；
+	// 授权恢复后，任务在租约到期时可重新认领。
 	if err := workerlicense.Require(ctx, core.MUTATE_BUSINESS); err != nil {
 		return err
 	}
@@ -251,11 +251,15 @@ func (s *gormTransferStore) authoritativeCommand(ctx context.Context, event oppo
 			}
 			return err
 		}
-		if state.DeletedAt != nil || state.Version != payload.EventVersion || state.CurrentStage != opportunity.StageSigned || state.Status != opportunity.StatusClosed || state.ContractRef == "" || state.TerminalPendingType != opportunity.PendingNone {
+		// EventVersion 表示不可变的传输快照。普通主数据
+		// 编辑可能在事件排队期间推进商机版本；
+		// 不能因此将仍有效的签名商机转为死信。版本
+		// 低于快照时才视为过期并拒绝。
+		if state.DeletedAt != nil || state.Version < payload.EventVersion || state.CurrentStage != opportunity.StageSigned || state.Status != opportunity.StatusClosed || state.ContractRef == "" || state.TerminalPendingType != opportunity.PendingNone {
 			return permanentValidationError{"authoritative opportunity no longer matches accepted signed state"}
 		}
 		// Outbox 载荷中的展示字段可能已经陈旧，只保留事件身份和发生时间；合同指令中的业务值全部取自锁定后的 CRM 权威行。
-		command = signedCommand{EventID: locked.EventID, TenantID: state.TenantID, OpportunityID: state.ID, EventVersion: state.Version, OpportunityNo: state.OpportunityNo, CustomerID: state.CustomerID, ContractRef: state.ContractRef, ExpectedAmount: normalizeAmount(state.ExpectedAmount), OccurredAt: locked.CreatedAt.UTC(), SourceRequestID: ""}
+		command = signedCommand{EventID: locked.EventID, TenantID: state.TenantID, OpportunityID: state.ID, EventVersion: payload.EventVersion, OpportunityNo: state.OpportunityNo, CustomerID: state.CustomerID, ContractRef: state.ContractRef, ExpectedAmount: normalizeAmount(state.ExpectedAmount), OccurredAt: locked.CreatedAt.UTC(), SourceRequestID: ""}
 		return nil
 	})
 	var permanent permanentValidationError

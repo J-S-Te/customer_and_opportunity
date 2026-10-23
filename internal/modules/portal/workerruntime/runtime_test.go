@@ -61,7 +61,7 @@ func TestFencingSQLBindsIncarnationAndStartReplacesIt(t *testing.T) {
 	}
 }
 
-// dryRunConn is never called because GORM DryRun renders statements only.
+// dryRunConn 不会被调用，因为 GORM DryRun 仅渲染语句。
 type dryRunConn struct{}
 
 func (dryRunConn) PrepareContext(context.Context, string) (*sql.Stmt, error) {

@@ -42,10 +42,11 @@ func newProjectServiceClientWithTransport(cfg ProjectServiceConfig, transport ht
 		ClientID: cfg.ClientID, ClientSecret: cfg.ClientSecret, TokenURL: cfg.TokenURL,
 		Scopes: strings.Fields(cfg.Scope), AuthStyle: oauth2.AuthStyleInHeader,
 	}
-	tokenClient := &http.Client{Transport: transport, Timeout: 5 * time.Second}
+	tokenClient := &http.Client{Transport: transport, Timeout: 5 * time.Second, CheckRedirect: refuseIntegrationRedirect}
 	ctx := context.WithValue(context.Background(), oauth2.HTTPClient, tokenClient)
 	client := credentials.Client(ctx)
 	client.Timeout = 5 * time.Second
+	client.CheckRedirect = refuseIntegrationRedirect
 	return &projectServiceClient{client: client, endpoint: cfg.RequestURL, now: func() time.Time { return time.Now().UTC() }, nonce: randomNonce}
 }
 
@@ -83,17 +84,19 @@ func (c *projectServiceClient) Submit(ctx context.Context, event report.Outbox) 
 			DownstreamRequestID string `json:"downstream_request_id"`
 		} `json:"data"`
 	}
-	// 解码器最多读取 1 MiB，并只接受响应信封中的下游请求标识作为投递凭证；当前实现
-	// 校验首个 JSON 值及标识格式，但没有额外扫描尾随的第二个 JSON 值。
-	if err = json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&envelope); err != nil {
+	// 整个响应有界且只有一个 JSON 值；错误页、尾随对象和被截断的超限响应不能成为投递回执。
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, (1<<20)+1))
+	if err != nil || len(raw) > 1<<20 || json.Unmarshal(raw, &envelope) != nil {
 		return "", errors.New("invalid project-service response")
 	}
 	downstreamID := strings.TrimSpace(envelope.Data.DownstreamRequestID)
-	if downstreamID == "" || len(downstreamID) > 128 {
+	if downstreamID == "" || len(downstreamID) > 128 || strings.ContainsAny(downstreamID, "\x00\r\n") {
 		return "", errors.New("project-service response is missing request identity")
 	}
 	return downstreamID, nil
 }
+
+func refuseIntegrationRedirect(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 
 func randomNonce() (string, error) {
 	raw := make([]byte, 32)

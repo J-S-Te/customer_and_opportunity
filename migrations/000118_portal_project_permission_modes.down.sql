@@ -1,0 +1,1 @@
+DROP TABLE IF EXISTS portal_account_project_permission_modes;

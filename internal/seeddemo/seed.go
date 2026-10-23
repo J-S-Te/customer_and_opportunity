@@ -374,6 +374,9 @@ func (seed *seeder) createTerminalOpportunity(ctx context.Context, key string, i
 		SystemCount: input.SystemCount, PainPoints: input.PainPoints, CompetitorInfo: input.CompetitorInfo,
 		OwnerUserID: input.OwnerUserID, OwnerOrgID: input.OwnerOrgID,
 		CurrentStage: terminal.Stage, Status: opportunity.StatusClosed, ContractRef: contractRef,
+		// 终态机会也必须带上合法的合同关联状态：数据库对 contract_link_status 有取值约束，
+		// 留空会违反 chk_opportunity_contract_link_status，与新建路径（PENDING）保持一致。
+		ContractLinkStatus: "PENDING",
 		LostReason: lostReason, TerminalPendingType: terminal.PendingType, StageChangedAt: seed.now,
 	}
 	model.TenantID, model.CreatedBy, model.UpdatedBy, model.Version = seed.tenantID, seed.actorID, seed.actorID, 1

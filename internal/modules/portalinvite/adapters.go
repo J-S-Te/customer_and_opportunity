@@ -290,10 +290,10 @@ func (a *HTTPPortalProvisioner) ProvisionMapping(ctx context.Context, contact Co
 	return a.ProvisionMappingIdempotent(ctx, contact, identity, portalMappingIdempotencyKey(contact, identity))
 }
 
-// ReconciliationSnapshots reuses the same least-privilege CRM→Portal machine
-// identity as provisioning, but calls a read-only bounded projection. The
-// endpoint is derived from the reviewed provision URL so deployments do not
-// need a second manually maintained internal URL.
+// ReconciliationSnapshots 复用开通流程的同一最小权限 CRM→Portal 机器
+// 身份，但调用只读有界投影。
+// 端点由已审查的开通 URL 派生，部署时
+// 无需再手工维护第二个内部 URL。
 func (a *HTTPPortalProvisioner) ReconciliationSnapshots(ctx context.Context, subjects []string) ([]PortalIdentitySnapshot, error) {
 	if a == nil || a.client == nil || len(subjects) == 0 || len(subjects) > 100 || !strings.HasSuffix(a.endpoint, "/accounts/provision") {
 		return nil, errors.New("Portal reconciliation request is invalid")

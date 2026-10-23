@@ -25,7 +25,7 @@ type backchannelTokenVerifier interface {
 	VerifyBackchannelLogout(context.Context, string) (verifiedLogoutToken, error)
 }
 
-// VerifyBackchannelLogout 使用 CRM 自己的 OIDC verifier 校验签名、issuer、audience 与 exp，
+// VerifyBackchannelLogout 使用 CRM 自己的 OIDC 校验器 校验签名、issuer、audience 与 exp，
 // 返回的声明只供 CRM 注销协议继续做严格语义校验。
 func (c *platformOIDCClient) VerifyBackchannelLogout(ctx context.Context, raw string) (verifiedLogoutToken, error) {
 	if c == nil || c.verifier == nil {

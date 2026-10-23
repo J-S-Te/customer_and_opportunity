@@ -131,8 +131,8 @@ type queueStats struct {
 }
 
 func (w *Worker) dispatch(ctx context.Context, task portalinvite.CompensationTask) error {
-	// Leave a claimed task leased rather than marking success/dead-letter; it
-	// becomes claimable again after lease expiry when authorization recovers.
+	// 保留已认领任务的租约，不标记为成功或死信；
+	// 授权恢复后，任务在租约到期时可重新认领。
 	op := core.MUTATE_BUSINESS
 	if task.TaskType == portalinvite.CompensationBindingDisable {
 		op = core.ESSENTIAL_SERVICE

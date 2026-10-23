@@ -89,7 +89,7 @@ func TestRunOnceReportsRetryPersistenceFailure(t *testing.T) {
 	}
 }
 
-// This test requires a disposable MySQL database, never a business database.
+// 本测试要求一次性 MySQL 数据库，禁止使用业务数据库。
 func TestMySQLHeldRowsRemainPreservedAndUnclaimed(t *testing.T) {
 	dsn := os.Getenv("REQUESTAUDIT_TEST_DSN")
 	if dsn == "" {

@@ -179,7 +179,7 @@ func TestCreatePreservesOpaqueProjectID(t *testing.T) {
 	projects := &projectStub{detail: &project.Detail{Snapshot: project.Snapshot{ProjectID: id, CustomerID: 7, SourceUpdatedAt: now}}}
 	projects.detail.Snapshot.TenantID = "t"
 	repo := &repoStub{findErr: ErrNotFound}
-	// Use a reader that explicitly accepts the whitespace-bearing opaque ID.
+	// 使用明确接受带空白不透明 ID 的读取器。
 	reader := projectReaderFunc(func(_ context.Context, scope project.Scope, got string) (*project.Detail, error) {
 		if scope.TenantID != "t" || scope.CustomerID != 7 || got != id {
 			return nil, project.ErrNotFound

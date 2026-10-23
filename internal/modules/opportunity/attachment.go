@@ -252,7 +252,7 @@ type AttachmentService struct {
 	now           func() time.Time
 }
 
-// UseFileGatewayMigration 配置独立 File Gateway 的渐进迁移；不调用时保持 legacy 行为。
+// UseFileGatewayMigration 配置独立 文件网关 的渐进迁移；不调用时保持 旧版行为。
 func (s *AttachmentService) UseFileGatewayMigration(migration AttachmentGatewayMigration) *AttachmentService {
 	s.gateway = migration
 	return s

@@ -33,7 +33,7 @@ func (s *Store) Publish(ctx context.Context, value BusinessEvent) error {
 	return database.FromContext(ctx, s.db).Table(s.tableName).Create(&Record{
 		EventID: value.EventID, TenantID: value.TenantID, ApplicationCode: value.ApplicationCode,
 		EnvironmentCode: value.EnvironmentCode, ActorType: value.ActorType, ActorID: value.ActorID,
-		ActorName: value.ActorName, UserLoginIP: value.UserLoginIP, Action: value.Action, ResourceType: value.ResourceType,
+		ActorName: value.ActorName, UserLoginIP: value.UserLoginIP, ClientIP: value.ClientIP, IPSource: value.IPSource, Action: value.Action, ResourceType: value.ResourceType,
 		ResourceID: value.ResourceID, RequestID: requestID, Method: "BUSINESS", Route: "BUSINESS",
 		Result: value.Result, ReasonCode: value.ReasonCode, RiskLevel: value.RiskLevel,
 		DeliveryStatus: StatusPending, NextAttemptAt: &now, OccurredAt: now, CompletedAt: &now,
@@ -57,7 +57,8 @@ func (s *Store) Complete(ctx context.Context, eventID string, value Completion) 
 	result := s.db.WithContext(ctx).Table(s.tableName).
 		Where("event_id=? AND delivery_status=?", eventID, StatusStarted).
 		Updates(map[string]any{
-			"actor_type": value.ActorType, "actor_id": value.ActorID, "actor_name": value.ActorName, "user_login_ip": value.UserLoginIP,
+			"actor_type": value.ActorType, "actor_id": value.ActorID, "actor_name": value.ActorName,
+			"user_login_ip": value.UserLoginIP, "client_ip": value.ClientIP, "ip_source": value.IPSource,
 			"action": value.Action, "route": value.Route, "http_status": value.HTTPStatus,
 			"result": value.Result, "reason_code": value.ReasonCode, "risk_level": value.RiskLevel,
 			"delivery_status": StatusPending, "next_attempt_at": now, "completed_at": now, "updated_at": now,
@@ -71,9 +72,9 @@ func (s *Store) Complete(ctx context.Context, eventID string, value Completion) 
 	return nil
 }
 
-// RecoverInterrupted converts abandoned reservations into explicit failures.
-// A process crash therefore still produces an auditable terminal fact instead
-// of silently dropping the operation that had already been admitted.
+// RecoverInterrupted 将被遗弃的预留记录转为显式失败。
+// 因此进程崩溃仍会产生可审计的终态事实，
+// 不会静默丢弃已获准执行的操作。
 func (s *Store) RecoverInterrupted(ctx context.Context, staleBefore, now time.Time) error {
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Table(s.tableName).
@@ -85,9 +86,9 @@ func (s *Store) RecoverInterrupted(ctx context.Context, staleBefore, now time.Ti
 			}).Error; err != nil {
 			return err
 		}
-		// A process may die after claiming a batch or while acknowledging its
-		// receipts. Once the lease expires, make the same event IDs retryable;
-		// platform-side deduplication makes an already accepted event safe.
+		// 进程可能在认领批次后或确认回执期间退出。
+		// 租约到期后，使相同事件 ID 可再次重试；
+		// 平台去重保证已接受事件仍可安全处理。
 		return tx.Table(s.tableName).
 			Where("delivery_status=? AND locked_until<=?", StatusProcessing, now.UTC()).
 			Updates(map[string]any{
@@ -138,9 +139,9 @@ func (s *Store) Delivered(ctx context.Context, workerID string, values []Record,
 		}).Error
 }
 
-// HoldSourceMismatch preserves a permanently mismatched event without repeated
-// writes. NULL next_attempt_at is excluded by Claim, including older workers.
-// The lease-owner condition prevents a stale worker from changing another claim.
+// HoldSourceMismatch 保留永久不匹配事件，避免重复写入。
+// Claim 会排除 next_attempt_at 为 NULL 的记录，旧工作器同样如此。
+// 租约持有者条件阻止过期工作器修改其他认领。
 func (s *Store) HoldSourceMismatch(ctx context.Context, workerID string, values []Record, now time.Time) error {
 	if len(values) == 0 {
 		return nil
@@ -174,8 +175,8 @@ func (s *Store) Retry(ctx context.Context, workerID string, values []Record, cod
 		}).Error
 }
 
-// Status returns a tenant-scoped, aggregate-only view for operational
-// monitoring. It never returns audit payloads, tokens, or request content.
+// Status 返回仅含聚合信息的租户范围运维监控
+// 视图，绝不返回审计载荷、令牌或请求内容。
 func (s *Store) Status(ctx context.Context, tenantID string) (OutboxStatus, error) {
 	status := OutboxStatus{ErrorCounts: map[string]int64{}}
 	query := func() *gorm.DB {

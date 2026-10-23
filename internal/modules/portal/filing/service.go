@@ -39,11 +39,13 @@ type ProjectAccess interface {
 }
 
 type Service struct {
-	repo      Repository
-	protector Protector
-	projects  ProjectAccess
-	clock     Clock
-	ids       IDGenerator
+	repo        Repository
+	protector   Protector
+	projects    ProjectAccess
+	clock       Clock
+	ids         IDGenerator
+	exports     TextRenderer
+	exportSlots chan struct{}
 }
 
 func NewService(repo Repository, protector Protector, projects ProjectAccess, clock Clock, ids IDGenerator) *Service {

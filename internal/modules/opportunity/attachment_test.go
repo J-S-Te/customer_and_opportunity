@@ -239,8 +239,8 @@ func TestAttachmentCompleteFailureReleasesLeaseAndExpiredCrashLeaseCanBeTakenOve
 	if _, err = service.CompleteUpload(attachmentContext("tenant-a"), 7, created.Attachment.ID, AttachmentCompleteRequest{Version: current.Version, IdempotencyKey: "complete"}); err != nil {
 		t.Fatal(err)
 	}
-	// Simulate a process crash after durable FINALIZING and verify an expired
-	// owner can be taken over without a nonexistent reconciliation worker.
+	// 模拟持久化 FINALIZING 后进程崩溃，验证已过期的
+	// 持有者可被接管，无需依赖不存在的对账工作器。
 	crashed := repo.values[created.Attachment.ID]
 	crashed.ScanStatus = AttachmentFinalizing
 	crashed.ScanReference = ""

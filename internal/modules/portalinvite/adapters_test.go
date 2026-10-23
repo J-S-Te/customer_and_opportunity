@@ -10,8 +10,8 @@ import (
 	"gorm.io/gorm"
 )
 
-// This dry-run assertion protects the IDOR boundary without replacing the
-// required real-MySQL repository integration suite at release time.
+// 此 DryRun 断言保护 IDOR 边界，但不能替代
+// 发布时必需的真实 MySQL 仓储集成套件。
 func TestCustomerAdapterSQLAppliesOwnerScope(t *testing.T) {
 	db, err := gorm.Open(mysql.New(mysql.Config{DSN: "crm:test@tcp(127.0.0.1:3306)/crm?parseTime=true", SkipInitializeWithVersion: true}), &gorm.Config{DryRun: true, DisableAutomaticPing: true})
 	if err != nil {
@@ -22,13 +22,13 @@ func TestCustomerAdapterSQLAppliesOwnerScope(t *testing.T) {
 		t.Fatal(err)
 	}
 	adapter := NewCustomerAdapter(db, codec)
-	// DryRun cannot return rows, but the generated statement is retained even
-	// though the adapter correctly maps the empty result to CONTACT_INVALID.
+	// DryRun 不返回数据行，但生成的语句仍保留；
+	// 适配器会正确地将空结果映射为 CONTACT_INVALID。
 	_, _ = adapter.RegistrationContact(context.Background(), auth.Principal{TenantID: "tenant-a", UserID: "sales-a", ScopeMode: auth.ScopeSelf}, 7)
 	statement := db.Statement.SQL.String()
 	if statement == "" {
-		// GORM clones sessions for chained queries, so assert through the common
-		// builder directly when the fallback DB doesn't retain child SQL.
+		// GORM 为链式查询克隆会话；若回退数据库不保留子查询 SQL，
+		// 则直接通过公共构建器断言。
 		statement = scopedContactQuery(db, auth.Principal{TenantID: "tenant-a", UserID: "sales-a", ScopeMode: auth.ScopeSelf}, 7).Limit(2).Find(&[]struct{}{}).Statement.SQL.String()
 	}
 	for _, expected := range []string{"c.tenant_id = ?", "c.id = ?", "c.owner_user_id = ?", "ct.is_registration = TRUE", "LIMIT ?"} {

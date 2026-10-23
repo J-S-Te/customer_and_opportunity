@@ -189,6 +189,7 @@ func (s *Service) CompleteTerminalTodo(ctx context.Context, id uint64, input Ter
 }
 
 type Service struct {
+	freeze          FreezeChecker
 	db              *gorm.DB
 	repo            Repository
 	audit           audit.Writer
@@ -253,6 +254,9 @@ func (s *Service) Create(ctx context.Context, input CreateRequest) (*Response, e
 		return nil, ErrIdempotencyKeyTooLong
 	}
 	input = inheritCreateOwner(normalizeCreateRequest(input), principal)
+	if err := s.ensureOwnerNotFrozen(ctx, principal.TenantID, input.OwnerUserID); err != nil {
+		return nil, err
+	}
 	input.IdempotencyKey = key
 	if err := validateOpportunityMasterDataSelection(input.Name, input.Type, input.Source, input.RequirementSummary, input.TypeIDs, input.SourceIDs); err != nil {
 		return nil, err
@@ -734,8 +738,8 @@ func (s *Service) Get(ctx context.Context, id uint64) (*Response, error) {
 	return &result, nil
 }
 
-// EnsurePresaleEligible locks the opportunity before a presale request is
-// created. Presale work is related to, but never changes, the sales stage.
+// EnsurePresaleEligible 在创建售前请求前锁定商机。
+// 售前工作与销售阶段相关，但绝不改变销售阶段。
 func (s *Service) EnsurePresaleEligible(ctx context.Context, id uint64) error {
 	principal, err := requirePrincipal(ctx)
 	if err != nil {
@@ -1278,8 +1282,8 @@ func (s *Service) ContractLinkCallback(ctx context.Context, id uint64, input Con
 	if err != nil {
 		return nil, err
 	}
-	// Normalize before hashing so harmless transport whitespace does not turn a
-	// retry into a false idempotency conflict.
+	// 计算哈希前先规范化，避免无害的传输空白将
+	// 重试误判为幂等冲突。
 	input.EventID = strings.TrimSpace(input.EventID)
 	input.IntakeID = strings.TrimSpace(input.IntakeID)
 	input.ContractID = strings.TrimSpace(input.ContractID)
@@ -1301,9 +1305,9 @@ func (s *Service) ContractLinkCallback(ctx context.Context, id uint64, input Con
 	requestHash := hex.EncodeToString(hashBytes[:])
 	var result Response
 	err = database.WithTransaction(ctx, s.db, func(txCtx context.Context) error {
-		// Lock the aggregate before reading the replay ledger. This matters under
-		// MySQL REPEATABLE READ: two identical callbacks must not both observe an
-		// empty snapshot and race into a duplicate-key error on the ledger insert.
+		// 读取重放台账前锁定聚合。在 MySQL REPEATABLE READ
+		// 下尤其重要：两个相同回调不能同时观察到
+		// 空快照，并在插入台账时竞争导致重复键错误。
 		model, findErr := s.repo.FindByIDForUpdate(txCtx, principal, id)
 		if findErr != nil {
 			return findErr

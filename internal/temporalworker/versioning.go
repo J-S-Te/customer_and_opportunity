@@ -17,7 +17,7 @@ type VersioningConfig struct {
 	Policy         string
 }
 
-// WorkerOptions 生成售前 Temporal Worker 的 Deployment-based Versioning 选项。
+// WorkerOptions 生成售前 Temporal Worker 的 基于部署的版本路由选项。
 func WorkerOptions(config VersioningConfig) (worker.Options, error) {
 	buildID := strings.TrimSpace(config.BuildID)
 	if buildID == "" {

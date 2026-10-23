@@ -8,10 +8,10 @@ import (
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/response"
 )
 
-// auditOutboxStatusHandler exposes only tenant-scoped aggregate delivery state
-// to users already authorized to read customer audit history. It intentionally
-// never performs a remote check and never returns client credentials, tokens,
-// payloads, headers, or request bodies.
+// auditOutboxStatusHandler 仅向已有客户审计读取权限的用户
+// 提供租户范围内的聚合投递状态。
+// 它不执行远程检查，也不返回客户端凭据、令牌、
+// 载荷、请求头或请求体。
 func auditOutboxStatusHandler(store *requestaudit.Store, config Config) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		principal, ok := auth.FromContext(c.Request.Context())

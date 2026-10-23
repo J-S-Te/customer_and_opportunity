@@ -82,6 +82,7 @@ type scanRequest struct {
 	ApplicantID         string
 	Status              presale.RequestStatus
 	CurrentApprovalNode uint8
+	TeamLeadPersonID    string
 	ExpectedEnd         time.Time
 	CreatedAt           time.Time
 	UpdatedAt           time.Time
@@ -100,7 +101,7 @@ func (a *App) Scan(ctx context.Context) error {
 	var afterID uint64
 	for {
 		var requests []scanRequest
-		err = a.db.WithContext(ctx).Table("crm_presale_requests r").Select(`r.id,r.tenant_id,r.request_no,r.applicant_id,r.status,r.current_approval_node,r.expected_end,r.created_at,r.updated_at,
+		err = a.db.WithContext(ctx).Table("crm_presale_requests r").Select(`r.id,r.tenant_id,r.request_no,r.applicant_id,r.status,r.current_approval_node,r.team_lead_person_id,r.expected_end,r.created_at,r.updated_at,
 			CASE WHEN r.status='PENDING_APPROVAL' AND r.current_approval_node=2 THEN COALESCE(
 			 (SELECT MAX(l.approved_at) FROM crm_presale_approval_logs l WHERE l.tenant_id=r.tenant_id AND l.request_id=r.id AND l.node=1 AND l.result='PASS'),r.updated_at)
 			 ELSE COALESCE((SELECT MAX(s.occurred_at) FROM crm_presale_status_logs s
@@ -154,7 +155,7 @@ func (a *App) scanRequest(ctx context.Context, request scanRequest, now time.Tim
 	}
 	return a.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var locked scanRequest
-		if err := tx.Table("crm_presale_requests").Clauses(clause.Locking{Strength: "UPDATE"}).Select("id,tenant_id,request_no,applicant_id,status,current_approval_node,expected_end,created_at,updated_at").Where("tenant_id=? AND id=? AND deleted_at IS NULL", request.TenantID, request.ID).Take(&locked).Error; err != nil {
+		if err := tx.Table("crm_presale_requests").Clauses(clause.Locking{Strength: "UPDATE"}).Select("id,tenant_id,request_no,applicant_id,status,current_approval_node,team_lead_person_id,expected_end,created_at,updated_at").Where("tenant_id=? AND id=? AND deleted_at IS NULL", request.TenantID, request.ID).Take(&locked).Error; err != nil {
 			return err
 		}
 		if terminal(locked.Status) {
@@ -222,7 +223,7 @@ func cancellableAlertStatus(status string) bool {
 
 func currentAssignees(tx *gorm.DB, request scanRequest) ([]string, error) {
 	var ids []string
-	err := tx.Table("crm_presale_assignments").Distinct("assignee_id").Where("tenant_id=? AND request_id=? AND is_current=1 AND deleted_at IS NULL", request.TenantID, request.ID).Pluck("assignee_id", &ids).Error
+	err := tx.Table("crm_presale_assignments").Distinct("assignee_id").Where("tenant_id=? AND request_id=? AND is_current=1 AND deleted_at IS NULL AND assignment_kind=?", request.TenantID, request.ID, presale.AssignmentKindExecutor).Pluck("assignee_id", &ids).Error
 	return ids, err
 }
 
@@ -238,6 +239,13 @@ func evaluate(rule presale.AlertRule, request scanRequest, assignees []string, n
 	case presale.AlertAssignmentOverdue:
 		due := request.StatusEnteredAt.Add(hours)
 		return request.StatusEnteredAt, due, roleRecipientsPlaceholder("team_lead"), request.Status == presale.StatusApprovedPendingAssignment && !now.Before(due)
+	case presale.AlertExecutionAssignmentOverdue:
+		due := request.StatusEnteredAt.Add(hours)
+		recipients := make([]recipientTarget, 0, 1)
+		if request.TeamLeadPersonID != "" {
+			recipients = append(recipients, recipientTarget{Kind: presale.AlertRecipientUser, ID: request.TeamLeadPersonID})
+		}
+		return request.StatusEnteredAt, due, recipients, request.Status == presale.StatusPendingExecutionAssignment && !now.Before(due)
 	case presale.AlertExecutionDueSoon:
 		due := request.ExpectedEnd.Add(-hours)
 		return request.ExpectedEnd, due, executionRecipients(assignees, request.ApplicantID), request.Status == presale.StatusExecuting && !now.Before(due) && now.Before(request.ExpectedEnd)

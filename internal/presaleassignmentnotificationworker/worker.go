@@ -200,7 +200,7 @@ func validatePayload(event presale.OutboxEvent) (eventPayload, string, bool) {
 func validateEvidence(outbox presale.OutboxEvent, evidence presale.AssignmentEvent, assignment presale.Assignment, request presale.PresaleRequest) string {
 	if evidence.EventID != outbox.EventID || evidence.TenantID != outbox.TenantID || evidence.RequestID != request.ID ||
 		evidence.AssignmentID != assignment.ID || assignment.RequestID != evidence.RequestID || evidence.RecipientPersonID == "" || evidence.RecipientPersonID != assignment.AssigneeID ||
-		evidence.PersonNameSnapshot != assignment.AssigneeNameSnapshot || evidence.RoleSnapshot != assignment.AssigneeRole ||
+		evidence.RecipientNamespace != assignment.AssigneeNamespace || evidence.PersonNameSnapshot != assignment.AssigneeNameSnapshot || evidence.RoleSnapshot != assignment.AssigneeRole ||
 		presale.AssignmentNotificationEventID(evidence.TenantID, evidence.RequestID, evidence.AssignmentID, evidence.EventType) != evidence.EventID {
 		return "assignment notification evidence mismatch"
 	}
@@ -229,7 +229,8 @@ func project(outbox presale.OutboxEvent, evidence presale.AssignmentEvent, reque
 		SourceEventID: outbox.EventID, Type: typeCode, OpportunityID: request.OpportunityID,
 		OpportunityNo: request.OpportunityNoSnapshot, RequestID: request.ID, RequestNo: request.RequestNo, AssignmentID: evidence.AssignmentID,
 		RecipientID: evidence.RecipientPersonID, RecipientKind: kind, Title: title, Body: body,
-		TargetPath: "/customer-opportunity/presale?request_id=" + strconv.FormatUint(request.ID, 10), Status: notification.StatusUnread,
+		RecipientNamespace: evidence.RecipientNamespace,
+		TargetPath:         "/customer-opportunity/presale?request_id=" + strconv.FormatUint(request.ID, 10), Status: notification.StatusUnread,
 	}
 }
 

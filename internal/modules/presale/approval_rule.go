@@ -25,8 +25,70 @@ type ApprovalNodeType string
 const (
 	ApprovalNodeApproval   ApprovalNodeType = "APPROVAL"
 	ApprovalNodeDepartment ApprovalNodeType = "DEPARTMENT_ASSIGNMENT"
-	ApprovalNodePerson     ApprovalNodeType = "PERSON_ASSIGNMENT"
+	// ApprovalNodePerson 是 TS-003 的一级指派节点，只为已提交的历史申请保留。
+	ApprovalNodePerson   ApprovalNodeType = "PERSON_ASSIGNMENT"
+	ApprovalNodeTeamLead ApprovalNodeType = "TEAM_LEAD_ASSIGNMENT"
+	ApprovalNodeExecutor ApprovalNodeType = "EXECUTOR_ASSIGNMENT"
 )
+
+// IsAssignmentNodeType 区分审批节点与审批通过后的执行指派节点。
+func IsAssignmentNodeType(value ApprovalNodeType) bool {
+	switch value {
+	case ApprovalNodeDepartment, ApprovalNodePerson, ApprovalNodeTeamLead, ApprovalNodeExecutor:
+		return true
+	default:
+		return false
+	}
+}
+
+// UsesTwoLevelAssignment 只对规则快照做结构判断。历史 PERSON_ASSIGNMENT 规则
+// 继续走一级指派，新规则一旦出现 TEAM_LEAD/EXECUTOR 节点就必须完成两级。
+func UsesTwoLevelAssignment(nodes []ApprovalNode) bool {
+	for _, node := range nodes {
+		if node.Type == ApprovalNodeTeamLead || node.Type == ApprovalNodeExecutor {
+			return true
+		}
+	}
+	return false
+}
+
+// AssignmentActionsForRole 返回某角色在规则快照中承担的全部指派动作。
+// 技术总监可以同时承担“选部门”和“选团队负责人”，因此不能用单个动作判断权限。
+func AssignmentActionsForRole(nodes []ApprovalNode, roleCode string) []ApprovalNodeType {
+	roleCode = strings.TrimSpace(roleCode)
+	if roleCode == "" {
+		return nil
+	}
+	actions := make([]ApprovalNodeType, 0, 2)
+	for _, node := range nodes {
+		if strings.TrimSpace(node.RoleCode) != roleCode || !IsAssignmentNodeType(node.Type) {
+			continue
+		}
+		actions = append(actions, node.Type)
+	}
+	return actions
+}
+
+func RoleHasAssignmentAction(nodes []ApprovalNode, roleCode string, action ApprovalNodeType) bool {
+	for _, configured := range AssignmentActionsForRole(nodes, roleCode) {
+		if configured == action {
+			return true
+		}
+	}
+	return false
+}
+
+// AssignmentActionForRole 返回角色配置的第一个执行动作。
+// 保留该方法以兼容历史单层流程；双层调用方
+// 必须使用 AssignmentActionsForRole，避免同时持有部门和
+// 组长动作的角色被截断到第一个节点。
+func AssignmentActionForRole(nodes []ApprovalNode, roleCode string) (ApprovalNodeType, bool) {
+	actions := AssignmentActionsForRole(nodes, roleCode)
+	if len(actions) == 0 {
+		return "", false
+	}
+	return actions[0], true
+}
 
 type ApprovalNode struct {
 	ID          string           `json:"id"`
@@ -34,25 +96,6 @@ type ApprovalNode struct {
 	Type        ApprovalNodeType `json:"type"`
 	RoleCode    string           `json:"role_code"`
 	Countersign string           `json:"countersign"`
-}
-
-// AssignmentActionForRole returns the configured execution action for a role.
-// Approval nodes decide who approves; assignment nodes decide which execution
-// control the role receives after approval.
-func AssignmentActionForRole(nodes []ApprovalNode, roleCode string) (ApprovalNodeType, bool) {
-	roleCode = strings.TrimSpace(roleCode)
-	if roleCode == "" {
-		return "", false
-	}
-	for _, node := range nodes {
-		if strings.TrimSpace(node.RoleCode) != roleCode {
-			continue
-		}
-		if node.Type == ApprovalNodeDepartment || node.Type == ApprovalNodePerson {
-			return node.Type, true
-		}
-	}
-	return "", false
 }
 
 type ApprovalExpression struct {

@@ -88,8 +88,8 @@ func (w *Worker) RunOnce(ctx context.Context) (int, error) {
 }
 
 func (w *Worker) dispatch(ctx context.Context, event presale.OutboxEvent) error {
-	// Leave a claimed task leased rather than marking success/dead-letter; it
-	// becomes claimable again after lease expiry when authorization recovers.
+	// 保留已认领任务的租约，不标记为成功或死信；
+	// 授权恢复后，任务在租约到期时可重新认领。
 	if err := workerlicense.Require(ctx, core.MUTATE_BUSINESS); err != nil {
 		return err
 	}

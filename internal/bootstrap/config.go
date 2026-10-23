@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"net"
+	"net/netip"
 	"net/url"
 	"os"
 	"strconv"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/integrationhttp"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/loginip"
 )
 
 // 本地会话最长只缓存授权十五分钟；实际过期时间还会受平台令牌有效期和服务端重验约束。
@@ -136,18 +138,21 @@ type Config struct {
 	AttachmentFileGatewayScope       string
 	AttachmentFileGatewayApplication string
 	PlatformBaseURL                  string
-	PlatformApplicationCode          string
-	PlatformEnvironmentCode          string
-	PlatformAuditClientID            string
-	PlatformAuditClientSecret        string
-	PlatformAuditWorkerID            string
-	PlatformAuditPollInterval        time.Duration
-	PlatformAuditBatchSize           int
-	CatalogSyncEnabled               bool
-	CatalogApplicationID             string
-	CatalogClientID                  string
-	CatalogClientSecret              string
-	PresaleWorkerHeartbeatMaxAge     time.Duration
+	// TrustedProxies 是唯一允许采信转发头的直接对端地址（AUD-IP-2026）。
+	// 由 APP_TRUSTED_PROXIES 显式配置；未配置时只信任回环。
+	TrustedProxies               []netip.Prefix
+	PlatformApplicationCode      string
+	PlatformEnvironmentCode      string
+	PlatformAuditClientID        string
+	PlatformAuditClientSecret    string
+	PlatformAuditWorkerID        string
+	PlatformAuditPollInterval    time.Duration
+	PlatformAuditBatchSize       int
+	CatalogSyncEnabled           bool
+	CatalogApplicationID         string
+	CatalogClientID              string
+	CatalogClientSecret          string
+	PresaleWorkerHeartbeatMaxAge time.Duration
 }
 
 func LoadConfig() (Config, error) {
@@ -208,6 +213,11 @@ func LoadConfig() (Config, error) {
 	portalMappingDualWrite, err := strconv.ParseBool(valueOrDefault("PORTAL_MAPPING_DUAL_WRITE", "false"))
 	if err != nil {
 		return Config{}, fmt.Errorf("PORTAL_MAPPING_DUAL_WRITE: %w", err)
+	}
+	// AUD-IP-2026：可信代理由配置显式声明（默认仅回环），不再按对端私网属性推断。
+	trustedProxies, err := loginip.ParseTrusted(valueOrDefault("APP_TRUSTED_PROXIES", "127.0.0.1/32,::1/128"))
+	if err != nil {
+		return Config{}, fmt.Errorf("APP_TRUSTED_PROXIES: %w", err)
 	}
 	portalMappingPlatformOnly, err := strconv.ParseBool(valueOrDefault("PORTAL_MAPPING_PLATFORM_ONLY", "false"))
 	if err != nil {
@@ -413,6 +423,7 @@ func LoadConfig() (Config, error) {
 		AttachmentFileGatewaySecret: strings.TrimSpace(os.Getenv("ATTACHMENT_FILE_GATEWAY_CLIENT_SECRET")), AttachmentFileGatewayScope: valueOrDefault("ATTACHMENT_FILE_GATEWAY_SCOPE", "platform:file:upload platform:file:bind"),
 		AttachmentFileGatewayApplication: strings.TrimSpace(os.Getenv("ATTACHMENT_FILE_GATEWAY_APPLICATION_ID")),
 		PlatformBaseURL:                  os.Getenv("PLATFORM_BASE_URL"),
+		TrustedProxies:                   trustedProxies,
 		PlatformApplicationCode:          valueOrDefault("PLATFORM_APPLICATION_CODE", "customer_and_opportunity"),
 		PlatformEnvironmentCode:          valueOrDefault("PLATFORM_ENVIRONMENT_CODE", "dev"),
 		PlatformAuditClientID:            os.Getenv("PLATFORM_AUDIT_CLIENT_ID"),
@@ -546,9 +557,9 @@ func LoadConfig() (Config, error) {
 		}
 	}
 	if config.OwnerDirectoryEnabled {
-		// Keep validation order stable. Besides making startup diagnostics predictable,
-		// this ensures the owner-directory endpoint is reported before the shared token
-		// endpoint when the optional integration is enabled without any configuration.
+		// 保持校验顺序稳定，使启动诊断结果可预期；
+		// 可选集成在未配置的情况下启用时，确保先报告 owner-directory 端点，
+		// 再报告共享令牌端点。
 		requiredOwnerDirectoryFields := []struct {
 			key   string
 			value string

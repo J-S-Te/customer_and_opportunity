@@ -24,13 +24,22 @@ type RequestStatus string
 // 售前申请以审批引擎确认启动作为进入审批态的边界；审批通过后必须完成分派才能执行。
 // COMPLETED、REJECTED、CANCELLED 是终态，不再参与逾期判断或普通状态推进。
 const (
-	StatusApprovalStarting          RequestStatus = "APPROVAL_STARTING"
-	StatusPendingApproval           RequestStatus = "PENDING_APPROVAL"
-	StatusApprovedPendingAssignment RequestStatus = "APPROVED_PENDING_ASSIGNMENT"
-	StatusExecuting                 RequestStatus = "EXECUTING"
-	StatusCompleted                 RequestStatus = "COMPLETED"
-	StatusRejected                  RequestStatus = "REJECTED"
-	StatusCancelled                 RequestStatus = "CANCELLED"
+	StatusApprovalStarting           RequestStatus = "APPROVAL_STARTING"
+	StatusPendingApproval            RequestStatus = "PENDING_APPROVAL"
+	StatusApprovedPendingAssignment  RequestStatus = "APPROVED_PENDING_ASSIGNMENT"
+	StatusPendingExecutionAssignment RequestStatus = "PENDING_EXECUTION_ASSIGNMENT"
+	StatusExecuting                  RequestStatus = "EXECUTING"
+	StatusCompleted                  RequestStatus = "COMPLETED"
+	StatusRejected                   RequestStatus = "REJECTED"
+	StatusCancelled                  RequestStatus = "CANCELLED"
+)
+
+// 执行指派分为两级：技术总监先确定执行部门与团队负责人，再由该负责人选择执行人。
+// 级别只描述流程走到哪一步，具体操作权限仍由规则快照与申请上的团队负责人共同决定。
+const (
+	AssignmentLevelNone     uint8 = 0
+	AssignmentLevelTeamLead uint8 = 1
+	AssignmentLevelExecutor uint8 = 2
 )
 
 type Venue string
@@ -67,6 +76,9 @@ type PresaleRequest struct {
 	CurrentApprovalNode   uint8         `gorm:"not null;default:0"`
 	ExecutionDepartmentID string        `gorm:"size:64;not null"`
 	ExecutionDepartment   string        `gorm:"size:128;not null"`
+	TeamLeadPersonID      string        `gorm:"size:64;not null;default:''"`
+	TeamLeadNameSnapshot  string        `gorm:"size:128;not null;default:''"`
+	AssignmentLevel       uint8         `gorm:"not null;default:0"`
 	RejectReason          string        `gorm:"size:2000"`
 	CompletedAt           *time.Time    `gorm:"precision:3"`
 	CancelledAt           *time.Time    `gorm:"precision:3"`
@@ -178,9 +190,11 @@ type Assignment struct {
 	BaseModel
 	RequestID                  uint64     `gorm:"not null;index"`
 	AssigneeID                 string     `gorm:"size:64;not null;index"`
+	AssigneeNamespace          string     `gorm:"size:16;not null;default:''"`
 	AssigneeNameSnapshot       string     `gorm:"size:128;not null"`
 	AssigneeDepartmentSnapshot string     `gorm:"size:128;not null"`
 	AssigneeRole               string     `gorm:"size:32;not null"`
+	AssignmentKind             string     `gorm:"size:16;not null;default:'EXECUTOR'"`
 	AssignedBy                 string     `gorm:"size:64;not null"`
 	AssignedAt                 time.Time  `gorm:"precision:3;not null"`
 	EndedAt                    *time.Time `gorm:"precision:3"`
@@ -190,6 +204,24 @@ type Assignment struct {
 }
 
 func (Assignment) TableName() string { return "crm_presale_assignments" }
+
+const (
+	AssignmentKindTeamLead = "TEAM_LEAD"
+	AssignmentKindExecutor = "EXECUTOR"
+)
+
+// EffectiveAssignmentKind 兼容迁移前的空值写入。数据库默认值为 EXECUTOR，
+// 但测试夹具和滚动升级期间的旧代码可能显式写入空字符串。
+func (a Assignment) EffectiveAssignmentKind() string {
+	if a.AssignmentKind == "" {
+		return AssignmentKindExecutor
+	}
+	return a.AssignmentKind
+}
+
+func (a Assignment) IsTeamLead() bool {
+	return a.EffectiveAssignmentKind() == AssignmentKindTeamLead
+}
 
 const (
 	AssignmentEventAdded   = "ADDED"
@@ -206,6 +238,7 @@ type AssignmentEvent struct {
 	AssignmentID       uint64    `gorm:"not null;index"`
 	EventType          string    `gorm:"size:16;not null"`
 	RecipientPersonID  string    `gorm:"size:64;not null;index"`
+	RecipientNamespace string    `gorm:"size:16;not null;default:''"`
 	PersonNameSnapshot string    `gorm:"size:128;not null"`
 	RoleSnapshot       string    `gorm:"size:32;not null"`
 	ChangeReason       string    `gorm:"size:1000;not null"`
@@ -381,11 +414,12 @@ func (NumberSequence) TableName() string { return "crm_presale_number_sequences"
 type AlertType string
 
 const (
-	AlertApprovalNode1Overdue AlertType = "APPROVAL_NODE_1_OVERDUE"
-	AlertApprovalNode2Overdue AlertType = "APPROVAL_NODE_2_OVERDUE"
-	AlertAssignmentOverdue    AlertType = "ASSIGNMENT_OVERDUE"
-	AlertExecutionDueSoon     AlertType = "EXECUTION_DUE_SOON"
-	AlertExecutionOverdue     AlertType = "EXECUTION_OVERDUE"
+	AlertApprovalNode1Overdue       AlertType = "APPROVAL_NODE_1_OVERDUE"
+	AlertApprovalNode2Overdue       AlertType = "APPROVAL_NODE_2_OVERDUE"
+	AlertAssignmentOverdue          AlertType = "ASSIGNMENT_OVERDUE"
+	AlertExecutionAssignmentOverdue AlertType = "EXECUTION_ASSIGNMENT_OVERDUE"
+	AlertExecutionDueSoon           AlertType = "EXECUTION_DUE_SOON"
+	AlertExecutionOverdue           AlertType = "EXECUTION_OVERDUE"
 )
 
 type AlertRule struct {

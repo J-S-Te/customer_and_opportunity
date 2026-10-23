@@ -23,7 +23,7 @@ const (
 )
 
 var alertTypes = []AlertType{
-	AlertApprovalNode1Overdue, AlertApprovalNode2Overdue, AlertAssignmentOverdue,
+	AlertApprovalNode1Overdue, AlertApprovalNode2Overdue, AlertAssignmentOverdue, AlertExecutionAssignmentOverdue,
 	AlertExecutionDueSoon, AlertExecutionOverdue,
 }
 
@@ -59,8 +59,8 @@ func (s *AlertService) ListRules(ctx context.Context, actor Actor) ([]AlertRuleV
 	return completeAlertRules(values), nil
 }
 
-// Missing tenant rules are editable definitions, not persisted or enabled
-// policies. Only UpdateRule creates their first audited configuration.
+// 租户缺失的规则属于可编辑定义，尚未持久化或启用。
+// 只有 UpdateRule 才创建首次审计配置。
 func completeAlertRules(values []AlertRule) []AlertRuleView {
 	byType := make(map[AlertType]AlertRule, len(values))
 	for _, value := range values {

@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/ownerdirectory"
 	"gorm.io/gorm"
 )
 
@@ -120,6 +121,9 @@ func (r *mutationRepository) CreateOutbox(context.Context, *OutboxEvent) error {
 func (r *mutationRepository) ListCurrentAssignmentsForUpdate(context.Context, string, uint64) ([]Assignment, error) {
 	return append([]Assignment(nil), r.assignments...), nil
 }
+func (r *mutationRepository) ListAssignments(context.Context, string, uint64) ([]Assignment, error) {
+	return append([]Assignment(nil), r.assignments...), nil
+}
 func (r *mutationRepository) FindEngineersForUpdate(context.Context, string, []string) ([]Engineer, error) {
 	return append([]Engineer(nil), r.engineers...), nil
 }
@@ -172,9 +176,9 @@ func TestApprovalActionIdempotencyBindingAndReplay(t *testing.T) {
 	if repo.approval.PendingTaskID != "task-1" || repo.approval.PendingApprover != actor.UserID || repo.approval.PendingAction != "PASS" {
 		t.Fatalf("pending approval binding=%#v", repo.approval)
 	}
-	// The asynchronous callback may advance node 1 to node 2 before the HTTP
-	// client receives its response. The original sales director can still
-	// replay only their own exact accepted node-1 command.
+	// 异步回调可能在 HTTP 客户端收到响应前，
+	// 将节点 1 推进至节点 2。原销售总监仍只能
+	// 精确重放其本人已获接受的节点 1 命令。
 	repo.request.Status = StatusPendingApproval
 	repo.request.CurrentApprovalNode = 2
 	repo.request.Version = 4
@@ -267,7 +271,13 @@ func TestReplaceAssignmentsCanonicalReplayAndCancelReplay(t *testing.T) {
 		engineers: []Engineer{{PersonID: "p1", PersonName: "P1", Role: "technician", ValidFlag: true}, {PersonID: "p2", PersonName: "P2", Role: "project_manager", ValidFlag: true}},
 		replays:   map[string]*MutationReplay{},
 	}
-	service := NewService(repo, nil, nil, fixedClock{at: time.Date(2026, 8, 1, 8, 0, 0, 0, time.UTC)}, fixedIDs{})
+	service := NewService(repo, nil, nil, fixedClock{at: time.Date(2026, 8, 1, 8, 0, 0, 0, time.UTC)}, fixedIDs{}).UseOwnerDirectory(assignmentOwnerCatalog{
+		users: map[string]ownerdirectory.User{
+			"p1": {ID: "p1", DisplayName: "P1", Organizations: []ownerdirectory.Organization{{ID: "org-1", Name: "技术中心", IsPrimary: true}}},
+			"p2": {ID: "p2", DisplayName: "P2", Organizations: []ownerdirectory.Organization{{ID: "org-1", Name: "技术中心", IsPrimary: true}}},
+		},
+		roles: map[string]string{"p1": "technician", "p2": "project_manager"},
+	})
 	input := ReplaceAssignmentsInput{Assignees: []AssignmentTarget{{PersonID: "p2", Role: "project_manager"}, {PersonID: "p1", Role: "technician"}}, ChangeReason: " initial ", Version: 3}
 	if _, err := service.ReplaceAssignments(context.Background(), actor, 9, "assign-key", input); err != nil {
 		t.Fatal(err)

@@ -2,12 +2,12 @@ openapi: 3.1.0
 info:
   title: Customer Portal API
   version: 0.2.0
-  description: Current Portal browser and machine HTTP surface. External file, risk, project and police Providers remain pending.
+  description: Current Portal browser and machine HTTP surface. Encrypted local report storage, audit-based risk policy, PDF watermarking and filing PDF rendering can be configured; external report-service and project integrations require separate runtime acceptance. Local filing submission is not police acceptance.
 servers:
   - url: '{origin}/customer-portal'
     description: PORTAL_PATH_PREFIX defaults to /customer-portal.
     variables:
-      origin: {default: https://portal.example.invalid}
+      origin: {default: 'https://portal.example.invalid'}
 tags:
   - {name: Authentication}
   - {name: Account}
@@ -341,7 +341,7 @@ components:
     createReportRequest: {<<: *reportRead, operationId: createReportRequest, x-permission: report.request, parameters: [{$ref: '#/components/parameters/IdempotencyKey'}], requestBody: {$ref: '#/components/requestBodies/CreateReport'}, description: 'Compatibility alias of /reports.'}
     createReportGrant: {<<: *reportRead, operationId: createReportGrant, x-permission: report.download, parameters: [{$ref: '#/components/parameters/ID'}, {$ref: '#/components/parameters/IdempotencyKey'}]}
     createReportRequestGrant: {<<: *reportRead, operationId: createReportRequestGrant, x-permission: report.download, parameters: [{$ref: '#/components/parameters/ID'}, {$ref: '#/components/parameters/IdempotencyKey'}]}
-    downloadReport: &reportDownload {operationId: downloadReport, tags: [Report], x-permission: report.download, security: [{portalSession: []}], parameters: [{$ref: '#/components/parameters/ID'}, {name: X-Report-Download-Token, in: header, required: true, schema: {type: string}}], responses: {'200': {$ref: '#/components/responses/Binary'}, '401': {$ref: '#/components/responses/Error'}, '403': {$ref: '#/components/responses/Error'}, '404': {$ref: '#/components/responses/Error'}, '409': {$ref: '#/components/responses/Error'}, '503': {$ref: '#/components/responses/Error'}}, description: Object reader, decryption, watermark and risk gateway Providers remain pending; unavailable configuration fails closed.}
+    downloadReport: &reportDownload {operationId: downloadReport, tags: [Report], x-permission: report.download, security: [{portalSession: []}], parameters: [{$ref: '#/components/parameters/ID'}, {name: X-Report-Download-Token, in: header, required: true, schema: {type: string}}], responses: {'200': {$ref: '#/components/responses/Binary'}, '401': {$ref: '#/components/responses/Error'}, '403': {$ref: '#/components/responses/Error'}, '404': {$ref: '#/components/responses/Error'}, '409': {$ref: '#/components/responses/Error'}, '503': {$ref: '#/components/responses/Error'}}, description: Requires the current valid report revision and account-bound grant. Configured encrypted local storage, CRM identity lookup, audit-based risk policy and per-download PDF watermarking enforce production security; missing configuration or invalid evidence fails closed.}
     downloadReportRequest: {<<: *reportDownload, operationId: downloadReportRequest}
     listReportNotifications: {<<: *reportRead, operationId: listReportNotifications}
     reportNotificationUnreadCount: {<<: *reportRead, operationId: reportNotificationUnreadCount}
@@ -364,7 +364,7 @@ components:
     saveFilingSection: {<<: *filingRead, operationId: saveFilingSection, x-permission: filing.update, parameters: [{$ref: '#/components/parameters/ID'}, {name: code, in: path, required: true, schema: {type: string}}, {$ref: '#/components/parameters/IdempotencyKey'}], requestBody: {$ref: '#/components/requestBodies/SaveFilingSection'}}
     saveFilingMatrix: {<<: *filingRead, operationId: saveFilingMatrix, x-permission: filing.update, parameters: [{$ref: '#/components/parameters/ID'}, {name: code, in: path, required: true, schema: {type: string}}, {$ref: '#/components/parameters/IdempotencyKey'}], requestBody: {$ref: '#/components/requestBodies/SaveFilingMatrix'}}
     validateFiling: {<<: *filingRead, operationId: validateFiling, parameters: [{$ref: '#/components/parameters/ID'}]}
-    submitFiling: {<<: *filingRead, operationId: submitFiling, x-permission: filing.submit, parameters: [{$ref: '#/components/parameters/ID'}, {$ref: '#/components/parameters/IdempotencyKey'}], requestBody: {$ref: '#/components/requestBodies/Version'}, description: Formal 2025 police submission contract remains pending; accepted local work waits for the configured Provider.}
+    submitFiling: {<<: *filingRead, operationId: submitFiling, x-permission: filing.submit, parameters: [{$ref: '#/components/parameters/ID'}, {$ref: '#/components/parameters/IdempotencyKey'}], requestBody: {$ref: '#/components/requestBodies/Version'}, description: Validates and locks an immutable local snapshot in WAITING_CONTRACT with a durable outbox. This does not prove CRM receipt or police submission; the current public flow remains CRM_MANUAL_REVIEW.}
     createFilingMaterialUpload: {<<: *filingRead, operationId: createFilingMaterialUpload, x-permission: filing.update, parameters: [{$ref: '#/components/parameters/ID'}, {$ref: '#/components/parameters/IdempotencyKey'}], description: Creates metadata-bound upload authorization. Local gateway mode returns upload_mode INTERNAL and a Portal content endpoint; no direct object-storage credential is exposed.}
     uploadFilingMaterialContent:
       <<: *filingRead
@@ -382,7 +382,37 @@ components:
           image/jpeg: {schema: {type: string, contentEncoding: binary}}
       description: Streams content through Portal; declared length, MIME, SHA-256, tenant ownership, material status and optimistic version are verified before an immutable local object can be finalized.
     completeFilingMaterialUpload: {<<: *filingRead, operationId: completeFilingMaterialUpload, x-permission: filing.update, parameters: [{$ref: '#/components/parameters/ID'}, {name: materialID, in: path, required: true, schema: {type: string}}], requestBody: {$ref: '#/components/requestBodies/Version'}}
-    requestFilingExport: {<<: *filingRead, operationId: requestFilingExport, parameters: [{$ref: '#/components/parameters/ID'}], description: Current handler intentionally returns PORTAL_FILING_EXPORT_NOT_CONFIGURED.}
+    requestFilingExport:
+      <<: *filingRead
+      operationId: requestFilingExport
+      parameters: [{$ref: '#/components/parameters/ID'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [expected_version]
+              properties:
+                expected_version: {type: integer, format: uint64, minimum: 1}
+      responses:
+        '200':
+          description: PDF copy of the saved filing fields and material metadata; not a police receipt or a complete official form.
+          headers:
+            Cache-Control: {schema: {type: string}, description: 'private, no-store'}
+            X-Content-SHA256: {schema: {type: string}, description: SHA-256 of the returned PDF.}
+          content:
+            application/pdf: {schema: {type: string, contentEncoding: binary}}
+        '400': {$ref: '#/components/responses/Error'}
+        '401': {$ref: '#/components/responses/Error'}
+        '403': {$ref: '#/components/responses/Error'}
+        '404': {$ref: '#/components/responses/Error'}
+        '409': {$ref: '#/components/responses/Error'}
+        '422': {$ref: '#/components/responses/Error'}
+        '429': {$ref: '#/components/responses/Error'}
+        '503': {$ref: '#/components/responses/Error'}
+      description: Requires filing.read, the caller's tenant/customer session, same-origin CSRF validation and the current expected_version body; query version and If-Match are not substitutes. A configured CJK PDF renderer exports current saved draft fields or the immutable locked submission snapshot and records encrypted audit evidence. Missing renderer returns PORTAL_FILING_EXPORT_UNAVAILABLE; at most two concurrent renders are allowed and a full renderer returns PORTAL_FILING_EXPORT_BUSY.
     provisionPortalAccount: &machineProvision {operationId: provisionPortalAccount, tags: [Machine integration], security: [{machineJWT: [portal.identity_mapping.provision]}], x-scope: portal.identity_mapping.provision, x-oauth-client-subject-config: PORTAL_CRM_PROVISION_CLIENT_SUBJECT, responses: {'200': {$ref: '#/components/responses/OK'}, '201': {$ref: '#/components/responses/Created'}, '400': {$ref: '#/components/responses/Error'}, '401': {$ref: '#/components/responses/Error'}, '403': {$ref: '#/components/responses/Error'}, '409': {$ref: '#/components/responses/Error'}}}
     reconcilePortalAccounts: {<<: *machineProvision, operationId: reconcilePortalAccounts, description: Bounded read-only identity-link snapshot for the exact configured CRM machine client. Missing identities are explicit; contact data and tokens are never returned.}
     disablePortalAccount: {<<: *machineProvision, operationId: disablePortalAccount, security: [{machineJWT: [portal.identity_mapping.disable]}], x-scope: portal.identity_mapping.disable, x-oauth-client-subject-config: PORTAL_CRM_DISABLE_CLIENT_SUBJECT, parameters: [{$ref: '#/components/parameters/IdempotencyKey'}], description: Atomically disables the exact tenant/customer/subject mapping, revokes all local sessions, and commits a minimized auth audit event. Exact business-idempotency replays return the original result; conflicting payloads fail with 409.}

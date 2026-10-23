@@ -154,6 +154,25 @@ func (r *PDFCPURenderer) Render(ctx context.Context, detail project.Detail, gene
 	for _, item := range detail.Team {
 		rows = append(rows, fmt.Sprintf("%s / %s / %s", emptyDash(item.Name), emptyDash(item.Role), emptyDash(item.ContactMasked)))
 	}
+	return r.RenderRows(ctx, rows)
+}
+
+// RenderRows 共用已配置的中文字体与文本分页；文本通过 JSON 值编码，不作为模板指令执行。
+// 备案表和项目快照均只渲染当前请求固化的文本，不读取外部资源。
+func (r *PDFCPURenderer) RenderRows(ctx context.Context, rows []string) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if len(rows) > 2000 {
+		return nil, errors.New("PDF text exceeds row limit")
+	}
+	size := 0
+	for _, row := range rows {
+		size += len(row)
+	}
+	if size > 512<<10 {
+		return nil, errors.New("PDF text exceeds size limit")
+	}
 	pageLines := paginatePDFRows(rows, 52, 44)
 	pages := make(map[string]any, len(pageLines))
 	for index, lines := range pageLines {
@@ -175,6 +194,12 @@ func (r *PDFCPURenderer) Render(ctx context.Context, detail project.Detail, gene
 	var output bytes.Buffer
 	if err = api.Create(nil, bytes.NewReader(input), &output, r.config); err != nil {
 		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if output.Len() > maxPDFBytes {
+		return nil, errors.New("PDF output exceeds size limit")
 	}
 	return output.Bytes(), nil
 }

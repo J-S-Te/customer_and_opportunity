@@ -7,6 +7,26 @@ import (
 	"time"
 )
 
+func TestPlatformUserProgressRecipientsDoNotUseExternalPMSIdentity(t *testing.T) {
+	for _, externalPerson := range []string{"author-user", "peer-user"} {
+		repo := &progressRepository{}
+		service := NewService(repo, nil, nil, fixedClock{at: time.Now().UTC()}, fixedIDs{})
+		actor := Actor{TenantID: "tenant-a", UserID: "author-user", PersonID: externalPerson}
+		request := &PresaleRequest{BaseModel: BaseModel{ID: 7}, ApplicantID: "author-user"}
+		progress := &ProgressLog{ID: 1, CreatedAt: time.Now().UTC()}
+		assignments := []Assignment{
+			{BaseModel: BaseModel{ID: 1}, AssigneeID: "author-user", AssigneeNamespace: "USER", IsCurrent: true},
+			{BaseModel: BaseModel{ID: 2}, AssigneeID: "peer-user", AssigneeNamespace: "USER", IsCurrent: true},
+		}
+		if err := service.recordProgressNotifications(context.Background(), actor, request, progress, assignments); err != nil {
+			t.Fatal(err)
+		}
+		if len(repo.notificationEvents) != 1 || repo.notificationEvents[0].RecipientID != "peer-user" || repo.notificationEvents[0].RecipientNamespace != "USER" {
+			t.Fatalf("external PMS=%q evidence=%+v", externalPerson, repo.notificationEvents)
+		}
+	}
+}
+
 func TestAddProgressWritesOccurrenceTimePersonalNotificationEvidence(t *testing.T) {
 	now := time.Date(2026, 8, 1, 8, 0, 0, 0, time.UTC)
 	repo := &progressRepository{
@@ -17,7 +37,7 @@ func TestAddProgressWritesOccurrenceTimePersonalNotificationEvidence(t *testing.
 		assignments: []Assignment{
 			{BaseModel: BaseModel{ID: 10}, AssigneeID: "author-person", IsCurrent: true},
 			{BaseModel: BaseModel{ID: 11}, AssigneeID: "peer-person", IsCurrent: true},
-			// Corrupt duplicate current rows must not produce duplicate messages.
+			// 损坏的重复当前行不得产生重复消息。
 			{BaseModel: BaseModel{ID: 12}, AssigneeID: "peer-person", IsCurrent: true},
 		},
 		byKey: map[string]*ProgressLog{},
@@ -57,8 +77,8 @@ func TestProgressNotificationExclusionNeverCrossesRecipientNamespaces(t *testing
 		wantEvents    int
 	}{
 		{name: "same user applicant is excluded", applicantUser: "same-value", wantEvents: 0},
-		// Equality with author person_id is not proof that a USER recipient is
-		// the author, because user and person namespaces are independent.
+		// 与作者 person_id 相等并不能证明 USER 接收者就是
+		// 作者，因为用户和人员的命名空间独立。
 		{name: "same bytes in different namespace are retained", applicantUser: "author-person", wantEvents: 1},
 	}
 	for _, test := range tests {

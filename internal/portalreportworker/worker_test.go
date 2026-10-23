@@ -92,9 +92,9 @@ func TestWorkerSeventhFailureMovesToDeadLetter(t *testing.T) {
 }
 
 func TestExpiredLeaseReplayKeepsStableEventIdentity(t *testing.T) {
-	// A worker may see the same event again after a processing lease expires.
-	// The downstream port receives the original EventID on every attempt, so
-	// the HTTP adapter keeps the same Idempotency-Key.
+	// 处理租约到期后，工作器可能再次看到同一事件。
+	// 每次尝试都向下游端口传入原 EventID，因此
+	// HTTP 适配器保持相同的 Idempotency-Key。
 	event := report.Outbox{ID: 4, EventID: "stable-event-id", TenantID: "tenant-1", EventType: "PORTAL_REPORT_SUBMITTED", AggregateID: 45, Status: "PROCESSING"}
 	store := &memoryStore{events: []report.Outbox{event, event}}
 	project := &projectStub{downstream: "PR-45"}

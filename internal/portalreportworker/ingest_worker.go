@@ -59,8 +59,8 @@ func (w *IngestWorker) RunOnce(ctx context.Context) (int, error) {
 }
 
 func (w *IngestWorker) dispatch(ctx context.Context, job report.IngestJob) error {
-	// Leave a claimed task leased rather than marking success/dead-letter; it
-	// becomes claimable again after lease expiry when authorization recovers.
+	// 保留已认领任务的租约，不标记为成功或死信；
+	// 授权恢复后，任务在租约到期时可重新认领。
 	if err := workerlicense.Require(ctx, core.MUTATE_BUSINESS); err != nil {
 		return err
 	}
@@ -89,8 +89,18 @@ func (w *IngestWorker) dispatch(ctx context.Context, job report.IngestJob) error
 	providerTimeout := w.leaseDuration - time.Second
 	providerCtx, cancel := context.WithTimeout(ctx, providerTimeout)
 	defer cancel()
-	result, err := w.ingestor.Ingest(providerCtx, job.EventID, descriptor)
+	var result report.IngestResult
+	if scoped, ok := w.ingestor.(interface {
+		IngestForJob(context.Context, report.IngestJob, report.FileDescriptor) (report.IngestResult, error)
+	}); ok {
+		result, err = scoped.IngestForJob(providerCtx, job, descriptor)
+	} else {
+		result, err = w.ingestor.Ingest(providerCtx, job.EventID, descriptor)
+	}
 	if err == nil {
+		if denied := workerlicense.Require(ctx, core.MUTATE_BUSINESS); denied != nil {
+			return denied
+		}
 		err = w.service.CompleteIngest(ctx, job, descriptor, result)
 	}
 	if err != nil {
