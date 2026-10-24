@@ -4,11 +4,14 @@ import (
 	"encoding/base64"
 	"fmt"
 	"net"
+	"net/netip"
 	"net/url"
 	"os"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/loginip"
 )
 
 // Portal 本地会话最多缓存授权十五分钟，且不能超过上游令牌的实际有效期。
@@ -52,6 +55,8 @@ type Config struct {
 	HMACKey                   []byte
 	PlatformBaseURL           string
 	PlatformApplicationCode   string
+	// TrustedProxies 是唯一允许采信转发头的直接对端（AUD-IP-2026，默认仅回环）。
+	TrustedProxies            []netip.Prefix
 	PlatformEnvironmentCode   string
 	PlatformAuditClientID     string
 	PlatformAuditClientSecret string
@@ -66,12 +71,19 @@ type Config struct {
 	// 作为客户边界（Phase 4），本地 portal_identity_links 仅作邀请链路与回退。
 	UsePlatformBinding bool
 	// FileGatewayLocalEnabled 启用本地文件网关时，报告文件仅从该根目录读取。
-	FileGatewayLocalEnabled bool
-	FileGatewayLocalRoot    string
-	FileGatewayBaseURL      string
-	FileGatewayClientID     string
-	FileGatewayClientSecret string
-	FileGatewayScope        string
+	FileGatewayLocalEnabled    bool
+	FileGatewayLocalRoot       string
+	FileGatewayBaseURL         string
+	FileGatewayClientID        string
+	FileGatewayClientSecret    string
+	FileGatewayScope           string
+	PDFConfigRoot              string
+	CJKFontPath                string
+	ReportContentKey           []byte
+	ReportStoreRoot            string
+	ReportIdentityURL          string
+	ReportIdentityClientID     string
+	ReportIdentityClientSecret string
 }
 
 func LoadConfig() (Config, error) {
@@ -128,6 +140,14 @@ func LoadConfig() (Config, error) {
 	if err != nil {
 		return Config{}, fmt.Errorf("PORTAL_FILE_GATEWAY_LOCAL_ENABLED: %w", err)
 	}
+	reportContentKey, err := base64.StdEncoding.DecodeString(os.Getenv("PORTAL_REPORT_CONTENT_KEY_BASE64"))
+	if err != nil {
+		return Config{}, fmt.Errorf("PORTAL_REPORT_CONTENT_KEY_BASE64 is invalid")
+	}
+	trustedProxies, err := loginip.ParseTrusted(valueOrDefault("APP_TRUSTED_PROXIES", "127.0.0.1/32,::1/128"))
+	if err != nil {
+		return Config{}, fmt.Errorf("APP_TRUSTED_PROXIES: %w", err)
+	}
 	config := Config{
 		Address: valueOrDefault("PORTAL_HTTP_ADDRESS", ":8091"), MySQLDSN: os.Getenv("PORTAL_MYSQL_DSN"),
 		PathPrefix: valueOrDefault("PORTAL_PATH_PREFIX", "/customer-portal"), PublicOrigin: os.Getenv("PORTAL_PUBLIC_ORIGIN"),
@@ -146,23 +166,31 @@ func LoadConfig() (Config, error) {
 		CRMInviteTokenURL: os.Getenv("PORTAL_CRM_INVITE_TOKEN_URL"), CRMInviteClientID: os.Getenv("PORTAL_CRM_INVITE_CLIENT_ID"), CRMInviteClientSecret: os.Getenv("PORTAL_CRM_INVITE_CLIENT_SECRET"),
 		CRMInviteScope: valueOrDefault("PORTAL_CRM_INVITE_SCOPE", "portal.invite.verify"),
 		EncryptionKey:  encryptionKey, ReportIngestDescriptorKey: reportIngestDescriptorKey, HMACKey: hmacKey,
-		PlatformBaseURL:           os.Getenv("PORTAL_PLATFORM_BASE_URL"),
-		PlatformApplicationCode:   valueOrDefault("PLATFORM_APPLICATION_CODE", "customer_portal"),
-		PlatformEnvironmentCode:   valueOrDefault("PLATFORM_ENVIRONMENT_CODE", "dev"),
-		PlatformAuditClientID:     os.Getenv("PLATFORM_AUDIT_CLIENT_ID"),
-		PlatformAuditClientSecret: os.Getenv("PLATFORM_AUDIT_CLIENT_SECRET"),
-		PlatformAuditWorkerID:     valueOrDefault("PLATFORM_AUDIT_WORKER_ID", "portal-api-audit"),
-		PlatformAuditPollInterval: platformAuditPollInterval,
-		PlatformAuditBatchSize:    platformAuditBatchSize,
-		CatalogSyncEnabled:        catalogSyncEnabled,
-		UsePlatformBinding:        usePlatformBinding,
-		FileGatewayLocalEnabled:   fileGatewayLocalEnabled,
-		FileGatewayLocalRoot:      valueOrDefault("PORTAL_FILE_GATEWAY_LOCAL_ROOT", "/app/data/file-gateway"),
-		FileGatewayBaseURL:        strings.TrimSpace(os.Getenv("FILE_GATEWAY_BASE_URL")),
-		FileGatewayClientID:       strings.TrimSpace(os.Getenv("FILE_GATEWAY_CLIENT_ID")),
-		FileGatewayClientSecret:   os.Getenv("FILE_GATEWAY_CLIENT_SECRET"),
-		FileGatewayScope:          valueOrDefault("FILE_GATEWAY_SCOPE", "platform:file:upload platform:file:download"),
-		CatalogApplicationID:      os.Getenv("PORTAL_AUTHORIZATION_CATALOG_APPLICATION_ID"), CatalogClientID: os.Getenv("PORTAL_AUTHORIZATION_CATALOG_CLIENT_ID"),
+		PlatformBaseURL:            os.Getenv("PORTAL_PLATFORM_BASE_URL"),
+		PlatformApplicationCode:    valueOrDefault("PLATFORM_APPLICATION_CODE", "customer_portal"),
+		PlatformEnvironmentCode:    valueOrDefault("PLATFORM_ENVIRONMENT_CODE", "dev"),
+		TrustedProxies:             trustedProxies,
+		PlatformAuditClientID:      os.Getenv("PLATFORM_AUDIT_CLIENT_ID"),
+		PlatformAuditClientSecret:  os.Getenv("PLATFORM_AUDIT_CLIENT_SECRET"),
+		PlatformAuditWorkerID:      valueOrDefault("PLATFORM_AUDIT_WORKER_ID", "portal-api-audit"),
+		PlatformAuditPollInterval:  platformAuditPollInterval,
+		PlatformAuditBatchSize:     platformAuditBatchSize,
+		CatalogSyncEnabled:         catalogSyncEnabled,
+		UsePlatformBinding:         usePlatformBinding,
+		FileGatewayLocalEnabled:    fileGatewayLocalEnabled,
+		FileGatewayLocalRoot:       valueOrDefault("PORTAL_FILE_GATEWAY_LOCAL_ROOT", "/app/data/file-gateway"),
+		FileGatewayBaseURL:         strings.TrimSpace(os.Getenv("FILE_GATEWAY_BASE_URL")),
+		FileGatewayClientID:        strings.TrimSpace(os.Getenv("FILE_GATEWAY_CLIENT_ID")),
+		FileGatewayClientSecret:    os.Getenv("FILE_GATEWAY_CLIENT_SECRET"),
+		FileGatewayScope:           valueOrDefault("FILE_GATEWAY_SCOPE", "platform:file:upload platform:file:download"),
+		PDFConfigRoot:              strings.TrimSpace(os.Getenv("PORTAL_PDF_CONFIG_ROOT")),
+		CJKFontPath:                strings.TrimSpace(os.Getenv("PORTAL_CJK_FONT_PATH")),
+		ReportContentKey:           reportContentKey,
+		ReportStoreRoot:            strings.TrimSpace(os.Getenv("PORTAL_REPORT_STORE_ROOT")),
+		ReportIdentityURL:          strings.TrimSpace(os.Getenv("PORTAL_REPORT_IDENTITY_URL")),
+		ReportIdentityClientID:     strings.TrimSpace(os.Getenv("PORTAL_REPORT_IDENTITY_CLIENT_ID")),
+		ReportIdentityClientSecret: os.Getenv("PORTAL_REPORT_IDENTITY_CLIENT_SECRET"),
+		CatalogApplicationID:       os.Getenv("PORTAL_AUTHORIZATION_CATALOG_APPLICATION_ID"), CatalogClientID: os.Getenv("PORTAL_AUTHORIZATION_CATALOG_CLIENT_ID"),
 		CatalogClientSecret: os.Getenv("PORTAL_AUTHORIZATION_CATALOG_CLIENT_SECRET"),
 	}
 	if err := config.validate(); err != nil {
@@ -176,6 +204,12 @@ func portalOIDCIdentityProviderHint() string {
 }
 
 func (c Config) validate() error {
+	if err := validateReportDownloadConfig(c); err != nil {
+		return fmt.Errorf("Portal report download configuration: %w", err)
+	}
+	if (c.PDFConfigRoot == "") != (c.CJKFontPath == "") {
+		return fmt.Errorf("PORTAL_PDF_CONFIG_ROOT and PORTAL_CJK_FONT_PATH must be configured together")
+	}
 	required := map[string]string{
 		"PORTAL_MYSQL_DSN": c.MySQLDSN, "PORTAL_PUBLIC_ORIGIN": c.PublicOrigin,
 		"PORTAL_OIDC_TENANT_ID": c.TenantID, "PORTAL_ROLE_CONFIG_HASH": c.RoleConfigHash,

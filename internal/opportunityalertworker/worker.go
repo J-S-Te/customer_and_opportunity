@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	core "github.com/J-S-Te/license-core"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/workerlicense"
 	"strconv"
 	"time"
 
@@ -203,6 +205,9 @@ func (a *App) renewLease(ctx context.Context) error {
 }
 
 func (a *App) scanOne(ctx context.Context, candidate scanOpportunity, now time.Time) error {
+	if !workerlicense.Allowed(ctx, core.MUTATE_BUSINESS) {
+		return nil
+	}
 	return a.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var current scanOpportunity
 		err := tx.Table("crm_opportunities").Clauses(clause.Locking{Strength: "UPDATE"}).

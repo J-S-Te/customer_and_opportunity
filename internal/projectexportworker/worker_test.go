@@ -1,17 +1,61 @@
 package projectexportworker
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/mattn/go-runewidth"
+	"github.com/pdfcpu/pdfcpu/pkg/api"
+	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/model"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/portal/project"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/portal/projectexport"
 )
+
+func TestPDFCPURendererProducesValidPaginatedPDF(t *testing.T) {
+	var renderer *PDFCPURenderer
+	rows := []string{"Filing copy - not a government filing receipt"}
+	if fontPath := os.Getenv("UIP_TEST_CJK_FONT_PATH"); fontPath != "" {
+		var err error
+		renderer, err = NewPDFCPURenderer(t.TempDir(), fontPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rows = []string{"等级保护备案资料副本", "本文件不等同于公安受理或备案凭证。", "单位名称：测试科技有限公司"}
+	} else {
+		oldPath := model.ConfigPath
+		model.ConfigPath = "disable"
+		t.Cleanup(func() { model.ConfigPath = oldPath })
+		renderer = &PDFCPURenderer{config: model.NewDefaultConfiguration(), fontName: "Helvetica"}
+	}
+	for i := 0; i < 100; i++ {
+		rows = append(rows, "Saved filing data - section content")
+	}
+	data, err := renderer.RenderRows(context.Background(), rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := api.Validate(bytes.NewReader(data), renderer.config); err != nil {
+		t.Fatal(err)
+	}
+	pages, err := api.PageCount(bytes.NewReader(data), renderer.config)
+	if err != nil || pages < 3 {
+		t.Fatalf("pages=%d err=%v", pages, err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := renderer.RenderRows(ctx, rows); !errors.Is(err, context.Canceled) {
+		t.Fatal(err)
+	}
+	if _, err := renderer.RenderRows(context.Background(), []string{strings.Repeat("x", 513<<10)}); err == nil {
+		t.Fatal("accepted oversized source text")
+	}
+}
 
 type workerStoreStub struct {
 	job       *projectexport.Job

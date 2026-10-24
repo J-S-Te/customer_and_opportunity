@@ -30,7 +30,8 @@ func TestCRMAuthorizationContextCarriesTrustedLoginIP(t *testing.T) {
 	}
 }
 
-func TestCRMAuthorizationContextOmitsPrivateLoginIP(t *testing.T) {
+// AUD-IP-2026：办公网/VPN 私网登录地址合法，必须保留。
+func TestCRMAuthorizationContextKeepsPrivateLoginIP(t *testing.T) {
 	permissions := catalogRolePermissions("sales")
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{
@@ -42,7 +43,7 @@ func TestCRMAuthorizationContextOmitsPrivateLoginIP(t *testing.T) {
 	defer server.Close()
 	client := &platformOIDCClient{platformBaseURL: server.URL, httpClient: server.Client(), expectedContext: sharedauthorization.Expectation{ClientID: "crm-web", ApplicationCode: "customer_and_opportunity", EnvironmentCode: "dev"}}
 	claims, err := client.AuthorizationContext(context.Background(), "access-token")
-	if err != nil || claims.LoginIP != "" {
-		t.Fatalf("claims=%#v err=%v", claims, err)
+	if err != nil || claims.LoginIP != "172.18.0.2" {
+		t.Fatalf("claims=%#v err=%v，私网登录地址应保留", claims, err)
 	}
 }

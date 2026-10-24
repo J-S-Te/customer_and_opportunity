@@ -55,25 +55,25 @@ type RequestQueryScope struct {
 type CreateRequestInput struct {
 	OpportunityID  uint64    `json:"opportunity_id" binding:"required"`
 	Venue          Venue     `json:"venue" binding:"required"`
-	ServiceAddress string    `json:"service_address"`
-	ContactName    string    `json:"contact_name" binding:"required"`
-	ContactPhone   string    `json:"contact_phone" binding:"required"`
-	Description    string    `json:"description" binding:"required"`
+	ServiceAddress string    `json:"service_address" binding:"omitempty,max=500"`
+	ContactName    string    `json:"contact_name" binding:"required,max=128"`
+	ContactPhone   string    `json:"contact_phone" binding:"required,max=64"`
+	Description    string    `json:"description" binding:"required,max=60000"`
 	ExpectedStart  time.Time `json:"expected_start" binding:"required"`
 	ExpectedEnd    time.Time `json:"expected_end" binding:"required"`
 	Urgency        Urgency   `json:"urgency" binding:"required"`
 }
 
-// ReopenRequestInput carries the editable business fields when a rejected or
-// cancelled request is submitted again. The opportunity and request identity
-// remain immutable so the original approval history stays attached to the
-// same request.
+// ReopenRequestInput 携带驳回或取消请求再次提交时
+// 可编辑的业务字段。商机和请求身份
+// 保持不可变，使原审批历史始终关联
+// 同一个请求。
 type ReopenRequestInput struct {
 	Venue          Venue     `json:"venue" binding:"required"`
-	ServiceAddress string    `json:"service_address"`
-	ContactName    string    `json:"contact_name" binding:"required"`
-	ContactPhone   string    `json:"contact_phone" binding:"required"`
-	Description    string    `json:"description" binding:"required"`
+	ServiceAddress string    `json:"service_address" binding:"omitempty,max=500"`
+	ContactName    string    `json:"contact_name" binding:"required,max=128"`
+	ContactPhone   string    `json:"contact_phone" binding:"required,max=64"`
+	Description    string    `json:"description" binding:"required,max=60000"`
 	ExpectedStart  time.Time `json:"expected_start" binding:"required"`
 	ExpectedEnd    time.Time `json:"expected_end" binding:"required"`
 	Urgency        Urgency   `json:"urgency" binding:"required"`
@@ -116,6 +116,13 @@ type AssignmentTarget struct {
 	Role         string `json:"role" binding:"required"`
 }
 
+type TakeoverExecutingTeamLeadInput struct {
+	TeamLeadPersonID string `json:"team_lead_person_id" binding:"required"`
+	TeamLeadName     string `json:"team_lead_name"`
+	Reason           string `json:"reason"`
+	Version          uint64 `json:"version" binding:"required"`
+}
+
 type ReplaceAssignmentsInput struct {
 	Assignees    []AssignmentTarget `json:"assignees" binding:"required,min=1"`
 	ChangeReason string             `json:"change_reason"`
@@ -125,7 +132,17 @@ type ReplaceAssignmentsInput struct {
 type SelectDepartmentInput struct {
 	DepartmentID string `json:"department_id" binding:"required"`
 	Department   string `json:"department"`
+	// TeamLeadPersonID 是 TS-011 第①级的团队负责人；为空时保持 TS-003 的
+	// 仅选部门兼容行为，不会推进到执行指派中间态。
+	TeamLeadPersonID string `json:"team_lead_person_id"`
+	// TeamLeadName 仅用于兼容前端展示字段；服务端始终以基础平台目录解析姓名。
+	TeamLeadName string `json:"team_lead_name"`
 	Version      uint64 `json:"version" binding:"required"`
+}
+
+type RejectExecutionAssignmentInput struct {
+	Reason  string `json:"reason" binding:"required"`
+	Version uint64 `json:"version" binding:"required"`
 }
 
 type AddProgressInput struct {
@@ -165,29 +182,33 @@ type OpportunitySnapshot struct {
 // RequestView 是面向接口的显式投影，避免直接序列化 GORM 模型而泄露联系人密文、
 // 幂等键或请求摘要等内部字段。
 type RequestView struct {
-	ID                    uint64           `json:"id"`
-	RequestNo             string           `json:"request_no"`
-	OpportunityID         uint64           `json:"opportunity_id"`
-	OpportunityNo         string           `json:"opportunity_no"`
-	ApplicantID           string           `json:"applicant_id"`
-	ApplicantName         string           `json:"applicant_name"`
-	Venue                 Venue            `json:"venue"`
-	ServiceAddress        string           `json:"service_address,omitempty"`
-	ContactName           string           `json:"contact_name"`
-	ContactPhoneMasked    string           `json:"contact_phone"`
-	Description           string           `json:"description"`
-	ExpectedStart         time.Time        `json:"expected_start"`
-	ExpectedEnd           time.Time        `json:"expected_end"`
-	Urgency               Urgency          `json:"urgency"`
-	Status                RequestStatus    `json:"status"`
-	CurrentApprovalNode   uint8            `json:"current_approval_node"`
-	AssignmentAction      ApprovalNodeType `json:"assignment_action,omitempty"`
-	AssignmentRoleCode    string           `json:"assignment_role_code,omitempty"`
-	ExecutionDepartmentID string           `json:"execution_department_id,omitempty"`
-	ExecutionDepartment   string           `json:"execution_department,omitempty"`
-	Version               uint64           `json:"version"`
-	CreatedAt             time.Time        `json:"created_at"`
-	UpdatedAt             time.Time        `json:"updated_at"`
+	ID                    uint64             `json:"id"`
+	RequestNo             string             `json:"request_no"`
+	OpportunityID         uint64             `json:"opportunity_id"`
+	OpportunityNo         string             `json:"opportunity_no"`
+	ApplicantID           string             `json:"applicant_id"`
+	ApplicantName         string             `json:"applicant_name"`
+	Venue                 Venue              `json:"venue"`
+	ServiceAddress        string             `json:"service_address,omitempty"`
+	ContactName           string             `json:"contact_name"`
+	ContactPhoneMasked    string             `json:"contact_phone"`
+	Description           string             `json:"description"`
+	ExpectedStart         time.Time          `json:"expected_start"`
+	ExpectedEnd           time.Time          `json:"expected_end"`
+	Urgency               Urgency            `json:"urgency"`
+	Status                RequestStatus      `json:"status"`
+	CurrentApprovalNode   uint8              `json:"current_approval_node"`
+	AssignmentAction      ApprovalNodeType   `json:"assignment_action,omitempty"`
+	AssignmentActions     []ApprovalNodeType `json:"assignment_actions,omitempty"`
+	AssignmentRoleCode    string             `json:"assignment_role_code,omitempty"`
+	ExecutionDepartmentID string             `json:"execution_department_id,omitempty"`
+	ExecutionDepartment   string             `json:"execution_department,omitempty"`
+	TeamLeadPersonID      string             `json:"team_lead_person_id,omitempty"`
+	TeamLeadName          string             `json:"team_lead_name,omitempty"`
+	AssignmentLevel       uint8              `json:"assignment_level"`
+	Version               uint64             `json:"version"`
+	CreatedAt             time.Time          `json:"created_at"`
+	UpdatedAt             time.Time          `json:"updated_at"`
 }
 
 func requestView(value *PresaleRequest) RequestView {
@@ -201,7 +222,9 @@ func requestView(value *PresaleRequest) RequestView {
 		Urgency: value.Urgency, Status: value.Status,
 		CurrentApprovalNode: value.CurrentApprovalNode, Version: value.Version,
 		ExecutionDepartmentID: value.ExecutionDepartmentID, ExecutionDepartment: value.ExecutionDepartment,
-		CreatedAt: value.CreatedAt, UpdatedAt: value.UpdatedAt,
+		TeamLeadPersonID: value.TeamLeadPersonID, TeamLeadName: value.TeamLeadNameSnapshot,
+		AssignmentLevel: value.AssignmentLevel,
+		CreatedAt:       value.CreatedAt, UpdatedAt: value.UpdatedAt,
 	}
 }
 

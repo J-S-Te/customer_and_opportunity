@@ -1,8 +1,11 @@
 package presale
 
 import (
+	"bytes"
 	"context"
+	"encoding/csv"
 	"math/big"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -10,11 +13,12 @@ import (
 const maxReportPeriod = 366 * 24 * time.Hour
 
 type ReportQuery struct {
-	From           time.Time
-	To             time.Time
-	OrganizationID string
-	PersonID       string
-	OpportunityID  uint64
+	From              time.Time
+	To                time.Time
+	OrganizationID    string
+	PersonID          string
+	OpportunityID     uint64
+	distributionLimit int
 }
 
 type ReportScope struct {
@@ -65,10 +69,13 @@ type ReportRepository interface {
 }
 
 type ReportService struct {
-	repo ReportRepository
+	repo        ReportRepository
+	exportSlots chan struct{}
 }
 
-func NewReportService(repo ReportRepository) *ReportService { return &ReportService{repo: repo} }
+func NewReportService(repo ReportRepository) *ReportService {
+	return &ReportService{repo: repo, exportSlots: make(chan struct{}, 2)}
+}
 
 func (s *ReportService) Summary(ctx context.Context, actor Actor, query ReportQuery) (ReportSummary, error) {
 	scope, query, err := validateReportAccess(actor, query)
@@ -132,14 +139,99 @@ func (s *ReportService) FilterOptions(ctx context.Context, actor Actor, query Re
 	return s.repo.ReportFilterOptions(ctx, scope, query)
 }
 
-// 在对象存储、导出 worker 和下载生命周期尚未配置前，导出明确失败关闭，
-// 不返回虚假的任务编号或不可用链接。
-func (s *ReportService) RequestExport(actor Actor, query ReportQuery) error {
-	_, _, err := validateReportAccess(actor, query)
-	if err != nil {
-		return err
+// 导出与列表使用相同的服务端授权范围。文件仅在当前请求中生成，不制造异步任务或
+// 长期下载链接；超出上限时拒绝而不是悄悄截断报表。
+func (s *ReportService) RequestExport(ctx context.Context, actor Actor, query ReportQuery, dimension string) ([]byte, error) {
+	if s == nil || s.repo == nil {
+		return nil, ErrReportExportUnavailable
 	}
-	return ErrReportExportUnavailable
+	if _, _, err := validateReportAccess(actor, query); err != nil {
+		return nil, err
+	}
+	select {
+	case s.exportSlots <- struct{}{}:
+		defer func() { <-s.exportSlots }()
+	default:
+		return nil, ErrReportExportBusy
+	}
+	if transaction, ok := s.repo.(interface {
+		WithTransaction(context.Context, func(context.Context) error) error
+	}); ok {
+		var data []byte
+		err := transaction.WithTransaction(ctx, func(tx context.Context) error {
+			var err error
+			data, err = s.exportCSV(tx, actor, query, dimension)
+			return err
+		})
+		return data, err
+	}
+	return s.exportCSV(ctx, actor, query, dimension)
+}
+
+func (s *ReportService) exportCSV(ctx context.Context, actor Actor, query ReportQuery, dimension string) ([]byte, error) {
+	scope, query, err := validateReportAccess(actor, query)
+	if err != nil {
+		return nil, err
+	}
+	dimension = strings.ToUpper(strings.TrimSpace(dimension))
+	if dimension == "" {
+		dimension = "PERSON"
+	}
+	if dimension != "PERSON" && dimension != "DEPARTMENT" && dimension != "OPPORTUNITY" {
+		return nil, ErrInvalidInput
+	}
+	query.distributionLimit = 10001
+	summary, err := s.Summary(ctx, actor, query)
+	if err != nil {
+		return nil, err
+	}
+	trend, err := s.Trend(ctx, actor, query)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := s.repo.ReportDistribution(ctx, scope, query, dimension)
+	if err != nil {
+		return nil, err
+	}
+	if len(rows) > 10000 {
+		return nil, ErrReportExportLimit
+	}
+	var output bytes.Buffer
+	output.WriteString("\xef\xbb\xbf")
+	writer := csv.NewWriter(&output)
+	records := [][]string{
+		{"售前投入报表", "起始时间（UTC）", "结束时间（UTC）", "分布维度"},
+		{"统计区间", query.From.Format(time.RFC3339), query.To.Format(time.RFC3339), dimension},
+		{"汇总", "工时", "参与人数", "有效工时记录", "已结束任务", "覆盖商机", "有效商机", "商机覆盖率（%）", "工时成功记录", "工时总记录", "工时成功率（%）"},
+		{"合计", summary.WorkHours, strconv.FormatInt(summary.ParticipantCount, 10), strconv.FormatInt(summary.ValidWorklogCount, 10), strconv.FormatInt(summary.AutoCompletedTaskCount, 10), strconv.FormatInt(summary.CoveredOpportunityCount, 10), strconv.FormatInt(summary.ActiveOpportunityCount, 10), summary.OpportunityCoverageRate, strconv.FormatInt(summary.PMSSuccessCount, 10), strconv.FormatInt(summary.PMSOutboxWorklogCount, 10), summary.PMSSuccessRate},
+		{}, {"趋势日期（UTC）", "工时", "参与人数", "记录数"},
+	}
+	for _, point := range trend {
+		records = append(records, []string{point.Date, point.WorkHours, strconv.FormatInt(point.ParticipantCount, 10), strconv.FormatInt(point.WorklogCount, 10)})
+	}
+	records = append(records, []string{}, []string{"分布", "名称", "部门", "工时", "参与人数", "申请数", "记录数"})
+	for _, row := range rows {
+		records = append(records, []string{dimension, row.DimensionName, row.Department, row.WorkHours, strconv.FormatInt(row.ParticipantCount, 10), strconv.FormatInt(row.RequestCount, 10), strconv.FormatInt(row.WorklogCount, 10)})
+	}
+	for _, record := range records {
+		for i, cell := range record {
+			// Excel 可将引号内的文本当作公式执行，检查前导空白后的首字符。
+			if value := strings.TrimLeft(cell, " \t\r\n"); value != "" && strings.ContainsRune("=+-@", rune(value[0])) {
+				record[i] = "'" + cell
+			}
+		}
+		if err := writer.Write(record); err != nil {
+			return nil, err
+		}
+	}
+	writer.Flush()
+	if err := writer.Error(); err != nil {
+		return nil, err
+	}
+	if output.Len() > 16<<20 {
+		return nil, ErrReportExportLimit
+	}
+	return output.Bytes(), nil
 }
 
 func validateReportAccess(actor Actor, query ReportQuery) (ReportScope, ReportQuery, error) {

@@ -55,6 +55,22 @@ func TestAssigneeEvidenceUsesOccurrenceTimeAssignment(t *testing.T) {
 	}
 }
 
+func TestPlatformUserAssigneeEvidenceAndProjection(t *testing.T) {
+	outbox, evidence, progress, request, assignment := validFixture("USER", presale.ProgressRecipientAssignee, "peer-user", 11)
+	assignment.AssigneeNamespace = "USER"
+	if reason := validateEvidence(outbox, evidence, progress, request, assignment); reason != "" {
+		t.Fatal(reason)
+	}
+	message := project(outbox, evidence, request, evidence.OccurredAt)
+	if message.RecipientNamespace != "USER" || message.RecipientID != "peer-user" || message.Type != notification.TypePresaleProgressAssignee {
+		t.Fatalf("projection=%+v", message)
+	}
+	assignment.AssigneeNamespace = ""
+	if reason := validateEvidence(outbox, evidence, progress, request, assignment); reason == "" {
+		t.Fatal("historical ambiguous assignment relabelled as user")
+	}
+}
+
 func TestPayloadProjectionAndLeaseContract(t *testing.T) {
 	outbox, evidence, _, request, _ := validFixture(presale.ProgressRecipientUser, presale.ProgressRecipientApplicant, "sales-user", 0)
 	payload, reason, valid := validatePayload(outbox)

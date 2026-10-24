@@ -21,6 +21,9 @@ const (
 	TypePresaleApprovalRejected      = "PRESALE_APPROVAL_REJECTED"
 	TypePresaleProgressApplicant     = "PRESALE_PROGRESS_APPLICANT"
 	TypePresaleProgressAssignee      = "PRESALE_PROGRESS_ASSIGNEE"
+	TypePresaleExecutorPending       = "PRESALE_EXECUTOR_ASSIGNMENT_PENDING"
+	TypePresaleExecutionRejected     = "PRESALE_EXECUTION_ASSIGNMENT_REJECTED"
+	TypePresaleTeamLeadInvalid       = "PRESALE_TEAM_LEAD_INVALID"
 	StatusUnread                     = "UNREAD"
 	StatusRead                       = "READ"
 	StatusCancelled                  = "CANCELLED"
@@ -41,7 +44,7 @@ type Notification struct {
 	SourceEventID       string     `gorm:"size:256;not null;uniqueIndex:uq_crm_notification_source,priority:2"`
 	Type                string     `gorm:"size:64;not null;index"`
 	OpportunityID       uint64     `gorm:"not null;index"`
-	CustomerID          uint64     `gorm:"not null;index"`
+	CustomerID          uint64     `gorm:"not null;index;default:0"`
 	OpportunityVersion  uint64     `gorm:"not null"`
 	OpportunityNo       string     `gorm:"size:32;not null"`
 	OpportunityName     string     `gorm:"size:200;not null"`
@@ -50,6 +53,7 @@ type Notification struct {
 	AssignmentID        uint64     `gorm:"not null"`
 	ProgressID          uint64     `gorm:"not null"`
 	RecipientID         string     `gorm:"size:64;not null;index"`
+	RecipientNamespace  string     `gorm:"size:16;not null;default:''"`
 	RecipientKind       string     `gorm:"size:32;not null"`
 	Title               string     `gorm:"size:200;not null"`
 	Body                string     `gorm:"size:500;not null"`

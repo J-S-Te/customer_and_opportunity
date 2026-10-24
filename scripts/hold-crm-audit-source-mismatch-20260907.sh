@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Incident-specific operation. Run on the deployment host; default is read-only.
+# 此脚本仅处理特定事件，在部署主机上运行，默认只读。
 set -euo pipefail
 mode=${1:---inspect}
 case "$mode" in --inspect|--apply) ;; *) echo 'Usage: bash script [--inspect|--apply]' >&2; exit 2;; esac

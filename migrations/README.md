@@ -79,6 +79,14 @@
 65. `000108_unbounded_credit_application_reason.up.sql`
 66. `000110_opportunity_catalog.up.sql`
 67. `000111_opportunity_catalog_initializations.up.sql`
+68. `000112_handover_protocol.up.sql`
+69. `000113_request_audit_ip_provenance.up.sql`
+70. `000114_presale_two_level_assignment.up.sql`
+71. `000115_presale_execution_assignment_notifications.up.sql`
+72. `000116_credit_payment_reversal.up.sql`
+73. `000117_presale_multi_approval_nodes.up.sql`
+74. `000120_customer_import_source_lifecycle.up.sql`（先持久化导入源任务，再由API内后台上传；完成/过期精确解绑确认后清除临时密文，不删除历史业务作业；需同时发布支持绑定release墓碑的网关）
+75. `000121_presale_notification_identity.up.sql`（新增指派/事件/通知身份命名空间，新执行人统一平台 `USER`；不猜测回填历史身份。必须先迁移，再同步发布 CRM API 和两个通知 worker；本轮仅 native 校验，实际隔离 MySQL 由集成任务验证。）
 
 ## customer_portal schema
 
@@ -120,13 +128,16 @@
 34. `000097_add_login_ip_to_portal_sessions.up.sql`
 35. `000102_portal_project_account_bindings.up.sql`
 36. `000104_portal_oidc_backchannel_logout.up.sql`
+37. `000109_portal_report_revision_ledger.up.sql`
+38. `000118_portal_project_permission_modes.up.sql`
+39. `000119_add_ip_provenance_to_portal_request_audit_outbox.up.sql`
 
 ## 规则
 
 - 应使用发布平台维护的 schema migration 版本表记录执行结果；应用进程不使用 GORM `AutoMigrate`。发布器必须串行化同一 schema 的发布，并对每条 MySQL DDL 记录执行前/执行后进度和不可变 checksum；发生中断后只能在验证目标列、索引、约束、表和必要回填均符合预期时收敛，不能因为 duplicate column/table/index/constraint 就笼统视为成功。
 - `down.sql` 只用于空环境或已经完成业务数据备份、影响分析和外部关联清理的受控回退；审计、身份映射、终态记录和 outbox 在生产环境优先采用前向修复。
 - 新 migration 必须注明目标 schema，并在此清单中登记顺序。
-- CRM 与 Portal 可以使用同一个 MySQL 实例，亦可按部署需要使用同一个 database/schema；两套迁移历史仍须独立记录并串行执行，运行账号按各自表收紧权限。两套审计 outbox 使用不同表名和领取租约，禁止一个进程领取另一应用的审计任务，也禁止跨模块业务事务耦合。
+- CRM 与 Portal 可共享MySQL实例；推荐独立schema。若部署有意共用schema，仍需按各自计划/历史与账号表权限隔离，不可把全部SQL作为一套迁移。两套审计 outbox 使用不同表名和领取租约，禁止一个进程领取另一应用的审计任务，也禁止跨模块业务事务耦合。
 
 `000047` 新建报价/投标可信回调的只读快照表，不从缺少完整来源类型和金额的旧阶段日志伪造历史；`OPPORTUNITY_SIGNED` 转合同接受态复用既有 outbox 和操作人绑定幂等表。
 
@@ -154,7 +165,16 @@ Portal `000067`（`000067_portal_feedback_customer_notifications`）为 `portal_
 `000085` 扩展 CRM 通知资源形状约束，允许售前审批待处理、通过和驳回通知落库；不为已有待审批记录伪造历史通知，生产环境须执行前向迁移后再启用审批通知写入。
 `000101` 仅重新排队历史上因 `source_event_id` 以数字开头而被基础平台编码校验拒绝的通知；新版投递 Worker 会把这类 ID 稳定映射为合法的 `CRM_` 事件编码。其他 422 校验失败不会被重试，避免无效收件人或无效资源形成永久重试循环。
 
-`000102` 新建 Portal 账号与项目的显式绑定表，区分上游 `SYNC` 与运营 `MANUAL` 来源。同步接口按租户、客户和项目在事务内锁定项目快照并原子替换 `SYNC` 绑定，重复 `source_version` 请求幂等，空账号集合表示明确撤销同步授权；项目查询、详情、动态、报告、备案、评价、反馈和项目消息入口统一复用账号可见性边界。存量账号在尚未产生绑定时保留客户单位级回退，完成首次绑定后立即收紧到项目级范围。上线前须先执行迁移，再由项目系统调用 `POST /customer-portal/internal/project-access/sync` 建立绑定。
+`000114` 为 TS-011 两级执行指派增加申请级团队负责人投影、当前指派级别和指派类型（`TEAM_LEAD` / `EXECUTOR`）。历史 `EXECUTING` / `COMPLETED` 申请与既有指派行不回填、不改写，`assignment_kind` 默认值把全部存量行保留为执行人。同一迁移还扩展 `crm_presale_mutation_replays` 的 operation/action CHECK，允许 `SELECT_EXECUTION_DEPARTMENT`、`REPLACE_EXECUTOR_ASSIGNMENTS`、`REJECT_EXECUTION_ASSIGNMENT` 及 `TEAM_LEAD` / `EXECUTOR` / `REJECT`，否则两级指派在记录幂等结果时会触发约束失败。两级规则快照和中间态只对新申请生效；上线前须执行本迁移，随后才能写入团队负责人字段。若生产已有两级在途申请，`down.sql` 会丢失负责人与指派类型语义，应优先前向修复。
+
+`000115` 扩展 `crm_notifications` 资源形状约束，允许团队负责人执行指派待办、技术总监收到的拒绝和负责人失效通知落库。三类通知都是请求级站内消息，不新增外部渠道；不为历史申请伪造团队负责人待办或拒绝/失效通知。
+
+`000117` 把售前审批回放的动作约束扩展到 `NODE_1` 到 `NODE_10`，与规则最多 10 个审批节点、执行器和数据库约束保持一致。
+
+`000116` 为 CRM 信用回款记录增加事件类型、原回款引用、回款前/后信用状态快照、冲销时间和冲销事件号。它使“结清→冲销→重新结清”可以恢复冲销前等级与连续次数，并拒绝非最新回款或有后续人工调整的自动冲销；不改写历史记录。
+
+`000102` 新建 Portal 账号与项目的显式绑定表，区分上游 `SYNC` 与运营 `MANUAL` 来源。同步接口按租户、客户和项目在事务内锁定项目快照并原子替换 `SYNC` 绑定，重复 `source_version` 请求幂等，空账号集合表示撤销相应同步绑定。`000118` 新增账号级项目权限模式表。没有模式行的未迁移账号保留客户单位级兼容；已有绑定历史的账号和新预配账号写入 `ISOLATED`，最后一个有效绑定撤销后返回空项目集，不再回退。项目相关业务复用该可见性边界；上线前须先执行迁移，再由项目系统调用 `POST /customer-portal/internal/project-access/sync` 建立绑定，并验收零授权场景。
+`000119` 与 CRM `000113` 对齐，为 Portal 请求审计 Outbox 增加 `client_ip`/`ip_source`。portal-server 的 requestaudit Store 对该表写入这两列，缺列时审计写入失败并按 fail-closed 拒绝 Portal HTTP 请求；升级 Portal API 镜像前必须先执行本迁移。
 `000100/000101` 记录平台通知投递失败并仅对已知的历史数字型事件 ID 做受控重排队；不把其他校验失败误转为可重试事件。`000103/000104` 分别为 CRM 与 Portal 增加 OIDC 后通道注销重放防护及会话撤销所需结构。`000105` 至 `000108` 引入客户信用规则、回款事实、申请/审批历史、规则版本与原因字段，所有记录仍按租户隔离且以幂等键约束重复写入。
 `000072` 新建独立 Worker 多实例心跳表，以 `worker_type + worker_id` 保存最后一次成功读取售前 outbox 的时间。CRM 只在任一 `presale_delivery` 实例具有新鲜数据库证据时接受新的售前申请；无记录、过期或查询失败均失败关闭，已提交申请的幂等重放不受 Worker 暂停影响。首笔心跳与 outbox 查询/领取在同一短事务，写入失败会回滚租约；此后每处理一个具有 5 秒硬超时的外部事件就刷新心跳，刷新失败会告警但不会中断已领取批次。CRM/Worker 使用相同新鲜度窗口，Worker 启动时校验该窗口足以覆盖轮询、外部超时和调度抖动；配置项本身不能把 Worker 标记为可用。
 `000048` 新建转合同逐次投递诊断表；既有 `OPPORTUNITY_SIGNED` 仍由 Worker 按原事件 ID 领取，不伪造历史投递成功。
@@ -185,3 +205,17 @@ Portal `000067`（`000067_portal_feedback_customer_notifications`）为 `portal_
 该结果证明当前空库迁移链可执行，不等于上一版本升级、在线 DDL 或生产性能验收完成。`000032/000033/000035/000036/000037/000040/000041/000045/000050` 等在存量表上增加索引、约束、列或改变列长度的迁移仍须使用发布平台认可的在线变更方案，并监控 metadata lock、副本延迟、临时磁盘及回退条件。相应 `down.sql` 会删除不可变协调或审计证据、索引或缩窄字段，只能用于确认数据满足回退条件的测试/空环境，不能作为已有生产事件时的常规回滚。
 
 2026-09-12 已在本地 Docker MySQL 8.4.11 的两个全新空库 schema 分别执行当前完整 `up` 链：CRM 65 个文件（至 `000108`）创建 74 张表，combined checksum 为 `sha256:b2d4140d3f222f30987aaacb2fab43b4f3e1d110cf96f08b6e1571bb04d93887`；Portal 36 个文件（至 `000104`）创建 57 张表，combined checksum 为 `sha256:4650c30c545832fdcb3fd81a04845fc20a8a6a3d896e1e8acd2d5ef9e15269a4`。该验证补上了 `000068` 至 `000108` 此前缺失的空库执行证据；两个临时 schema 已删除。本结果仍不替代上一版本增量升级、在线 DDL、metadata lock、回滚演练和生产规模性能验收。
+
+## 当前计划核对与执行顺序（2026-10-22，静态）
+
+源码权威是 `internal/migrationplan/plan.go`：CRM 75 文件至 000121，Portal 39 文件至 000119。编号存在分域与同号文件，数字大小不是归属依据。旧计数与 checksum 不用于当前发布。
+
+本轮静态按源码算法重算：CRM `sha256:6e7be65a085c1f5ecf8c3de08fd6959dc4d55ddb225d8c12450f1ecd3de4fd43`；Portal `sha256:31b9cf34b2687def68e26f967989e6725d066987641f1e98681313887b558f74`。未执行 DDL；发布仍须从目标镜像重新生成核对。
+
+运维先以发布镜像生成crm与portal两份计划和checksum，再核对目标库版本与语句检查点；随后仅在授权的目标环境备份并执行未完成条目，最后检查结构、历史账本和应用读写。中断/duplicate column不能直接记整文件成功，需核对每句真实结果；down前必须分析数据及外部关联，生产优先前向修复。
+
+000109增加报告版本及有效性账本、按版本唯一文件/摄取作业、下载grant版本绑定和ISSUED/VOIDED事件，不删除旧文件/下载证据。新版发放与作废必须撤销对应旧授权，旧报告不能凭历史grant继续下载。执行成功不表示报告安全Provider已装配。
+
+本轮仅核对清单、文件存在与源码计划，未连接MySQL或执行DDL。详细证据与限制见 [核验记录](../../.ai/modules/operation-docs-crm-20261013.md)。
+
+2026-10-18 已在本地一次性 MySQL 8.4.11 空库执行当前完整 CRM `up` 链：73 个文件至 `000117`，combined checksum 为 `sha256:75e29e09642ab3ac0627081f1ce518a6f30ef9f7a9bc5c8f962e27e1d5b2b2d4`。已实际核对 `crm_presale_requests` 的团队负责人/指派级别列、`crm_presale_assignments.assignment_kind` 默认值与 CHECK、两个新索引，并验证缺省写入落为 `EXECUTOR`、非法类型被拒绝；另在真实本地栈验证两级指派幂等写入不再被旧 mutation CHECK 拒绝；同时核对 `chk_crm_notification_resource_shape` 已接受三类 TS-011 通知类型。临时容器已删除。该空库执行使用显式 `collation=utf8mb4_0900_ai_ci` 连接参数；未指定时既有 `000071` 的 `CAST(... AS CHAR)` 会触发连接 collation 与列 collation 混用，属于发布前应固定的连接参数，本轮未改写 `000071`。该结果不替代上一版本增量升级、在线 DDL、metadata lock、回退演练或 Portal 迁移验证。

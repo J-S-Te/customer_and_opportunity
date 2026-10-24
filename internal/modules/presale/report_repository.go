@@ -12,6 +12,13 @@ func (r *GORMRepository) ReportSummary(ctx context.Context, scope ReportScope, q
 	// 都复用同一范围构造器，避免同一筛选条件在不同图表中产生不同统计结果。
 	worklogWhere, worklogArgs := reportWorklogWhere(scope, query, "w", "r", "o")
 	result := ReportSummary{WorkHours: "0.00"}
+	// GORM Scan 会初始化整个目标结构体。采用独立投影，
+	// 避免后续查询选择不同列时覆盖之前的聚合结果。
+	worklogs := struct {
+		WorkHours         string
+		ParticipantCount  int64
+		ValidWorklogCount int64
+	}{WorkHours: "0.00"}
 	if err := database.FromContext(ctx, r.db).Raw(`SELECT
 		COALESCE(CAST(SUM(w.work_hours) AS CHAR), '0.00') AS work_hours,
 		COUNT(DISTINCT w.person_id) AS participant_count,
@@ -19,9 +26,10 @@ func (r *GORMRepository) ReportSummary(ctx context.Context, scope ReportScope, q
 		FROM crm_presale_worklogs w
 		JOIN crm_presale_requests r ON r.tenant_id=w.tenant_id AND r.id=w.request_id
 		JOIN crm_opportunities o ON o.tenant_id=r.tenant_id AND o.id=r.opportunity_id
-		WHERE `+worklogWhere, worklogArgs...).Scan(&result).Error; err != nil {
+		WHERE `+worklogWhere, worklogArgs...).Scan(&worklogs).Error; err != nil {
 		return ReportSummary{}, err
 	}
+	result.WorkHours, result.ParticipantCount, result.ValidWorklogCount = worklogs.WorkHours, worklogs.ParticipantCount, worklogs.ValidWorklogCount
 
 	requestWhere, requestArgs := reportRequestWhere(scope, query, "r", "o")
 	if err := database.FromContext(ctx, r.db).Raw(`SELECT COUNT(DISTINCT r.id)
@@ -37,6 +45,10 @@ func (r *GORMRepository) ReportSummary(ctx context.Context, scope ReportScope, q
 	// 统计窗口内仍有效的售前覆盖，而不是历史上只要创建过申请就永久计入覆盖。
 	opportunityWhere, opportunityArgs := reportOpportunityWhere(scope, query, "o")
 	coverageWhere, coverageArgs := reportCoverageRequestWhere(scope, query, "coverage_request")
+	var coverage struct {
+		ActiveOpportunityCount  int64
+		CoveredOpportunityCount int64
+	}
 	if err := database.FromContext(ctx, r.db).Raw(`SELECT
 		COUNT(DISTINCT o.id) AS active_opportunity_count,
 		COUNT(DISTINCT CASE WHEN EXISTS (
@@ -52,10 +64,15 @@ func (r *GORMRepository) ReportSummary(ctx context.Context, scope ReportScope, q
 		WHERE o.tenant_id=? AND o.deleted_at IS NULL AND o.created_at<?
 		  AND (o.opp_status=? OR (o.opp_status=? AND o.stage_changed_at>=?)
 		       OR (o.opp_status=? AND o.end_date>=DATE(?))) AND `+opportunityWhere,
-		append(append([]any{query.To, StatusCompleted, StatusRejected, StatusCancelled, query.From}, coverageArgs...), append([]any{scope.TenantID, query.To, "FOLLOWING", "CLOSED", query.From, "VOID", query.From}, opportunityArgs...)...)...).Scan(&result).Error; err != nil {
+		append(append([]any{query.To, StatusCompleted, StatusRejected, StatusCancelled, query.From}, coverageArgs...), append([]any{scope.TenantID, query.To, "FOLLOWING", "CLOSED", query.From, "VOID", query.From}, opportunityArgs...)...)...).Scan(&coverage).Error; err != nil {
 		return ReportSummary{}, err
 	}
+	result.ActiveOpportunityCount, result.CoveredOpportunityCount = coverage.ActiveOpportunityCount, coverage.CoveredOpportunityCount
 
+	var pms struct {
+		PMSOutboxWorklogCount int64
+		PMSSuccessCount       int64
+	}
 	if err := database.FromContext(ctx, r.db).Raw(`SELECT
 		COUNT(DISTINCT w.id) AS pms_outbox_worklog_count,
 		COUNT(DISTINCT CASE WHEN w.push_status=? THEN w.id END) AS pms_success_count
@@ -64,9 +81,10 @@ func (r *GORMRepository) ReportSummary(ctx context.Context, scope ReportScope, q
 		JOIN crm_presale_requests r ON r.tenant_id=w.tenant_id AND r.id=w.request_id
 		JOIN crm_opportunities o ON o.tenant_id=r.tenant_id AND o.id=r.opportunity_id
 		WHERE e.tenant_id=? AND e.event_type=? AND `+worklogWhere,
-		append([]any{PushSuccess, "presale_worklog", scope.TenantID, "PRESALE_WORKLOG_CREATED"}, worklogArgs...)...).Scan(&result).Error; err != nil {
+		append([]any{PushSuccess, "presale_worklog", scope.TenantID, "PRESALE_WORKLOG_CREATED"}, worklogArgs...)...).Scan(&pms).Error; err != nil {
 		return ReportSummary{}, err
 	}
+	result.PMSOutboxWorklogCount, result.PMSSuccessCount = pms.PMSOutboxWorklogCount, pms.PMSSuccessCount
 	return result, nil
 }
 
@@ -124,6 +142,10 @@ func (r *GORMRepository) ReportDistribution(ctx context.Context, scope ReportSco
 		return nil, ErrInvalidInput
 	}
 	var values []ReportDistributionRow
+	limit := 500
+	if query.distributionLimit == 10001 {
+		limit = query.distributionLimit
+	}
 	err := database.FromContext(ctx, r.db).Raw(fmt.Sprintf(`SELECT %s,
 		COALESCE(CAST(SUM(w.work_hours) AS CHAR), '0.00') AS work_hours,
 		COUNT(DISTINCT w.person_id) AS participant_count,
@@ -131,13 +153,13 @@ func (r *GORMRepository) ReportDistribution(ctx context.Context, scope ReportSco
 		FROM crm_presale_worklogs w
 		JOIN crm_presale_requests r ON r.tenant_id=w.tenant_id AND r.id=w.request_id
 		JOIN crm_opportunities o ON o.tenant_id=r.tenant_id AND o.id=r.opportunity_id
-		WHERE %s GROUP BY %s ORDER BY SUM(w.work_hours) DESC,dimension_id ASC LIMIT 500`, selection, where, groups[dimension]), args...).Scan(&values).Error
+		WHERE %s GROUP BY %s ORDER BY SUM(w.work_hours) DESC,dimension_id ASC LIMIT %d`, selection, where, groups[dimension], limit), args...).Scan(&values).Error
 	return values, err
 }
 
-// ReportFilterOptions uses the same worklog/time/person scope as the report
-// itself. This is deliberately separate from the request-list filter options:
-// “参与人员” means a person who recorded valid work, not merely an assignee.
+// ReportFilterOptions 使用与报表自身相同的工时、时间及人员范围，
+// 有意与请求列表筛选选项分离：
+// “参与人员”指记录了有效工作的人，而不仅是被指派人。
 func (r *GORMRepository) ReportFilterOptions(ctx context.Context, scope ReportScope, query ReportQuery) (RequestFilterOptions, error) {
 	where, args := reportWorklogWhere(scope, query, "w", "r", "o")
 	result := RequestFilterOptions{}

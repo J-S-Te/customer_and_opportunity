@@ -102,9 +102,9 @@ type Service struct{ repository Repository }
 
 func NewService(repository Repository) *Service { return &Service{repository: repository} }
 
-// Resolve returns the smallest authoritative CRM snapshot required by Contract
-// Management. The tenant is always taken from the verified machine principal;
-// caller-supplied tenant or customer names are deliberately not accepted.
+// Resolve 返回合同管理所需的最小权威 CRM 快照。
+// 租户始终取自已验证的机器主体；
+// 不接受调用方传入的租户或客户名称。
 func (service *Service) Resolve(ctx context.Context, customerID uint64, opportunityID *uint64, actorID string) (Reference, error) {
 	machine, ok := auth.FromContext(ctx)
 	if !ok || machine.TenantID == "" {

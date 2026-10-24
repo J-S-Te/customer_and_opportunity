@@ -76,9 +76,9 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 		_ = sqlDB.Close()
 		return nil, fmt.Errorf("initialize Portal access disable audit: %w", err)
 	}
-	// Write keeps the existing local crm_audit_events fact and, in the same
-	// database transaction when one exists, appends a durable platform-delivery
-	// record. A platform outage therefore cannot undo access disabling.
+	// Write 保留既有本地 crm_audit_events 事实，并在
+	// 存在数据库事务时于同一事务中追加持久化的平台投递
+	// 记录。因此平台故障不能撤销访问停用。
 	auditWriter := audit.NewGORMWriter(db).UsePlatformOutbox(auditStore, cfg.Audit.EnvironmentCode)
 	service := portalinvite.NewAccessDisableService(repo, nil, platformClient, portalClient, auditWriter, portalinvite.SystemClock{}, portalinvite.CryptoRandom{}, options...)
 	auditContext, auditCancel := context.WithCancel(context.Background())

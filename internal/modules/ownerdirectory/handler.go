@@ -27,7 +27,19 @@ func (handler *Handler) List(c *gin.Context) {
 		response.Error(c, apperror.New(422, "CRM_OWNER_DIRECTORY_QUERY_INVALID", "owner directory query is invalid"))
 		return
 	}
-	result, err := handler.catalog.List(c.Request.Context(), Query{Keyword: c.Query("keyword"), UserID: c.Query("user_id"), Page: page, PageSize: pageSize})
+	var roles []string
+	if duty := c.Query("assignment_duty"); duty != "" {
+		if len(AssignmentDutyPermissions(duty)) == 0 {
+			response.Error(c, apperror.New(422, "CRM_OWNER_DIRECTORY_QUERY_INVALID", "assignment duty is invalid"))
+			return
+		}
+		roles = AssignmentDutyRoleCodes(duty)
+		if len(roles) == 0 {
+			response.Error(c, ErrUnavailable)
+			return
+		}
+	}
+	result, err := handler.catalog.List(c.Request.Context(), Query{Keyword: c.Query("keyword"), UserID: c.Query("user_id"), RoleCodes: roles, Page: page, PageSize: pageSize})
 	if err != nil {
 		response.Error(c, normalizeError(err))
 		return

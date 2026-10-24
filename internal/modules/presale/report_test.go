@@ -2,6 +2,7 @@ package presale
 
 import (
 	"context"
+	"encoding/csv"
 	"errors"
 	"strings"
 	"testing"
@@ -11,6 +12,8 @@ import (
 type reportRepositoryStub struct {
 	scope ReportScope
 	query ReportQuery
+	rows  []ReportDistributionRow
+	err   error
 }
 
 func (r *reportRepositoryStub) ReportSummary(_ context.Context, scope ReportScope, query ReportQuery) (ReportSummary, error) {
@@ -20,8 +23,9 @@ func (r *reportRepositoryStub) ReportSummary(_ context.Context, scope ReportScop
 func (r *reportRepositoryStub) ReportTrend(context.Context, ReportScope, ReportQuery) ([]ReportTrendPoint, error) {
 	return []ReportTrendPoint{{Date: "2026-08-02", WorkHours: "2.00", ParticipantCount: 1, WorklogCount: 1}}, nil
 }
-func (r *reportRepositoryStub) ReportDistribution(context.Context, ReportScope, ReportQuery, string) ([]ReportDistributionRow, error) {
-	return []ReportDistributionRow{}, nil
+func (r *reportRepositoryStub) ReportDistribution(_ context.Context, scope ReportScope, query ReportQuery, _ string) ([]ReportDistributionRow, error) {
+	r.scope, r.query = scope, query
+	return r.rows, r.err
 }
 func (r *reportRepositoryStub) ReportFilterOptions(context.Context, ReportScope, ReportQuery) (RequestFilterOptions, error) {
 	return RequestFilterOptions{}, nil
@@ -92,11 +96,47 @@ func TestReportRejectsInvalidPeriodAndDimension(t *testing.T) {
 	}
 }
 
-func TestReportExportFailsClosedAfterAuthorization(t *testing.T) {
+func TestReportExportContainsSummaryTrendDistributionAndEscapesFormulas(t *testing.T) {
 	t.Parallel()
-	service := NewReportService(&reportRepositoryStub{})
-	if err := service.RequestExport(reportActor("ALL"), reportQueryFixture()); !errors.Is(err, ErrReportExportUnavailable) {
-		t.Fatalf("RequestExport() error=%v", err)
+	repo := &reportRepositoryStub{rows: []ReportDistributionRow{{DimensionName: " =HYPERLINK(\"bad\")", Department: "\t@SUM(1)", WorkHours: "2.50"}}}
+	data, err := NewReportService(repo).RequestExport(context.Background(), reportActor("ORG"), reportQueryFixture(), "PERSON")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(string(data), "\xef\xbb\xbf") {
+		t.Fatal("missing Excel UTF-8 BOM")
+	}
+	reader := csv.NewReader(strings.NewReader(strings.TrimPrefix(string(data), "\xef\xbb\xbf")))
+	reader.FieldsPerRecord = -1
+	rows, err := reader.ReadAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rows[3][7] != "50.00" || rows[len(rows)-1][1] != "' =HYPERLINK(\"bad\")" || rows[len(rows)-1][2] != "'\t@SUM(1)" || repo.scope.All || repo.scope.OrganizationIDs[0] != "org-a" || repo.query.distributionLimit != 10001 {
+		t.Fatalf("rows=%v scope=%+v query=%+v", rows, repo.scope, repo.query)
+	}
+}
+
+func TestReportExportRejectsUnauthorizedInvalidDimensionsAndLimit(t *testing.T) {
+	t.Parallel()
+	repo := &reportRepositoryStub{}
+	service := NewReportService(repo)
+	actor := reportActor("ALL")
+	actor.Permissions = nil
+	if _, err := service.RequestExport(context.Background(), actor, reportQueryFixture(), "PERSON"); !errors.Is(err, ErrForbidden) {
+		t.Fatal(err)
+	}
+	if _, err := service.RequestExport(context.Background(), reportActor("ALL"), reportQueryFixture(), "SQL"); !errors.Is(err, ErrInvalidInput) {
+		t.Fatal(err)
+	}
+	repo.rows = make([]ReportDistributionRow, 10001)
+	if _, err := service.RequestExport(context.Background(), reportActor("ALL"), reportQueryFixture(), "PERSON"); !errors.Is(err, ErrReportExportLimit) {
+		t.Fatal(err)
+	}
+	repo.rows = nil
+	repo.err = errors.New("db unavailable")
+	if _, err := service.RequestExport(context.Background(), reportActor("ALL"), reportQueryFixture(), "PERSON"); !errors.Is(err, repo.err) {
+		t.Fatal(err)
 	}
 }
 

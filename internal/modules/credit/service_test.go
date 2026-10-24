@@ -102,9 +102,14 @@ func TestPaymentEventValidationRejectsUnsafeOrInconsistentFacts(t *testing.T) {
 	if err := validatePaymentEvent(valid, due, paid); err != nil {
 		t.Fatalf("valid payment rejected: %v", err)
 	}
+	early := valid
+	earlyPaid := dueDate.Add(-time.Hour)
+	early.PaidDate = &earlyPaid
+	if err := validatePaymentEvent(early, due, paid); err != nil {
+		t.Fatalf("early payment must be valid: %v", err)
+	}
 	for name, event := range map[string]PaymentEvent{
 		"missing source":   func() PaymentEvent { v := valid; v.SourceSystem = ""; return v }(),
-		"early paid date":  func() PaymentEvent { v := valid; d := dueDate.Add(-time.Hour); v.PaidDate = &d; return v }(),
 		"excess precision": func() PaymentEvent { v := valid; v.PaidAmount = "1.001"; return v }(),
 		"invalid contract": func() PaymentEvent { v := valid; v.ContractNo = "bad value"; return v }(),
 	} {
@@ -126,5 +131,55 @@ func TestPaymentIdempotencyComparesFullPayload(t *testing.T) {
 	event.PaidAmount = "101.00"
 	if samePaymentPayload(record, event) {
 		t.Fatal("changed payment amount must produce an idempotency conflict")
+	}
+}
+
+func TestPaymentEventReversalRequiresOriginalAndZeroPaidAmount(t *testing.T) {
+	dueDate := time.Date(2026, 8, 31, 0, 0, 0, 0, time.UTC)
+	paidDate := dueDate
+	valid := PaymentEvent{EventID: "rev-1", EventType: PaymentEventReversed, PaymentID: "rev-pay-1", ReversalOfPaymentID: "pay-1", CustomerID: 1, DueDate: dueDate, PaidDate: &paidDate, DueAmount: "100.00", PaidAmount: "0.00", SourceSystem: "settlement"}
+	due, _ := decimal.NewFromString(valid.DueAmount)
+	paid, _ := decimal.NewFromString(valid.PaidAmount)
+	if err := validatePaymentEvent(valid, due, paid); err != nil {
+		t.Fatalf("valid reversal rejected: %v", err)
+	}
+	missing := valid
+	missing.ReversalOfPaymentID = ""
+	if err := validatePaymentEvent(missing, due, paid); err == nil {
+		t.Fatal("reversal without reversal_of_payment_id must be rejected")
+	}
+	nonzero := valid
+	nonzero.PaidAmount = "1.00"
+	nonzeroPaid, _ := decimal.NewFromString(nonzero.PaidAmount)
+	if err := validatePaymentEvent(nonzero, due, nonzeroPaid); err == nil {
+		t.Fatal("reversal with nonzero paid_amount must be rejected")
+	}
+}
+
+func TestCreditReversalMigrationStoresPreAndPostState(t *testing.T) {
+	contents, err := os.ReadFile(filepath.Join("..", "..", "..", "migrations", "000116_credit_payment_reversal.up.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{"prev_level", "prev_ontime_count", "prev_late_count", "result_level", "result_ontime_count", "result_late_count", "reversed_at", "reversal_event_id"} {
+		if !strings.Contains(string(contents), required) {
+			t.Fatalf("000116 migration missing %s", required)
+		}
+	}
+}
+
+func TestSettlementShapedCreditPayloadBindsAndValidates(t *testing.T) {
+	raw := []byte(`{"event_id":"credit-1","event_type":"customer.credit.payment.completed.v1","tenant_id":"tenant-a","payment_id":"allocation-1","customer_id":42,"contract_no":"HT-1","period_no":"1","due_date":"2099-12-31T00:00:00Z","paid_date":"2026-10-18T00:00:00Z","due_amount":"100.00","paid_amount":"100.00","source_system":"settlement"}`)
+	var event PaymentEvent
+	if err := json.Unmarshal(raw, &event); err != nil {
+		t.Fatal(err)
+	}
+	due, _ := decimal.NewFromString(event.DueAmount)
+	paid, _ := decimal.NewFromString(event.PaidAmount)
+	if err := validatePaymentEvent(event, due, paid); err != nil {
+		t.Fatalf("settlement payload rejected: %v", err)
+	}
+	if event.CustomerID != 42 || event.PeriodNo != "1" || event.DueDate.IsZero() || event.PaidDate == nil {
+		t.Fatalf("settlement payload normalized incorrectly: %+v", event)
 	}
 }

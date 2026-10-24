@@ -23,7 +23,7 @@ func newAttachmentFileGatewayClient(config Config) (*filegatewayclient.Client, e
 	if err != nil || tokenURL.Host == "" || tokenURL.User != nil || tokenURL.RawQuery != "" || tokenURL.Fragment != "" || tokenURL.Scheme != "http" && tokenURL.Scheme != "https" {
 		return nil, errors.New("ATTACHMENT_FILE_GATEWAY_TOKEN_URL must be a valid HTTP(S) URL")
 	}
-	httpClient := &http.Client{Timeout: 30 * time.Second}
+	httpClient := &http.Client{Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	oauthConfig := clientcredentials.Config{ClientID: config.AttachmentFileGatewayClientID, ClientSecret: config.AttachmentFileGatewaySecret, TokenURL: config.AttachmentFileGatewayTokenURL, Scopes: strings.Fields(config.AttachmentFileGatewayScope)}
 	return filegatewayclient.New(config.AttachmentFileGatewayBaseURL, httpClient, func(ctx context.Context) (string, error) {
 		token, tokenErr := oauthConfig.Token(context.WithValue(ctx, oauth2.HTTPClient, httpClient))

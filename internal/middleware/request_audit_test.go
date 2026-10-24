@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"testing"
 	"time"
 
@@ -62,22 +63,29 @@ func TestRequestAuditCapturesPlatformPrincipalAndNormalizedRoute(t *testing.T) {
 	}
 }
 
-func TestRequestAuditOmitsInvalidOrUnavailableUserLoginIP(t *testing.T) {
+// AUD-IP-2026：办公网/VPN/回环都是合法登录地址，只有空值与非法字面量才丢弃。
+func TestRequestAuditKeepsValidLoginIPAndOmitsInvalid(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	for _, loginIP := range []string{"", "172.18.0.2", "not-an-ip"} {
-		t.Run(loginIP, func(t *testing.T) {
+	cases := []struct{ loginIP, want string }{
+		{"", ""},
+		{"172.18.0.2", "172.18.0.2"},
+		{"10.8.0.5", "10.8.0.5"},
+		{"not-an-ip", ""},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.loginIP, func(t *testing.T) {
 			store := &requestAuditCapture{}
 			router := gin.New()
 			router.Use(RequestID(), RequestAudit(store, RequestAuditOptions{TenantID: "tenant-a", ApplicationCode: "customer_and_opportunity", EnvironmentCode: "test"}))
 			router.GET("/customers", func(c *gin.Context) {
-				c.Request = c.Request.WithContext(auth.WithPrincipal(c.Request.Context(), auth.Principal{UserID: "user-a", LoginIP: loginIP}))
+				c.Request = c.Request.WithContext(auth.WithPrincipal(c.Request.Context(), auth.Principal{UserID: "user-a", LoginIP: testCase.loginIP}))
 				c.Status(http.StatusNoContent)
 			})
 			req := httptest.NewRequest(http.MethodGet, "/customers", nil)
 			req.RemoteAddr = "172.18.0.12:8080"
 			router.ServeHTTP(httptest.NewRecorder(), req)
-			if store.completion.UserLoginIP != "" {
-				t.Fatalf("login IP=%q completion=%+v", loginIP, store.completion)
+			if store.completion.UserLoginIP != testCase.want {
+				t.Fatalf("login IP=%q want %q completion=%+v", store.completion.UserLoginIP, testCase.want, store.completion)
 			}
 		})
 	}
@@ -98,9 +106,45 @@ func TestRequestAuditFallsBackToForwardedPublicIP(t *testing.T) {
 	req.Header.Set("X-Forwarded-For", "198.51.100.99, 125.120.19.87")
 	router.ServeHTTP(httptest.NewRecorder(), req)
 
-	if store.completion.UserLoginIP != "125.120.19.87" {
-		t.Fatalf("fallback user login IP=%q, want forwarded public IP", store.completion.UserLoginIP)
+	// 登录地址存在（即使是办公网地址）就不再回退，操作地址独立记录。
+	if store.completion.UserLoginIP != "172.18.0.17" {
+		t.Fatalf("user login IP=%q, want preserved login IP", store.completion.UserLoginIP)
 	}
+	if store.completion.ClientIP != "172.18.0.12" || store.completion.IPSource != "DIRECT" {
+		t.Fatalf("client IP=%q source=%q，非可信对端不得采信转发头", store.completion.ClientIP, store.completion.IPSource)
+	}
+}
+
+// 登录地址缺失时才回退到可信代理解析出的地址，并标记来源。
+func TestRequestAuditFallsBackToTrustedProxyAddressOnlyWhenLoginIPMissing(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store := &requestAuditCapture{}
+	router := gin.New()
+	router.Use(RequestID(), RequestAudit(store, RequestAuditOptions{
+		TenantID: "tenant-a", ApplicationCode: "customer_and_opportunity", EnvironmentCode: "prod",
+		TrustedProxies: mustTrusted("172.18.0.12/32"),
+	}))
+	router.GET("/customers", func(c *gin.Context) {
+		c.Request = c.Request.WithContext(auth.WithPrincipal(c.Request.Context(), auth.Principal{UserID: "user-a"}))
+		c.Status(http.StatusNoContent)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/customers", nil)
+	req.RemoteAddr = "172.18.0.12:8080"
+	req.Header.Set("X-Forwarded-For", "198.51.100.99, 125.120.19.87")
+	router.ServeHTTP(httptest.NewRecorder(), req)
+
+	if store.completion.ClientIP != "125.120.19.87" || store.completion.IPSource != "TRUSTED_PROXY" {
+		t.Fatalf("client IP=%q source=%q，可信代理后应取最右侧非代理地址", store.completion.ClientIP, store.completion.IPSource)
+	}
+}
+
+func mustTrusted(value string) []netip.Prefix {
+	prefixes, err := loginip.ParseTrusted(value)
+	if err != nil {
+		panic(err)
+	}
+	return prefixes
 }
 
 func TestRequestClientIPRejectsPrivateOnlyAddresses(t *testing.T) {

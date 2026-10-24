@@ -6,6 +6,8 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	core "github.com/J-S-Te/license-core"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/workerlicense"
 	"strconv"
 	"strings"
 	"time"
@@ -71,6 +73,9 @@ func (a *App) Run(ctx context.Context) error {
 }
 
 func (a *App) RunOnce(ctx context.Context) (int, error) {
+	if !workerlicense.Allowed(ctx, core.ESSENTIAL_SERVICE) {
+		return 0, nil
+	}
 	processed := 0
 	for processed < a.config.BatchSize {
 		// 每次领取使用独立随机 token，避免同 WorkerID 的旧进程在重启后提交迟到结果。
@@ -223,6 +228,14 @@ func validateEvidence(outbox presale.OutboxEvent, evidence presale.ProgressNotif
 	}
 	switch evidence.RecipientNamespace {
 	case presale.ProgressRecipientUser:
+		if evidence.RecipientKind == presale.ProgressRecipientAssignee {
+			if evidence.AssignmentID == 0 || assignment == nil || assignment.AssigneeNamespace != presale.ProgressRecipientUser ||
+				assignment.RequestID != evidence.RequestID || assignment.AssigneeID != evidence.RecipientID || evidence.RecipientID == evidence.AuthorUserID ||
+				assignment.AssignedAt.After(evidence.OccurredAt) || (assignment.EndedAt != nil && !assignment.EndedAt.After(evidence.OccurredAt)) {
+				return "progress user assignee evidence mismatch"
+			}
+			break
+		}
 		if evidence.RecipientKind != presale.ProgressRecipientApplicant || evidence.AssignmentID != 0 || assignment != nil ||
 			request.ApplicantID != evidence.RecipientID || evidence.RecipientID == evidence.AuthorUserID {
 			return "progress applicant evidence mismatch"
@@ -241,7 +254,7 @@ func validateEvidence(outbox presale.OutboxEvent, evidence presale.ProgressNotif
 
 func project(outbox presale.OutboxEvent, evidence presale.ProgressNotificationEvent, request presale.PresaleRequest, now time.Time) notification.Notification {
 	typeCode, kind := notification.TypePresaleProgressApplicant, notification.RecipientProgressApplicant
-	if evidence.RecipientNamespace == presale.ProgressRecipientPerson {
+	if evidence.RecipientKind == presale.ProgressRecipientAssignee {
 		typeCode, kind = notification.TypePresaleProgressAssignee, notification.RecipientProgressAssignee
 	}
 	return notification.Notification{
@@ -249,7 +262,8 @@ func project(outbox presale.OutboxEvent, evidence presale.ProgressNotificationEv
 		SourceEventID: outbox.EventID, Type: typeCode, OpportunityID: request.OpportunityID,
 		OpportunityNo: request.OpportunityNoSnapshot, RequestID: request.ID, RequestNo: request.RequestNo,
 		AssignmentID: evidence.AssignmentID, ProgressID: evidence.ProgressID, RecipientID: evidence.RecipientID,
-		RecipientKind: kind, Title: "售前任务有新的过程记录", Body: "任务执行人已追加一条过程记录，请进入任务详情查看。",
+		RecipientNamespace: evidence.RecipientNamespace,
+		RecipientKind:      kind, Title: "售前任务有新的过程记录", Body: "任务执行人已追加一条过程记录，请进入任务详情查看。",
 		TargetPath: "/customer-opportunity/presale?request_id=" + strconv.FormatUint(request.ID, 10), Status: notification.StatusUnread,
 	}
 }

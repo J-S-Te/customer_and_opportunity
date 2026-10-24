@@ -12,10 +12,10 @@ const (
 	// StatusWaitingCRM 使用历史数据库枚举 WAITING_CONTRACT 以兼容既有迁移；
 	// 业务含义是“已由 Portal 提交，等待客户与商机系统人工完善”，不是自动提交公安。
 	StatusWaitingCRM       = "WAITING_CONTRACT"
-	StatusWaitingContract  = StatusWaitingCRM // legacy alias
+	StatusWaitingContract  = StatusWaitingCRM // 旧版别名。
 	StatusSubmitting       = "SUBMITTING"
 	StatusSubmissionFailed = "SUBMISSION_FAILED"
-	StatusSubmitted        = "SUBMITTED" // reached only with an immutable trusted provider receipt
+	StatusSubmitted        = "SUBMITTED" // 仅凭不可变的可信提供方回执才能到达。
 	MaterialPendingUpload  = "PENDING_UPLOAD"
 	MaterialFinalizing     = "FINALIZING"
 	MaterialScanning       = "SCANNING"

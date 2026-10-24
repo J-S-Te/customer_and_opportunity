@@ -62,8 +62,8 @@ func TestScopedCustomerSelfAndOwnerFilterCannotExpandVisibility(t *testing.T) {
 func TestScopedCustomerSalesRoleRemainsSelfScopedWhenPlatformScopeIsAll(t *testing.T) {
 	principal := auth.Principal{TenantID: "tenant-a", UserID: "sales-a", Roles: []string{"sales"}, ScopeMode: auth.ScopeAll}
 	statement := scopedCustomer(customerDryRunDB(t).Model(&Customer{}), principal).Find(&[]Customer{}).Statement
-	if !strings.Contains(statement.SQL.String(), "crm_customers.created_by = ?") {
-		t.Fatalf("sales scope missing creator predicate: %q", statement.SQL.String())
+	if !strings.Contains(statement.SQL.String(), "crm_customers.owner_user_id = ?") {
+		t.Fatalf("sales scope missing current owner predicate: %q", statement.SQL.String())
 	}
 	if len(statement.Vars) < 2 || statement.Vars[1] != "sales-a" {
 		t.Fatalf("vars=%#v", statement.Vars)

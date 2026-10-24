@@ -37,4 +37,9 @@ func TestPresaleNotificationSourceEventIDMatchesPlatformContract(t *testing.T) {
 	if nextNode := presaleNotificationSourceEventID(notification); nextNode == got {
 		t.Fatal("approval-node-scoped notification must have a distinct source event id")
 	}
+	notification.ApprovalNode = 0
+	notification.SourceDiscriminator = "team-lead:2"
+	if reassigned := presaleNotificationSourceEventID(notification); reassigned == got {
+		t.Fatal("a new team-lead assignment cycle must have a distinct source event id")
+	}
 }

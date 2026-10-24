@@ -513,9 +513,9 @@ func (r *GORMRepository) List(ctx context.Context, principal auth.Principal, que
 	db := scoped(database.FromContext(ctx, r.db).Model(&Opportunity{}), principal)
 	db = db.Joins("LEFT JOIN crm_customers ON crm_customers.tenant_id = crm_opportunities.tenant_id AND crm_customers.id = crm_opportunities.customer_id AND crm_customers.deleted_at IS NULL")
 	if keyword := strings.TrimSpace(query.Keyword); keyword != "" {
-		// Keep lookup usable for both the list and the create/presale pickers.  The
-		// normalized expression also makes searches tolerant of accidental spaces
-		// in Chinese/Latin names and opportunity numbers.
+		// 使查询同时适用于列表及创建、售前选择器。
+		// 规范化表达式也使搜索能够容忍中文或拉丁文名称、
+		// 商机编号中的意外空格。
 		normalized := strings.ToLower(strings.Join(strings.Fields(keyword), ""))
 		pattern := "%" + keyword + "%"
 		normalizedPattern := "%" + normalized + "%"
@@ -644,4 +644,27 @@ func toResponse(model *Opportunity) Response {
 		endDate = &value
 	}
 	return Response{ID: model.ID, OpportunityNo: model.OpportunityNo, Name: model.Name, CustomerID: model.CustomerID, Type: model.Type, Source: model.Source, Types: []OpportunityCatalogValue{}, Sources: []OpportunityCatalogValue{}, ExpectedAmount: model.ExpectedAmount.StringFixed(2), ExpectedSignDate: model.ExpectedSignDate.Format("2006-01-02"), RequirementSummary: model.RequirementSummary, SystemCount: model.SystemCount, PainPoints: model.PainPoints, CompetitorInfo: model.CompetitorInfo, OwnerUserID: model.OwnerUserID, OwnerOrgID: model.OwnerOrgID, CurrentStage: model.CurrentStage, Status: model.Status, ContractRef: model.ContractRef, ContractID: model.ContractID, ContractIntakeID: model.ContractIntakeID, ContractLinkStatus: model.ContractLinkStatus, ContractLinkedAt: model.ContractLinkedAt, ContractSyncVersion: model.ContractSyncVersion, LostReason: model.LostReason, TerminalPendingType: model.TerminalPendingType, StageChangedAt: model.StageChangedAt, EndDate: endDate, StatusBeforeVoid: model.StatusBeforeVoid, Version: model.Version, CreatedAt: model.CreatedAt, UpdatedAt: model.UpdatedAt}
+}
+
+// ListFailedContractTransfers 向已授权操作员提供终态的合同传输
+// Outbox 事件，但不返回事件载荷。
+func (r *GORMRepository) ListFailedContractTransfers(ctx context.Context, tenantID string, limit int) ([]OutboxEvent, error) {
+	if limit < 1 || limit > 200 {
+		limit = 100
+	}
+	var rows []OutboxEvent
+	err := database.FromContext(ctx, r.db).
+		Select("id,event_id,tenant_id,event_type,aggregate_type,aggregate_id,status,retry_count,last_error_summary,created_at").
+		Where("tenant_id = ? AND event_type = ? AND status = ?", tenantID, "OPPORTUNITY_SIGNED", "DEAD_LETTER").
+		Order("created_at DESC,id DESC").Limit(limit).Find(&rows).Error
+	return rows, err
+}
+
+// RetryFailedContractTransfer 重置单条死信传输，保留
+// 不可变的事件 ID 和载荷；工作器将通过租约再次认领。
+func (r *GORMRepository) RetryFailedContractTransfer(ctx context.Context, tenantID string, id uint64) (bool, error) {
+	result := database.FromContext(ctx, r.db).Model(&OutboxEvent{}).
+		Where("tenant_id = ? AND id = ? AND event_type = ? AND status = ?", tenantID, id, "OPPORTUNITY_SIGNED", "DEAD_LETTER").
+		Updates(map[string]any{"status": "PENDING", "retry_count": 0, "next_retry_at": nil, "locked_by": "", "locked_until": nil, "last_error_summary": ""})
+	return result.RowsAffected == 1, result.Error
 }

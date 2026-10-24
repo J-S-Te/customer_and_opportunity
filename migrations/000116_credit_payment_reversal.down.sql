@@ -1,0 +1,12 @@
+ALTER TABLE crm_customer_credit_payment_records
+  DROP COLUMN reversal_event_id,
+  DROP COLUMN reversed_at,
+  DROP COLUMN result_late_count,
+  DROP COLUMN result_ontime_count,
+  DROP COLUMN result_level,
+  DROP COLUMN prev_last_eval_at,
+  DROP COLUMN prev_late_count,
+  DROP COLUMN prev_ontime_count,
+  DROP COLUMN prev_level,
+  DROP COLUMN reversal_of_payment_id,
+  DROP COLUMN event_type;

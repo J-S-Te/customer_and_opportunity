@@ -2,6 +2,7 @@ package presale
 
 import (
 	"context"
+	"encoding/csv"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/ownerdirectory"
 )
 
 type handlerActorResolver struct{}
@@ -20,6 +22,39 @@ func (handlerActorResolver) Resolve(context.Context) (Actor, error) {
 type fixedHandlerActorResolver struct{ actor Actor }
 
 func (r fixedHandlerActorResolver) Resolve(context.Context) (Actor, error) { return r.actor, nil }
+
+func TestReportExportHTTPDownloadAndAuthorization(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, scope := range []string{"ALL", "ORG", "SELF"} {
+		t.Run(scope, func(t *testing.T) {
+			handler := NewHandler(nil, nil, fixedHandlerActorResolver{actor: reportActor(scope)}).UseReports(NewReportService(&reportRepositoryStub{}))
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodPost, "/presale/reports/exports", strings.NewReader(`{"from":"2026-08-01T00:00:00Z","to":"2026-08-03T00:00:00Z","dimension":"PERSON"}`))
+			c.Request.Header.Set("Content-Type", "application/json")
+			handler.RequestReportExport(c)
+			if recorder.Code != 200 || recorder.Header().Get("Content-Type") != "text/csv; charset=utf-8" || !strings.Contains(recorder.Header().Get("Content-Disposition"), "attachment") || recorder.Header().Get("Cache-Control") != "private, no-store" {
+				t.Fatalf("status=%d headers=%v body=%s", recorder.Code, recorder.Header(), recorder.Body.String())
+			}
+			reader := csv.NewReader(strings.NewReader(strings.TrimPrefix(recorder.Body.String(), "\xef\xbb\xbf")))
+			reader.FieldsPerRecord = -1
+			if _, err := reader.ReadAll(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+	actor := reportActor("ALL")
+	actor.Permissions = nil
+	handler := NewHandler(nil, nil, fixedHandlerActorResolver{actor: actor}).UseReports(NewReportService(&reportRepositoryStub{}))
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/presale/reports/exports", strings.NewReader(`{"from":"2026-08-01T00:00:00Z","to":"2026-08-03T00:00:00Z"}`))
+	c.Request.Header.Set("Content-Type", "application/json")
+	handler.RequestReportExport(c)
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
 
 func TestJSONWriteHandlerRejectsUnsafeBodies(t *testing.T) {
 	gin.SetMode(gin.TestMode)
@@ -97,7 +132,12 @@ func TestManualMutationHandlersForwardIdempotencyKey(t *testing.T) {
 			if test.setup != nil {
 				test.setup(repo)
 			}
-			service := NewService(repo, nil, nil, fixedClock{at: now}, fixedIDs{})
+			service := NewService(repo, nil, nil, fixedClock{at: now}, fixedIDs{}).UseOwnerDirectory(assignmentOwnerCatalog{
+				users: map[string]ownerdirectory.User{
+					"p1": {ID: "p1", DisplayName: "P1", Organizations: []ownerdirectory.Organization{{ID: "org-1", Name: "技术中心", IsPrimary: true}}},
+				},
+				roles: map[string]string{"p1": "technician"},
+			})
 			handler := NewHandler(service, nil, fixedHandlerActorResolver{actor: test.actor})
 			recorder := httptest.NewRecorder()
 			ctx, _ := gin.CreateTestContext(recorder)

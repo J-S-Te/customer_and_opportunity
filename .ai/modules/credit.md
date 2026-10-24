@@ -5,7 +5,7 @@
 - 服务：`internal/modules/credit/service.go`
 - HTTP：`internal/modules/credit/handler.go`、`routes.go`
 - 数据模型：`internal/modules/credit/model.go`
-- 迁移：`migrations/000105_customer_credit.up.sql` 至 `000107_credit_approval_history_and_queries.up.sql`
+- 迁移：`migrations/000105_customer_credit.up.sql` 至000108；冲销新增000116_credit_payment_reversal.up.sql
 
 ## 约束
 
@@ -19,3 +19,5 @@
 - `GET /credit/applications/pending` 返回稳定的 snake_case 字段：`id`、`customer_id`、`customer_no`、`customer_name`、`applicant_id`、`from_level`、`target_level`、`reason`、`status`、`approval_instance_id`、`created_at`、`updated_at`、`version`。
 - 待办查询通过客户表按租户关联客户名称和编号；客户信息缺失时仍保留申请 ID 和客户 ID，前端不得渲染 `undefined`。
 - `Application` 的写回响应同样使用 snake_case，幂等键、租户标识和内部 pending 辅助字段不返回浏览器。
+
+回款冲销需稳定事件/原payment引用及前后快照，只允许最新已评估回款且后续信用状态未变，拒绝覆盖人工调整。规则updated_at并发与决定PENDING/version独立，审批决定没有持久幂等键重放，不混用售前审批保障。

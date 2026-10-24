@@ -107,7 +107,7 @@ func (a *OIDCAdapter) ExchangeAndValidate(ctx context.Context, code, verifier, n
 	if err := idToken.Claims(&raw); err != nil {
 		return account.Claims{}, fmt.Errorf("decode ID token claims: %w", err)
 	}
-	// 紧凑 Keycloak ID Token 只保证稳定身份；tenant_id、角色和权限由基础平台
+	// 紧凑 Keycloak ID 令牌 只保证稳定身份；tenant_id、角色和权限由基础平台
 	// authorization-context 按当前 access token 返回。
 	if !validCompactPortalIdentity(raw, nonce, token.AccessToken) {
 		return account.Claims{}, errors.New("OIDC identity claims are invalid")
@@ -212,9 +212,9 @@ func (a *OIDCAdapter) authorizationContextWithRefresh(ctx context.Context, token
 	if err == nil || !errors.Is(err, sharedauthorization.ErrTokenRejected) || strings.TrimSpace(token.RefreshToken) == "" {
 		return claims, token, err
 	}
-	// A platform 401 can indicate an access token that expired between the
-	// authorization-code exchange and the online authorization request. Force
-	// one OAuth refresh and one retry; never loop and never retry 403/5xx.
+	// 平台 401 可能表示访问令牌在授权码交换
+	// 与在线授权请求之间过期。强制
+	// 刷新 OAuth 一次并重试一次；禁止循环及重试 403/5xx。
 	stale := *token
 	stale.Expiry = time.Now().Add(-time.Minute)
 	refreshed, refreshErr := a.config.TokenSource(oidc.ClientContext(ctx, a.httpClient), &stale).Token()

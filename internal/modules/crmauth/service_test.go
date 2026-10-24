@@ -193,7 +193,8 @@ func TestCRMSessionCapturesLoginIPFromOIDCCallback(t *testing.T) {
 	}
 }
 
-func TestCRMSessionRejectsPrivateCallbackLoginIP(t *testing.T) {
+// AUD-IP-2026：回调观察到的私网地址是合法来源，必须写入会话。
+func TestCRMSessionKeepsPrivateCallbackLoginIP(t *testing.T) {
 	now := time.Date(2026, 8, 23, 1, 2, 3, 0, time.UTC)
 	repo := newMemoryRepo()
 	service := newTestService(t, repo, &fakeOIDC{exchanged: validClaims(now)}, now)
@@ -203,8 +204,8 @@ func TestCRMSessionRejectsPrivateCallbackLoginIP(t *testing.T) {
 		t.Fatal(err)
 	}
 	principal, err := service.Authenticate(context.Background(), result.SessionToken)
-	if err != nil || principal.LoginIP != "" {
-		t.Fatalf("principal=%#v err=%v", principal, err)
+	if err != nil || principal.LoginIP != "172.18.0.17" {
+		t.Fatalf("principal=%#v err=%v，私网回调地址应保留", principal, err)
 	}
 }
 

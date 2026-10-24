@@ -29,6 +29,25 @@ type AccountBinding struct {
 
 func (AccountBinding) TableName() string { return "portal_project_account_bindings" }
 
+const (
+	PermissionModeLegacy   = "LEGACY"
+	PermissionModeIsolated = "ISOLATED"
+)
+
+// AccountPermissionMode 持久化账号是否已进入项目
+// 隔离。缺少记录表示旧版（迁移前）行为。一旦设为
+// ISOLATED，即使最后一个绑定被撤销也必须保持该模式。
+type AccountPermissionMode struct {
+	database.Model
+	CustomerID uint64 `gorm:"not null;uniqueIndex:uq_portal_project_permission_mode,priority:2"`
+	AccountID  string `gorm:"size:128;not null;uniqueIndex:uq_portal_project_permission_mode,priority:3"`
+	Mode       string `gorm:"size:16;not null"`
+}
+
+func (AccountPermissionMode) TableName() string {
+	return "portal_account_project_permission_modes"
+}
+
 type Snapshot struct {
 	database.Model
 	ProjectID            string     `gorm:"size:64;not null;uniqueIndex:uq_portal_project,priority:2"`

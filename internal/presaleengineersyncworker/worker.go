@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	core "github.com/J-S-Te/license-core"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/workerlicense"
 	"log"
 	"strings"
 	"time"
@@ -49,6 +51,9 @@ func (w *Worker) Run(ctx context.Context) error {
 }
 
 func (w *Worker) RunOnce(ctx context.Context) (int, error) {
+	if !workerlicense.Allowed(ctx, core.MUTATE_BUSINESS) {
+		return 0, nil
+	}
 	// 调度状态与执行任务分离：先为到期租户补幂等任务，再由多副本通过租约领取，避免轮询器重复创建作业。
 	now := w.now()
 	if err := w.store.Schedule(ctx, now, w.cfg.SyncInterval); err != nil {
@@ -60,6 +65,9 @@ func (w *Worker) RunOnce(ctx context.Context) (int, error) {
 	}
 	var joined error
 	for _, job := range jobs {
+		if err := workerlicense.Require(ctx, core.MUTATE_BUSINESS); err != nil {
+			return len(jobs), err
+		}
 		// 远端全量快照可能耗时，调用前后各续租一次；Apply 仍会在事务内最终复核租约。
 		if renewErr := w.store.Renew(ctx, job, w.cfg.WorkerID, w.now(), w.cfg.LeaseDuration); renewErr != nil {
 			joined = errors.Join(joined, renewErr)
@@ -73,6 +81,9 @@ func (w *Worker) RunOnce(ctx context.Context) (int, error) {
 			fetchErr = w.store.Renew(ctx, job, w.cfg.WorkerID, w.now(), w.cfg.LeaseDuration)
 		}
 		if fetchErr == nil {
+			if err := workerlicense.Require(ctx, core.MUTATE_BUSINESS); err != nil {
+				return len(jobs), err
+			}
 			fetchErr = w.store.Apply(ctx, job, w.cfg.WorkerID, snapshot, w.now(), w.cfg.SyncInterval)
 		}
 		if fetchErr != nil && !errors.Is(fetchErr, errLeaseLost) {

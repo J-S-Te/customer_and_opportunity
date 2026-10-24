@@ -26,10 +26,10 @@ var (
 	ErrAuthorizationUnavailable = sharedauthorization.ErrUnavailable
 )
 
-// loginFailure keeps the browser-facing error generic while preserving the
-// failed stage and the underlying cause for structured server diagnostics.
-// The joined errors also keep errors.Is(err, ErrUnauthenticated) compatible
-// with callers that only need the authentication classification.
+// loginFailure 保持浏览器错误通用，同时保留
+// 失败阶段和底层原因，供服务端结构化诊断。
+// 组合错误同时维持 errors.Is(err, ErrUnauthenticated) 兼容性，
+// 供仅关心认证分类的调用方使用。
 func loginFailure(stage string, cause error) error {
 	return fmt.Errorf("CRM OIDC login failed at %s: %w", stage, errors.Join(ErrUnauthenticated, cause))
 }
@@ -131,25 +131,25 @@ func (s *Service) CompleteLogin(ctx context.Context, state, code string, callbac
 		}
 		return LoginResult{}, loginFailure("authorization_claims", err)
 	}
-	// The browser reaches this callback through the managed reverse proxy. Its
-	// validated public address is the authoritative login address for the new
-	// CRM session; the platform authorization-context value remains a fallback
-	// for non-HTTP callers and backward compatibility.
+	// 浏览器通过受管反向代理访问此回调。经校验的
+	// 公开地址是新 CRM 会话的权威登录地址；
+	// 平台授权上下文中的值仅作为
+	// 非 HTTP 调用方及向后兼容的回退。
 	if len(callbackLoginIP) > 0 {
 		if value := loginip.Normalize(callbackLoginIP[0]); value != "" {
 			claims.LoginIP = value
 		}
 	}
 	claims.LoginIP = loginip.Normalize(claims.LoginIP)
-	// This is deliberately after all CRM code/token/claims checks.  A failed
-	// platform receipt must remain visible to its deployment gate, but cannot
-	// turn an invalid token into a valid CRM session or bypass the checks above.
+	// 此步骤必须位于全部 CRM 授权码、令牌和声明检查之后。
+	// 平台回执失败必须在部署门禁中可见，但不能
+	// 将无效令牌变为有效 CRM 会话，也不能绕过上述检查。
 	if s.broker != nil {
 		if err := s.broker.Verify(ctx, claims); err != nil {
 			slog.Default().Warn("CRM Keycloak broker verification callback failed", "identity_id", claims.IdentityID, "application_code", "customer_and_opportunity", "error", err)
 		}
 	}
-	// 本地会话绝不能比上游 ID/Access Token 或本地策略 TTL 活得更久。
+	// 本地会话绝不能比上游 ID/访问令牌 或本地策略 TTL 活得更久。
 	expiresAt := earliestExpiry(claims.ExpiresAt, now.Add(s.options.SessionTTL))
 	if !expiresAt.After(now) {
 		return LoginResult{}, loginFailure("session_expiry", errors.New("session expiry is not in the future"))

@@ -8,6 +8,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	core "github.com/J-S-Te/license-core"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/workerlicense"
 	"strconv"
 	"strings"
 	"time"
@@ -117,7 +119,7 @@ func (a *App) Close() error {
 }
 
 func (a *App) Run(ctx context.Context) error {
-	if _, err := a.RunOnce(ctx); err != nil && !errors.Is(err, context.Canceled) {
+	if _, err := a.RunOnce(ctx); err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, workerlicense.ErrDenied) {
 		return err
 	}
 	ticker := time.NewTicker(a.config.PollInterval)
@@ -127,7 +129,7 @@ func (a *App) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
-			if _, err := a.RunOnce(ctx); err != nil && !errors.Is(err, context.Canceled) {
+			if _, err := a.RunOnce(ctx); err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, workerlicense.ErrDenied) {
 				return err
 			}
 		}
@@ -135,6 +137,9 @@ func (a *App) Run(ctx context.Context) error {
 }
 
 func (a *App) RunOnce(ctx context.Context) (int, error) {
+	if !workerlicense.Allowed(ctx, core.MUTATE_BUSINESS) {
+		return 0, nil
+	}
 	processed := 0
 	for processed < a.config.BatchSize {
 		// token 按“本次领取”生成而不是按进程固定，避免同一 WorkerID 重启后接受旧进程的迟到写回。
@@ -196,6 +201,11 @@ func (s *gormTransferStore) claimOne(ctx context.Context, now time.Time, lease t
 }
 
 func (a *App) process(ctx context.Context, event opportunity.OutboxEvent, token string) error {
+	// 保留已认领任务的租约，不标记为成功或死信；
+	// 授权恢复后，任务在租约到期时可重新认领。
+	if err := workerlicense.Require(ctx, core.MUTATE_BUSINESS); err != nil {
+		return err
+	}
 	now := a.now().UTC()
 	command, permanentReason, err := a.store.authoritativeCommand(ctx, event, now, token)
 	if err != nil {
@@ -207,6 +217,9 @@ func (a *App) process(ctx context.Context, event opportunity.OutboxEvent, token 
 	if permanentReason != "" {
 		// 事件身份或商机终态已经不成立时，重试不会改变结果，直接进入死信便于人工审计。
 		return a.store.finish(ctx, event, now, token, statusDeadLetter, "", permanentReason)
+	}
+	if err := workerlicense.Require(ctx, core.MUTATE_BUSINESS); err != nil {
+		return err
 	}
 	result, err := a.client.deliver(ctx, command)
 	finishedAt := a.now().UTC()
@@ -238,11 +251,15 @@ func (s *gormTransferStore) authoritativeCommand(ctx context.Context, event oppo
 			}
 			return err
 		}
-		if state.DeletedAt != nil || state.Version != payload.EventVersion || state.CurrentStage != opportunity.StageSigned || state.Status != opportunity.StatusClosed || state.ContractRef == "" || state.TerminalPendingType != opportunity.PendingNone {
+		// EventVersion 表示不可变的传输快照。普通主数据
+		// 编辑可能在事件排队期间推进商机版本；
+		// 不能因此将仍有效的签名商机转为死信。版本
+		// 低于快照时才视为过期并拒绝。
+		if state.DeletedAt != nil || state.Version < payload.EventVersion || state.CurrentStage != opportunity.StageSigned || state.Status != opportunity.StatusClosed || state.ContractRef == "" || state.TerminalPendingType != opportunity.PendingNone {
 			return permanentValidationError{"authoritative opportunity no longer matches accepted signed state"}
 		}
 		// Outbox 载荷中的展示字段可能已经陈旧，只保留事件身份和发生时间；合同指令中的业务值全部取自锁定后的 CRM 权威行。
-		command = signedCommand{EventID: locked.EventID, TenantID: state.TenantID, OpportunityID: state.ID, EventVersion: state.Version, OpportunityNo: state.OpportunityNo, CustomerID: state.CustomerID, ContractRef: state.ContractRef, ExpectedAmount: normalizeAmount(state.ExpectedAmount), OccurredAt: locked.CreatedAt.UTC(), SourceRequestID: ""}
+		command = signedCommand{EventID: locked.EventID, TenantID: state.TenantID, OpportunityID: state.ID, EventVersion: payload.EventVersion, OpportunityNo: state.OpportunityNo, CustomerID: state.CustomerID, ContractRef: state.ContractRef, ExpectedAmount: normalizeAmount(state.ExpectedAmount), OccurredAt: locked.CreatedAt.UTC(), SourceRequestID: ""}
 		return nil
 	})
 	var permanent permanentValidationError

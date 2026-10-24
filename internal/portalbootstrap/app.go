@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/commercial"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/filegateway"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/middleware"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/portal/account"
@@ -22,6 +23,7 @@ import (
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/portal/projectmessage"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/portal/report"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/portal/workerruntime"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/projectexportworker"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/request"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/requestaudit"
 	"gorm.io/driver/mysql"
@@ -29,14 +31,27 @@ import (
 )
 
 type App struct {
-	Config      Config
-	DB          *gorm.DB
-	Server      *http.Server
-	auditCancel context.CancelFunc
-	auditDone   chan struct{}
+	licenseCancel   context.CancelFunc
+	Config          Config
+	DB              *gorm.DB
+	Server          *http.Server
+	auditCancel     context.CancelFunc
+	auditDone       chan struct{}
+	reportProviders *reportDownloadProviders
 }
 
 func New(ctx context.Context, config Config) (*App, error) {
+	licenseCtx, licenseCancel := context.WithCancel(ctx)
+	started := false
+	defer func() {
+		if !started {
+			licenseCancel()
+		}
+	}()
+	licenseCheck, err := commercial.Start(licenseCtx, "customer_portal")
+	if err != nil {
+		return nil, err
+	}
 	// Portal 在开放端口前真实探测数据库并构造所有信任边界；认证、密钥或机器验签材料有误时
 	// 直接失败，避免部分路由在不完整安全配置下运行。
 	db, err := gorm.Open(mysql.Open(config.MySQLDSN), &gorm.Config{DisableAutomaticPing: true})
@@ -94,7 +109,7 @@ func New(ctx context.Context, config Config) (*App, error) {
 	accountRepository := account.NewGORMRepository(db)
 	accountService := account.NewServiceWithOptions(accountRepository, oidcAdapter, inviteClient, protector, account.SystemClock{}, account.CryptoRandom{}, config.RoleConfigHash, config.SessionTTL, config.PlatformEnvironmentCode, accountServiceOptions...)
 	// 登录事务、访问令牌和会话均保存在数据库并加密；账号服务通过 UserInfo 周期性重验当前
-	// 权限，避免仅依赖首次登录时的 ID Token 快照。
+	// 权限，避免仅依赖首次登录时的 ID 令牌 快照。
 	projectService := project.NewService(project.NewGORMRepository(db), unavailableProjectSource{})
 	// 尚未接入的项目源、文件读取和恶意文件扫描均使用失败关闭适配器。读模型可以继续提供
 	// 已同步数据，但不能伪装实时同步或安全下载能力可用。
@@ -123,11 +138,34 @@ func New(ctx context.Context, config Config) (*App, error) {
 		portalFileClient = fileClient
 		reportFileReader = report.NewLocalFileGatewayReader(fileClient, reportDescriptorProtector)
 	}
-	reportDownloadService := report.NewDownloadService(report.NewGORMRepository(db), reportFileReader, nil, systemClock{}, requestIDGenerator{}, report.CryptoTokenGenerator{}, 72*time.Hour).RequireProductionSecurity(nil)
+	reportProviders, err := newReportDownloadProviders(ctx, db, config, reportDescriptorProtector)
+	if err != nil {
+		return nil, fmt.Errorf("initialize Portal report download: %w", err)
+	}
+	defer func() {
+		if !started && reportProviders != nil {
+			_ = reportProviders.Store.Close()
+		}
+	}()
+	var reportRisk report.DownloadRiskPolicy
+	var reportWatermark report.DownloadWatermarker
+	if reportProviders != nil {
+		reportFileReader = reportProviders.Store
+		reportRisk = reportProviders.Risk
+		reportWatermark = reportProviders.Watermark
+	}
+	reportDownloadService := report.NewDownloadService(report.NewGORMRepository(db), reportFileReader, reportRisk, systemClock{}, requestIDGenerator{}, report.CryptoTokenGenerator{}, 72*time.Hour).RequireProductionSecurity(reportWatermark)
 	feedbackService := feedback.NewService(feedback.NewGORMRepository(db), projectAccess{projects: projectService}, contactProtector{codec: codec}, systemClock{}, requestIDGenerator{})
 	evaluationService := evaluation.NewService(evaluation.NewGORMRepository(db), projectAccess{projects: projectService}, systemClock{}, requestIDGenerator{})
 	filingRepository := filing.NewGORMRepository(db)
 	filingService := filing.NewService(filingRepository, filingProtector{codec: codec}, projectAccess{projects: projectService}, systemClock{}, requestIDGenerator{})
+	if config.PDFConfigRoot != "" && config.CJKFontPath != "" {
+		renderer, renderErr := projectexportworker.NewPDFCPURenderer(config.PDFConfigRoot, config.CJKFontPath)
+		if renderErr != nil {
+			return nil, fmt.Errorf("initialize Portal filing PDF renderer: %w", renderErr)
+		}
+		filingService.UseExportRenderer(renderer)
+	}
 	var filingMaterialStore filing.MaterialObjectStore = filing.UnavailableMaterialObjectStore{}
 	var filingMaterialScanner filing.MaterialScanner = filing.UnavailableMaterialScanner{}
 	portalGatewayClient, gatewayErr := newPortalFileGatewayClient(config)
@@ -142,8 +180,9 @@ func New(ctx context.Context, config Config) (*App, error) {
 		filingMaterialScanner = filing.NewLocalMaterialScanner(filingMaterialStore)
 	}
 	filingMaterialService := filing.NewMaterialService(filingRepository, filingProtector{codec: codec}, filingMaterialStore, filingMaterialScanner, systemClock{}, requestIDGenerator{})
-	router := NewRouter(RouterDependencies{Config: config, RequestAudit: middleware.RequestAudit(auditStore, middleware.RequestAuditOptions{
+	router := NewRouter(RouterDependencies{Config: config, LicenseCheck: licenseCheck, RequestAudit: middleware.RequestAudit(auditStore, middleware.RequestAuditOptions{
 		TenantID: config.TenantID, ApplicationCode: config.PlatformApplicationCode, EnvironmentCode: config.PlatformEnvironmentCode,
+		TrustedProxies: config.TrustedProxies,
 	}), Account: accountService, BackchannelLogout: newPortalBackchannelLogoutHandler(oidcAdapter, accountRepository, config.OIDCIssuer, config.OIDCClientID, config.BackchannelLogoutTTL).Handle, Projects: projectService, ProjectExports: projectExportService, ProjectMessages: projectMessageService, Reports: reportService, ReportDownloads: reportDownloadService, WorkerReadiness: workerReadiness, WorkerHeartbeatMaxAge: workerruntime.HeartbeatMaxAge, ReportDownloadError: func(ctx context.Context, err error) {
 		slog.Default().ErrorContext(ctx, "Portal report download completion audit failed", "error", err)
 	}, Feedback: feedbackService, Evaluations: evaluationService, Filings: filingService, FilingMaterials: filingMaterialService, MachineAuthenticator: machineAuthenticator, CustomerCapabilities: customerCapabilities, DatabaseHealthy: func() bool {
@@ -157,9 +196,9 @@ func New(ctx context.Context, config Config) (*App, error) {
 		defer close(auditDone)
 		auditDispatcher.Run(auditContext)
 	}()
-	// Keep Portal startup available during a temporary audit-platform outage.
-	// The preflight uses only the publisher's OAuth token and the read-only
-	// platform validation endpoint; it cannot affect user sessions or Keycloak.
+	// 审计平台临时故障期间仍保持 Portal 可启动。
+	// 预检仅使用发布者 OAuth 令牌及平台只读
+	// 校验端点，不能影响用户会话或 Keycloak。
 	go func() {
 		preflightCtx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 		defer cancel()
@@ -167,10 +206,14 @@ func New(ctx context.Context, config Config) (*App, error) {
 			slog.Default().Warn("Portal audit publisher preflight failed", "error_code", requestaudit.DeliveryErrorCode(err))
 		}
 	}()
-	return &App{Config: config, DB: db, Server: &http.Server{Addr: config.Address, Handler: router, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second}, auditCancel: auditCancel, auditDone: auditDone}, nil
+	started = true
+	return &App{Config: config, DB: db, Server: &http.Server{Addr: config.Address, Handler: router, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second}, auditCancel: auditCancel, auditDone: auditDone, licenseCancel: licenseCancel, reportProviders: reportProviders}, nil
 }
 
 func (a *App) Close(ctx context.Context) error {
+	if a.licenseCancel != nil {
+		a.licenseCancel()
+	}
 	// HTTP 停机与连接池关闭的错误都要保留，便于编排器区分在途请求超时和数据库释放失败。
 	shutdownErr := a.Server.Shutdown(ctx)
 	if a.auditCancel != nil {
@@ -186,6 +229,9 @@ func (a *App) Close(ctx context.Context) error {
 	sqlDB, err := a.DB.DB()
 	if err == nil {
 		err = sqlDB.Close()
+	}
+	if a.reportProviders != nil {
+		err = errors.Join(err, a.reportProviders.Store.Close())
 	}
 	return errors.Join(shutdownErr, err)
 }

@@ -149,8 +149,8 @@ func TestWorkerPMSFailureUpdatesProjectionAndRequeuesOutbox(t *testing.T) {
 }
 
 func TestWorkerReclaimedEventCanBeDeliveredIdempotently(t *testing.T) {
-	// The same event may be observed again after a lease expires. Its stable
-	// EventID is passed unchanged to the HTTP adapter as Idempotency-Key.
+	// 租约到期后可能再次观察到同一事件。其稳定的
+	// EventID 原样作为 Idempotency-Key 传给 HTTP 适配器。
 	event := presale.OutboxEvent{ID: 3, EventID: "stable-event-id", TenantID: "tenant-1", EventType: "PRESALE_WORKLOG_CREATED", AggregateID: "99", Status: "PROCESSING"}
 	store := &memoryWorkerStore{events: []presale.OutboxEvent{event, event}}
 	service := &memoryWorkerService{}

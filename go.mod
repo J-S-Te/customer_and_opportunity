@@ -2,6 +2,9 @@ module github.com/unified-identity-auth-platform/customer-and-opportunity
 
 go 1.25.4
 
+require github.com/J-S-Te/license-core v0.0.0
+replace github.com/J-S-Te/license-core => ./third_party/license-core
+
 require (
 	github.com/coreos/go-oidc/v3 v3.17.0
 	github.com/gin-gonic/gin v1.10.0

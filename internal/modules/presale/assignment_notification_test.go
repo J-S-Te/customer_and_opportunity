@@ -13,10 +13,30 @@ import (
 type assignmentOwnerCatalog struct {
 	code  ownerdirectory.UnavailableCatalog
 	users map[string]ownerdirectory.User
+	roles map[string]string
 }
 
-func (c assignmentOwnerCatalog) List(ctx context.Context, query ownerdirectory.Query) (ownerdirectory.Page, error) {
-	return c.code.List(ctx, query)
+func (c assignmentOwnerCatalog) List(_ context.Context, query ownerdirectory.Query) (ownerdirectory.Page, error) {
+	items := make([]ownerdirectory.User, 0, len(c.users))
+	for userID, user := range c.users {
+		if query.UserID != "" && userID != query.UserID {
+			continue
+		}
+		if len(query.RoleCodes) > 0 {
+			matched := false
+			for _, role := range query.RoleCodes {
+				if c.roles[userID] == role {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				continue
+			}
+		}
+		items = append(items, user)
+	}
+	return ownerdirectory.Page{Items: items, Page: 1, PageSize: 50, Total: int64(len(items))}, nil
 }
 
 func (c assignmentOwnerCatalog) Validate(ctx context.Context, userID, organizationID string) error {
@@ -69,9 +89,12 @@ func TestReplaceAssignmentsWritesEvidenceAndOutboxForAddedAndRemoved(t *testing.
 	actor := Actor{TenantID: "tenant-a", UserID: "lead", RequestID: "request-trace", Roles: map[string]bool{"team_lead": true}, Permissions: map[string]bool{"presale.assign": true}}
 	base := &mutationRepository{request: &PresaleRequest{BaseModel: BaseModel{ID: 9, TenantID: actor.TenantID, Version: 3}, RequestNo: "TS9", Status: StatusExecuting}, assignments: []Assignment{{BaseModel: BaseModel{ID: 20, TenantID: actor.TenantID, Version: 1}, RequestID: 9, AssigneeID: "old", AssigneeNameSnapshot: "旧人员", AssigneeRole: "implementation_engineer", AssignedAt: now.Add(-time.Hour), IsCurrent: true}}, engineers: []Engineer{{PersonID: "new", PersonName: "新人员", Role: "project_manager", ValidFlag: true}}, replays: map[string]*MutationReplay{}}
 	repo := &assignmentNotificationRepository{mutationRepository: base}
-	service := NewService(repo, nil, nil, fixedClock{at: now}, fixedIDs{}).UseOwnerDirectory(assignmentOwnerCatalog{users: map[string]ownerdirectory.User{
-		"new": {ID: "new", DisplayName: "权威姓名", Organizations: []ownerdirectory.Organization{{ID: "org-1", Name: "技术中心", IsPrimary: true}}},
-	}})
+	service := NewService(repo, nil, nil, fixedClock{at: now}, fixedIDs{}).UseOwnerDirectory(assignmentOwnerCatalog{
+		users: map[string]ownerdirectory.User{
+			"new": {ID: "new", DisplayName: "权威姓名", Organizations: []ownerdirectory.Organization{{ID: "org-1", Name: "技术中心", IsPrimary: true}}},
+		},
+		roles: map[string]string{"new": "project_manager"},
+	})
 	// 浏览器只选择人员；组织归属必须由服务端从基础平台权威目录推导，不能要求
 	// 前端携带或手填内部 organization_id。
 	_, err := service.ReplaceAssignments(context.Background(), actor, 9, "key", ReplaceAssignmentsInput{Assignees: []AssignmentTarget{{PersonID: "new", PersonName: "伪造姓名", Department: "伪造部门", Role: "project_manager"}}, ChangeReason: "项目阶段变化", Version: 3})
@@ -118,7 +141,12 @@ func TestExactAssignmentReplayDoesNotDuplicateNotifications(t *testing.T) {
 	actor := Actor{TenantID: "tenant-a", UserID: "lead", Roles: map[string]bool{"team_lead": true}, Permissions: map[string]bool{"presale.assign": true}}
 	base := &mutationRepository{request: &PresaleRequest{BaseModel: BaseModel{ID: 9, TenantID: actor.TenantID, Version: 3}, Status: StatusApprovedPendingAssignment}, engineers: []Engineer{{PersonID: "new", PersonName: "新人员", Role: "project_manager", ValidFlag: true}}, replays: map[string]*MutationReplay{}}
 	repo := &assignmentNotificationRepository{mutationRepository: base}
-	service := NewService(repo, nil, nil, fixedClock{at: now}, fixedIDs{})
+	service := NewService(repo, nil, nil, fixedClock{at: now}, fixedIDs{}).UseOwnerDirectory(assignmentOwnerCatalog{
+		users: map[string]ownerdirectory.User{
+			"new": {ID: "new", DisplayName: "新人员", Organizations: []ownerdirectory.Organization{{ID: "org-1", Name: "技术中心", IsPrimary: true}}},
+		},
+		roles: map[string]string{"new": "project_manager"},
+	})
 	input := ReplaceAssignmentsInput{Assignees: []AssignmentTarget{{PersonID: "new", Role: "project_manager"}}, ChangeReason: "首次指派", Version: 3}
 	if _, err := service.ReplaceAssignments(context.Background(), actor, 9, "same-key", input); err != nil {
 		t.Fatal(err)

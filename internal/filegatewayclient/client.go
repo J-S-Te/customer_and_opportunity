@@ -1,4 +1,4 @@
-// Package filegatewayclient 提供 CRM 与客户门户访问独立 File Gateway 的本地 HTTP 边界。
+// Package filegatewayclient 提供 CRM 与客户门户访问独立 文件网关 的本地 HTTP 边界。
 // 该包不导入平台内部实现，现有本地/S3 存储路径可继续运行并按功能逐步切换。
 package filegatewayclient
 
@@ -26,15 +26,15 @@ const maxUploadBytes int64 = 20 << 20
 // TokenSource 返回只具备文件上传/绑定权限的机器 Bearer Token。
 type TokenSource func(context.Context) (string, error)
 
-// Client 是 CRM/Portal 自有的 File Gateway HTTP 适配器，不改变现有存储接口。
+// Client 是 CRM/Portal 自有的 文件网关 HTTP 适配器，不改变现有存储接口。
 type Client struct {
 	baseURL    string
 	httpClient *http.Client
 	token      TokenSource
 }
 
-// V2UploadInput is the complete server-authorized business binding for one v2 upload.
-// Callers must validate the resource ACL before constructing this value.
+// V2UploadInput 包含单次 v2 上传所需的完整服务端授权业务绑定。
+// 调用方必须在构造该值前校验资源 ACL。
 type V2UploadInput struct {
 	RequestID, Purpose, Classification, ActorUserID    string
 	Name, MediaType                                    string
@@ -67,7 +67,11 @@ func New(baseURL string, httpClient *http.Client, token TokenSource) (*Client, e
 	if httpClient == nil {
 		httpClient = &http.Client{}
 	}
-	return &Client{baseURL: baseURL, httpClient: httpClient, token: token}, nil
+	// 机器凭据和上传票据均绑定源站。禁止通过
+	// HTTP 重定向将后台操作转移到其他目的地。
+	boundClient := *httpClient
+	boundClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	return &Client{baseURL: baseURL, httpClient: &boundClient, token: token}, nil
 }
 
 // Upload 上传受限大小的文件并返回独立网关生成的 file_id。requestID 用于完整请求哈希幂等。
@@ -136,8 +140,8 @@ func (client *Client) Bind(ctx context.Context, requestID, applicationID, fileID
 	return client.do(ctx, http.MethodPost, "/api/v1/files/"+url.PathEscape(fileID)+"/bindings", requestID, "application/json", bytes.NewReader(payload), nil)
 }
 
-// UploadV2 writes a bounded stream through a one-time gateway ticket. A protected local staging
-// file is used only to determine the immutable size/digest before the upload session is created.
+// UploadV2 通过一次性网关票据写入受限数据流。受保护的本地暂存
+// 文件仅用于在创建上传会话前确定不可变的大小和摘要。
 func (client *Client) UploadV2(ctx context.Context, input V2UploadInput) (V2UploadReceipt, error) {
 	if strings.TrimSpace(input.RequestID) == "" || strings.TrimSpace(input.Purpose) == "" || strings.TrimSpace(input.Name) == "" || strings.TrimSpace(input.MediaType) == "" || strings.TrimSpace(input.ResourceType) == "" || strings.TrimSpace(input.ResourceID) == "" || strings.TrimSpace(input.BindingType) == "" || input.Content == nil {
 		return V2UploadReceipt{}, errors.New("v2 file upload input is incomplete")
@@ -164,6 +168,10 @@ func (client *Client) UploadV2(ctx context.Context, input V2UploadInput) (V2Uplo
 	grant, err := client.CreateV2DirectUpload(ctx, input)
 	if err != nil {
 		return V2UploadReceipt{}, err
+	}
+	if grant.Status == "READY" {
+		// 幂等会话已完成：上次响应可能丢失，重放时不能再申请票据或重复上传。
+		return V2UploadReceipt{FileID: grant.FileID, SHA256: digest, SizeBytes: uint64(size)}, nil
 	}
 	if grant.Status != "CREATED" || grant.Ticket == "" {
 		return V2UploadReceipt{}, errors.New("file gateway upload session is not writable")
@@ -229,7 +237,7 @@ func (client *Client) createV2Session(ctx context.Context, input V2UploadInput) 
 	return V2DirectGrant{UploadID: session.Data.UploadID, FileID: session.Data.FileID, Status: session.Data.Status, UploadURL: session.Data.UploadURL}, nil
 }
 
-// CreateV2DirectUpload creates an idempotent session and signs one browser upload request.
+// CreateV2DirectUpload 创建幂等会话，并签署一次浏览器上传请求。
 func (client *Client) CreateV2DirectUpload(ctx context.Context, input V2UploadInput) (V2DirectGrant, error) {
 	grant, err := client.createV2Session(ctx, input)
 	if err != nil || grant.Status != "CREATED" {
@@ -256,12 +264,12 @@ func (client *Client) CreateV2DirectUpload(ctx context.Context, input V2UploadIn
 	return grant, nil
 }
 
-// ResolveV2Upload replays the immutable idempotent create request and returns the durable session.
+// ResolveV2Upload 重放不可变的幂等创建请求，返回持久化会话。
 func (client *Client) ResolveV2Upload(ctx context.Context, input V2UploadInput) (V2DirectGrant, error) {
 	return client.createV2Session(ctx, input)
 }
 
-// OpenV2File obtains a short-lived download ticket after the caller has rechecked its business ACL.
+// OpenV2File 在调用方重新校验业务 ACL 后获取短期下载票据。
 func (client *Client) OpenV2File(ctx context.Context, requestID, fileID, resourceType, resourceID string) (io.ReadCloser, error) {
 	payload, err := json.Marshal(map[string]string{"resource_type": resourceType, "resource_id": resourceID})
 	if err != nil {
@@ -272,7 +280,7 @@ func (client *Client) OpenV2File(ctx context.Context, requestID, fileID, resourc
 			DownloadURL, Ticket string `json:"-"`
 		} `json:"data"`
 	}
-	// Anonymous embedded struct fields cannot carry independent tags, so decode explicitly.
+	// 匿名嵌入结构体字段不能携带独立标签，因此显式解码。
 	var raw struct {
 		Data struct {
 			DownloadURL string `json:"download_url"`
@@ -333,4 +341,56 @@ func (client *Client) do(ctx context.Context, method, path, requestID, contentTy
 		}
 	}
 	return nil
+}
+
+// PortalReportSourceInput 标识已验证报告回调中的
+// 精确不可变描述。委托网关端点重新检查源命名空间
+// 及该业务绑定；Portal 不持有 Project 文件凭据。
+type PortalReportSourceInput struct {
+	RequestID      uint64 `json:"request_id"`
+	ExpectedSHA256 string `json:"expected_sha256"`
+	ExpectedSize   int64  `json:"expected_size"`
+	ExpectedMIME   string `json:"expected_mime"`
+	ExpectedName   string `json:"expected_name"`
+}
+type PortalReportFile struct {
+	VersionID, SHA256, MIME string
+	Size                    int64
+	Content                 io.ReadCloser
+}
+
+func (client *Client) OpenPortalReportFile(ctx context.Context, traceID, fileID string, input PortalReportSourceInput) (PortalReportFile, error) {
+	empty := PortalReportFile{}
+	if input.RequestID == 0 || input.ExpectedSize <= 0 || input.ExpectedSize > 50<<20 || input.ExpectedMIME != "application/pdf" || len(input.ExpectedSHA256) != 64 || input.ExpectedName == "" {
+		return empty, errors.New("invalid report source descriptor")
+	}
+	body, err := json.Marshal(input)
+	if err != nil {
+		return empty, err
+	}
+	token, err := client.token(ctx)
+	if err != nil || token == "" {
+		return empty, errors.New("report source authentication unavailable")
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, client.baseURL+"/api/v2/portal-report-files/"+url.PathEscape(fileID)+"/content", bytes.NewReader(body))
+	if err != nil {
+		return empty, err
+	}
+	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set("X-Request-ID", traceID)
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Accept", "application/pdf")
+	request.Header.Set("Accept-Encoding", "identity")
+	response, err := client.httpClient.Do(request)
+	if err != nil {
+		return empty, errors.New("report source gateway unavailable")
+	}
+	media, _, mediaErr := mime.ParseMediaType(response.Header.Get("Content-Type"))
+	version := response.Header.Get("X-File-Version-ID")
+	digest := response.Header.Get("X-File-SHA256")
+	if response.StatusCode != http.StatusOK || mediaErr != nil || media != input.ExpectedMIME || response.ContentLength != input.ExpectedSize || !strings.EqualFold(digest, input.ExpectedSHA256) || version == "" || len(version) > 256 || strings.ContainsAny(version, "\x00\r\n") {
+		_ = response.Body.Close()
+		return empty, errors.New("report source gateway evidence invalid")
+	}
+	return PortalReportFile{VersionID: version, SHA256: digest, MIME: media, Size: response.ContentLength, Content: response.Body}, nil
 }

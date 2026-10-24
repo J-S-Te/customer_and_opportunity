@@ -87,20 +87,23 @@ func visibleSnapshotQuery(db *gorm.DB, scope Scope, projectID string) *gorm.DB {
 	return visibleSnapshotListQuery(db, scope).Where("project_id = ?", projectID)
 }
 
-// visibleSnapshotListQuery 保持客户边界，并在账号已有绑定时增加账号-项目边界。
-// NOT EXISTS 是有意保留的存量回退：没有任何绑定的账号继续按客户查看，避免上线迁移
-// 时把存量用户误锁在空列表；一旦创建首条绑定，后续查询立即进入账号级隔离。
+// visibleSnapshotListQuery 保留租户和客户边界，只有账号已持久化
+// ISOLATED 权限模式后才添加
+// 账号与项目边界。没有模式行表示可按旧版访问客户全部项目；
+// ISOLATED 行则要求有效绑定，因此撤销最后一个绑定
+// 会得到空集，而不是触发旧版回退。
 func visibleSnapshotListQuery(db *gorm.DB, scope Scope) *gorm.DB {
 	db = db.Where("tenant_id = ? AND customer_id = ? AND deleted_at IS NULL", scope.TenantID, scope.CustomerID)
 	if scope.AllowAll || scope.AccountID == "" {
 		return db
 	}
 	bindings := "portal_project_account_bindings"
+	modes := "portal_account_project_permission_modes"
 	return db.Where(`(
 		NOT EXISTS (
-			SELECT 1 FROM `+bindings+` b0
-			WHERE b0.tenant_id = ? AND b0.customer_id = ? AND b0.account_id = ?
-			  AND b0.status = 'ACTIVE' AND b0.deleted_at IS NULL
+			SELECT 1 FROM `+modes+` m0
+			WHERE m0.tenant_id = ? AND m0.customer_id = ? AND m0.account_id = ?
+			  AND m0.mode = 'ISOLATED'
 		)
 		OR EXISTS (
 			SELECT 1 FROM `+bindings+` b1
@@ -206,8 +209,26 @@ func (r *GORMRepository) UpsertBundle(ctx context.Context, bundle *Bundle) (bool
 	return changed, err
 }
 
+func markProjectAccountsIsolated(tx *gorm.DB, tenantID string, customerID uint64, accountIDs map[string]struct{}, updatedAt time.Time) error {
+	for accountID := range accountIDs {
+		if accountID == "" {
+			continue
+		}
+		mode := &AccountPermissionMode{Model: database.Model{TenantID: tenantID, CreatedBy: "project-sync", UpdatedBy: "project-sync", CreatedAt: updatedAt, UpdatedAt: updatedAt, Version: 1}, CustomerID: customerID, AccountID: accountID, Mode: PermissionModeIsolated}
+		if err := tx.Clauses(clause.OnConflict{
+			Columns:   []clause.Column{{Name: "tenant_id"}, {Name: "customer_id"}, {Name: "account_id"}},
+			DoUpdates: clause.Assignments(map[string]any{"mode": PermissionModeIsolated, "updated_by": "project-sync", "updated_at": updatedAt, "version": gorm.Expr("version + 1")}),
+		}).Create(mode).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // SyncAccountBindings 在项目快照行锁保护下原子替换同步来源绑定；手工来源独立保留。
 // 事务失败时不会留下半套账号权限，重放同一 sourceVersion 也不会生成重复行。
+// 删除前，将曾有绑定的账号 ID 标记为 ISOLATED，
+// 避免后续空同步恢复旧版客户全范围回退。
 func (r *GORMRepository) SyncAccountBindings(ctx context.Context, tenantID string, customerID uint64, projectID, sourceVersion string, accountIDs []string, updatedAt time.Time) error {
 	operation := func(txCtx context.Context) error {
 		tx := database.FromContext(txCtx, r.db)
@@ -221,6 +242,20 @@ func (r *GORMRepository) SyncAccountBindings(ctx context.Context, tenantID strin
 		var current AccountBinding
 		if err := tx.Where("tenant_id = ? AND customer_id = ? AND project_id = ? AND source = ? AND deleted_at IS NULL", tenantID, customerID, projectID, BindingSourceSync).Order("id DESC").First(&current).Error; err == nil && current.SourceVersion == sourceVersion {
 			return nil
+		}
+		var prior []string
+		if err := tx.Unscoped().Model(&AccountBinding{}).Where("tenant_id = ? AND customer_id = ? AND project_id = ?", tenantID, customerID, projectID).Distinct().Pluck("account_id", &prior).Error; err != nil {
+			return err
+		}
+		isolated := make(map[string]struct{}, len(prior)+len(accountIDs))
+		for _, accountID := range prior {
+			isolated[accountID] = struct{}{}
+		}
+		for _, accountID := range accountIDs {
+			isolated[accountID] = struct{}{}
+		}
+		if err := markProjectAccountsIsolated(tx, tenantID, customerID, isolated, updatedAt); err != nil {
+			return err
 		}
 		if err := tx.Unscoped().Where("tenant_id = ? AND customer_id = ? AND project_id = ? AND source = ?", tenantID, customerID, projectID, BindingSourceSync).Delete(&AccountBinding{}).Error; err != nil {
 			return err

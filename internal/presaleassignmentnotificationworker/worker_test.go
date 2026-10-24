@@ -107,6 +107,21 @@ func TestAssignedPersonReceivesUnreadInboxNotification(t *testing.T) {
 	}
 }
 
+func TestPlatformUserAssignmentProjectionPreservesRecipientNamespace(t *testing.T) {
+	evidence := presale.AssignmentEvent{RecipientPersonID: "user-a", RecipientNamespace: "USER", EventType: presale.AssignmentEventAdded}
+	for _, kind := range []string{presale.AssignmentEventAdded, presale.AssignmentEventRemoved} {
+		evidence.EventType = kind
+		message := project(validEvent(), evidence, presale.PresaleRequest{}, time.Now().UTC())
+		if message.RecipientNamespace != "USER" || message.RecipientID != "user-a" {
+			t.Fatalf("projection=%+v", message)
+		}
+	}
+	evidence.RecipientNamespace = ""
+	if message := project(validEvent(), evidence, presale.PresaleRequest{}, time.Now().UTC()); message.RecipientNamespace != "" {
+		t.Fatalf("legacy event guessed as platform user: %+v", message)
+	}
+}
+
 func TestClaimAndRetryContract(t *testing.T) {
 	for _, fragment := range []string{"FOR UPDATE SKIP LOCKED", "event_type=?", "locked_until<?"} {
 		if !strings.Contains(claimSQL(), fragment) {

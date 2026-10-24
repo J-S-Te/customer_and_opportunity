@@ -13,9 +13,9 @@ import (
 	"gorm.io/gorm"
 )
 
-// TestDisableLinkTransactionAndBusinessIdempotency runs against an explicitly
-// supplied disposable MySQL schema. It exercises the real GORM transaction;
-// the normal unit suite skips it instead of silently emulating MySQL behavior.
+// TestDisableLinkTransactionAndBusinessIdempotency 使用显式
+// 提供的一次性 MySQL 数据库，验证真实 GORM 事务；
+// 普通单元测试套件跳过该测试，不静默模拟 MySQL 行为。
 func TestDisableLinkTransactionAndBusinessIdempotency(t *testing.T) {
 	db := openPortalAccountTestDatabase(t)
 	for _, model := range []any{&identityDisableOperation{}, &AuthEvent{}, &Session{}, &IdentityLink{}} {
@@ -43,8 +43,8 @@ func TestDisableLinkTransactionAndBusinessIdempotency(t *testing.T) {
 	ctx := requestctx.WithID(context.Background(), "disable-request-1")
 	command := DisableCommand{TenantID: "tenant-a", CustomerID: 7, PlatformUserID: "subject-a", ActorID: "machine:crm-portal-disable", Reason: "customer administrator revoked access", IdempotencyKey: "disable-operation-1"}
 
-	// Removing the audit sink forces the final insert to fail. Identity/session
-	// changes and the operation ledger must all roll back with that failure.
+	// 移除审计接收表，强制最后插入失败。身份和会话
+	// 变更及操作台账必须随之全部回滚。
 	if err := db.Migrator().DropTable(&AuthEvent{}); err != nil {
 		t.Fatalf("drop audit table: %v", err)
 	}
@@ -134,9 +134,9 @@ func TestTouchSessionAcceptsMySQLNoChangeAndRejectsInactiveRows(t *testing.T) {
 		t.Fatalf("no-change UPDATE affected %d rows; test database must use MySQL changed-row semantics (clientFoundRows=false)", noChange.RowsAffected)
 	}
 
-	// Every value in the UPDATE already equals its DATETIME(3) database value,
-	// so MySQL reports zero changed rows. The authoritative recheck must still
-	// accept the active session, including on a repeated sibling request.
+	// UPDATE 中每个值已等于数据库的 DATETIME(3) 值，
+	// 因此 MySQL 报告零行变更。权威重检仍必须
+	// 接受有效会话，包括重复的同级请求。
 	for attempt := 0; attempt < 2; attempt++ {
 		if err := repo.TouchSession(context.Background(), "tenant-a", session.SessionIDHash, now, now); err != nil {
 			t.Fatalf("TouchSession() attempt %d rejected an active no-change row: %v", attempt+1, err)

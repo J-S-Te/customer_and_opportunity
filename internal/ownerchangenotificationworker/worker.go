@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	core "github.com/J-S-Te/license-core"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/workerlicense"
 	"strconv"
 	"strings"
 	"time"
@@ -76,6 +78,9 @@ func (a *App) Run(ctx context.Context) error {
 }
 
 func (a *App) RunOnce(ctx context.Context) (int, error) {
+	if !workerlicense.Allowed(ctx, core.ESSENTIAL_SERVICE) {
+		return 0, nil
+	}
 	total := 0
 	for {
 		events, err := a.claim(ctx, a.now().UTC())

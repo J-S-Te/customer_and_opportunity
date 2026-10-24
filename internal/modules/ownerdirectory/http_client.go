@@ -138,8 +138,8 @@ func (client *HTTPClient) Validate(ctx context.Context, userID, organizationID s
 	return validatePair(page, userID, organizationID)
 }
 
-// Resolve resolves at most one authoritative directory record for every requested platform subject.
-// Exact lookups are bounded so a large opportunity team cannot create an unbounded request burst.
+// Resolve 为每个请求的平台主体最多解析一条权威目录记录。
+// 限制精确查询次数，避免大型商机团队引发无限请求突发。
 func (client *HTTPClient) Resolve(ctx context.Context, userIDs []string) (map[string]User, error) {
 	unique := make([]string, 0, len(userIDs))
 	seen := make(map[string]struct{}, len(userIDs))

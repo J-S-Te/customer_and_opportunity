@@ -180,9 +180,9 @@ func classifyReconciliation(candidate reconciliationCandidate, portal portalinvi
 	if !portal.Found {
 		switch candidate.CompensationStatus {
 		case "PENDING", "PROCESSING", "RETRY_WAIT":
-			// The existing compensation worker owns execution, leasing and
-			// idempotency. Reconciliation only records that automatic repair is
-			// already in progress; it never creates a second remote operation.
+			// 现有补偿工作器负责执行、租约及
+			// 幂等。对账仅记录自动修复
+			// 已在进行，绝不创建第二个远程操作。
 			return &reconciliationFinding{Code: "PORTAL_LINK_MISSING_COMPENSATION_PENDING", ResolutionMode: resolutionAutoCompensation}
 		case "DEAD_LETTER":
 			return needsReview("PORTAL_LINK_MISSING_COMPENSATION_DEAD_LETTER")
@@ -196,8 +196,8 @@ func classifyReconciliation(candidate reconciliationCandidate, portal portalinvi
 		return needsReview("IDENTITY_MAPPING_MISMATCH")
 	}
 	if candidate.CRMStatus != portal.Status {
-		// DISABLED/ACTIVE/PENDING transitions are policy-bearing and may revoke
-		// sessions or access. Never infer a direction from timestamps.
+		// DISABLED/ACTIVE/PENDING 转换承载策略，可能撤销
+		// 会话或访问权限。禁止根据时间戳推断转换方向。
 		return needsReview("IDENTITY_STATUS_MISMATCH")
 	}
 	if candidate.CRMStatus != "PENDING" && candidate.CRMStatus != "ACTIVE" && candidate.CRMStatus != "DISABLED" {

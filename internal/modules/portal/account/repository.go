@@ -23,10 +23,31 @@ func (r *GORMRepository) WithTransaction(ctx context.Context, fn func(context.Co
 	return database.WithTransaction(ctx, r.db, fn)
 }
 
+// markProjectIsolation 使新开通或重新开通的门户账号
+// 立即进入项目隔离。本迁移前创建且从未再次开通的账号，
+// 在出现显式模式行前仍保留旧版回退；
+// 全新账号不得仅因尚无授权
+// 就继承客户的全部项目。
+func (r *GORMRepository) markProjectIsolation(ctx context.Context, tenantID string, customerID uint64, accountID string, at time.Time) error {
+	if tenantID == "" || customerID == 0 || accountID == "" {
+		return nil
+	}
+	return r.tx(ctx).Exec(`INSERT INTO portal_account_project_permission_modes
+(tenant_id,customer_id,account_id,mode,created_by,updated_by,created_at,updated_at,version)
+VALUES(?,?,?,'ISOLATED','portal-provision','portal-provision',?,?,1)
+ON DUPLICATE KEY UPDATE mode='ISOLATED',updated_by='portal-provision',updated_at=VALUES(updated_at),version=version+1`, tenantID, customerID, accountID, at.UTC(), at.UTC()).Error
+}
+
 func (r *GORMRepository) UpsertPendingLink(ctx context.Context, value *IdentityLink) (*IdentityLink, error) {
 	var current IdentityLink
 	err := r.tx(ctx).Where("tenant_id = ? AND platform_user_id = ?", value.TenantID, value.PlatformUserID).Take(&current).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
+		// 先写隔离模式，再写身份关联。若关联插入失败，
+		// 孤立的模式行仅会拒绝访问，绝不会使新建
+		// 账号进入旧版全项目回退。
+		if err := r.markProjectIsolation(ctx, value.TenantID, value.CustomerID, value.PlatformUserID, value.UpdatedAt); err != nil {
+			return nil, err
+		}
 		if createErr := r.tx(ctx).Create(value).Error; createErr != nil {
 			return nil, createErr
 		}
@@ -51,6 +72,11 @@ func (r *GORMRepository) UpsertPendingLink(ctx context.Context, value *IdentityL
 	// 补偿重试只携带不可变集成身份，不携带可变联系人信息；空展示名不能覆盖已登记的客户名称。
 	if strings.TrimSpace(value.DisplayName) != "" {
 		updates["display_name"] = value.DisplayName
+	}
+	// 更新前标记，使更新失败时也不能通过
+	// 旧版回退暴露现有关联。
+	if err := r.markProjectIsolation(ctx, current.TenantID, current.CustomerID, current.PlatformUserID, value.UpdatedAt); err != nil {
+		return nil, err
 	}
 	if updateErr := r.tx(ctx).Model(&current).Updates(updates).Error; updateErr != nil {
 		return nil, updateErr

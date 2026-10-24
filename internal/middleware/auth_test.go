@@ -41,7 +41,7 @@ func TestRequireSameOriginWrite(t *testing.T) {
 }
 
 // local-logout 是不带自定义 CSRF 头的裸 fetch POST，只能依赖浏览器自动携带的 Origin 做同源防护；
-// 缺失 Origin 也必须拒绝（fail-closed），否则跨站盲 POST 仍可强制注销。
+// 缺失 Origin 也必须拒绝（失败时安全拒绝），否则跨站盲 POST 仍可强制注销。
 func TestRequireOriginMatch(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	tests := []struct {

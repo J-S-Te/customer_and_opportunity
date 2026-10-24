@@ -675,8 +675,8 @@ func TestConfiguredSecurityCenterCannotUseRequestOverride(t *testing.T) {
 }
 
 func TestRevokingCurrentSessionClearsPortalCookie(t *testing.T) {
-	// Cookie construction is shared by logout and current-session revocation;
-	// MaxAge=-1 and the same path/name force immediate browser removal.
+	// 注销和当前会话撤销共享 Cookie 构造；
+	// MaxAge=-1 及相同路径和名称使浏览器立即移除 Cookie。
 	config := Config{SessionCookieName: "customer_portal_session", PathPrefix: "/customer-portal", SessionCookieSecure: true}
 	cookie := sessionCookie(config, "", time.Unix(1, 0))
 	cookie.MaxAge = -1

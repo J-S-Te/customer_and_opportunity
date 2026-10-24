@@ -9,6 +9,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	core "github.com/J-S-Te/license-core"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/workerlicense"
 	"io"
 	"log/slog"
 	"net/http"
@@ -76,6 +78,9 @@ func (a *App) Run(ctx context.Context) error {
 }
 
 func (a *App) RunOnce(ctx context.Context) (int, error) {
+	if !workerlicense.Allowed(ctx, core.ESSENTIAL_SERVICE) {
+		return 0, nil
+	}
 	var items []notification.Notification
 	if err := a.db.WithContext(ctx).
 		Where("platform_delivered_at IS NULL AND platform_delivery_failed_at IS NULL AND status IN ?", []string{notification.StatusUnread, notification.StatusRead}).

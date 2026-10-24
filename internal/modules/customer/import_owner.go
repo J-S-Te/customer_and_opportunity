@@ -50,8 +50,8 @@ func resolveImportActor(ctx context.Context, catalog ownerdirectory.Catalog, act
 	if err != nil {
 		return fail("OWNER_DIRECTORY_UNAVAILABLE", "负责人目录暂不可用，请稍后重新预检")
 	}
-	// The exact ID query must return the entire single-user result. Never select
-	// the first item from an inconsistent or silently truncated response.
+	// 精确 ID 查询必须返回完整的单用户结果，禁止从
+	// 不一致或被静默截断的响应中直接选取第一项。
 	if page.Total != 1 || len(page.Items) != 1 || page.Items[0].ID != actorID {
 		return fail("OWNER_SELECTION_INVALID", "当前导入人未在有效负责人目录中，请联系管理员检查账号及组织")
 	}
@@ -92,6 +92,10 @@ func (s *Service) validateImportOwner(ctx context.Context, userID, orgID string)
 	}
 	if result.code != "" || result.userID != userID || result.orgID != orgID {
 		return ownerdirectory.ErrSelectionInvalid
+	}
+	// 交接冻结同样覆盖导入路径：预检通过也不得把新客户责任交给交接中的用户。
+	if err := s.ensureOwnerNotFrozen(ctx, principal.TenantID, userID); err != nil {
+		return err
 	}
 	return nil
 }

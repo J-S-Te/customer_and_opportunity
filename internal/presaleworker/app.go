@@ -3,6 +3,7 @@ package presaleworker
 import (
 	"context"
 	"crypto/tls"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/workerlicense"
 	"log"
 
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/presale"
@@ -15,6 +16,7 @@ import (
 )
 
 type App struct {
+	activities     *presaleworkflow.Activities
 	db             *gorm.DB
 	worker         *Worker
 	temporalClient client.Client
@@ -45,6 +47,7 @@ func New(cfg Config) (*App, error) {
 	var temporalClient client.Client
 	var temporalWorker sdkworker.Worker
 	var metrics *workerruntime.MetricsRegistry
+	var activities *presaleworkflow.Activities
 	if cfg.Temporal.Enabled {
 		metrics = workerruntime.NewMetricsRegistry()
 		temporalOptions := client.Options{
@@ -75,16 +78,19 @@ func New(cfg Config) (*App, error) {
 			return nil, optionsErr
 		}
 		temporalWorker = sdkworker.New(temporalClient, cfg.Temporal.TaskQueue, workerOptions)
-		activities := &presaleworkflow.Activities{Approval: approval, PMS: pms}
+		activities = &presaleworkflow.Activities{Approval: approval, PMS: pms}
 		presaleworkflow.Register(temporalWorker, activities)
 		temporalPort := presaleworkflow.Client{Temporal: temporalClient, TaskQueue: cfg.Temporal.TaskQueue}
 		approval = temporalPort
 		pms = temporalPort
 	}
-	return &App{db: db, worker: NewWorker(newOutboxStore(db), service, approval, pms, cfg), temporalClient: temporalClient, temporalWorker: temporalWorker, metrics: metrics, temporalConfig: cfg.Temporal}, nil
+	return &App{db: db, worker: NewWorker(newOutboxStore(db), service, approval, pms, cfg), temporalClient: temporalClient, temporalWorker: temporalWorker, metrics: metrics, temporalConfig: cfg.Temporal, activities: activities}, nil
 }
 
 func (a *App) Run(ctx context.Context) error {
+	if a.activities != nil {
+		a.activities.LicenseCheck = workerlicense.Checker(ctx)
+	}
 	if a.temporalWorker != nil {
 		if err := workerruntime.StartMetricsServer(ctx, a.temporalConfig.MetricsAddress, a.metrics, log.Default()); err != nil {
 			return err

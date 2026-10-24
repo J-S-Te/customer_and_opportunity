@@ -51,11 +51,11 @@ func (h *Handler) Callback(c *gin.Context) {
 	}
 	result, err := h.service.CompleteLogin(c.Request.Context(), c.Query("state"), c.Query("code"), loginip.FromRequest(c.Request))
 	if err != nil {
-		// Keep the browser response deliberately generic, but retain the typed
-		// server-side cause. Without this distinction every discovery, code
-		// exchange, nonce, issuer, and authorization-claim failure looked like
-		// the same unauthenticated response and blocked Broker evidence without
-		// an actionable diagnostic.
+		// 浏览器响应保持通用错误，同时保留有类型的
+		// 服务端原因。否则服务发现、授权码
+		// 交换、nonce、签发者及授权声明失败均表现为
+		// 同一未认证响应，阻碍 Broker 取证，且无法
+		// 提供可操作的诊断。
 		slog.Default().Warn("CRM OIDC callback failed",
 			"has_state", strings.TrimSpace(c.Query("state")) != "",
 			"has_code", strings.TrimSpace(c.Query("code")) != "",

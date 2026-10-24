@@ -13,3 +13,9 @@
 ## 验证方式
 
 后端使用 `go test ./...`，前端使用 `npm test` 和 `npm run build`。本机 Go 默认缓存目录可能无权限，必要时设置 `GOCACHE` 到可写临时目录。
+
+## 当前边界补充（2026-10-22静态核对）
+
+客户查重只披露可见候选、创建更新仍租户去重；售前Actor使用平台user_id、候选与保存复核职责资格，000121新通知显式USER，历史不猜测回填，通知按审批轮次去重。Portal账号ISOLATED模式持久，最后授权撤销不回退；000119审计IP列须先于新版API。报告加密读取/风控/水印及备案字段PDF可按完整配置装配，缺依赖失败关闭。当前迁移CRM75/Portal39，仅静态核对，不证明目标库、Worker或部署已升级。
+
+现行操作/配置以根README、DEVELOPMENT及共享手册为准，历史测试数量保留原日期。本轮报告位于父工程.ai/qa/docs-code-sync-20261022/agents/crm-contract-report.json。

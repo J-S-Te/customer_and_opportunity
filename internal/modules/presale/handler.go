@@ -212,6 +212,7 @@ func (h *Handler) RequestReportExport(c *gin.Context) {
 		OrganizationID string `json:"organization_id"`
 		PersonID       string `json:"person_id"`
 		OpportunityID  uint64 `json:"opportunity_id"`
+		Dimension      string `json:"dimension"`
 	}
 	if !bindJSON(c, &input) {
 		return
@@ -221,11 +222,15 @@ func (h *Handler) RequestReportExport(c *gin.Context) {
 		response.Error(c, apperror.New(http.StatusBadRequest, "CRM_PRESALE_REPORT_INVALID_FILTER", "invalid report filter"))
 		return
 	}
-	if err := h.reports.RequestExport(actor, query); err != nil {
+	data, err := h.reports.RequestExport(c.Request.Context(), actor, query, input.Dimension)
+	if err != nil {
 		response.Error(c, apiError(err))
 		return
 	}
-	response.Error(c, apiError(ErrReportExportUnavailable))
+	c.Header("Cache-Control", "private, no-store")
+	c.Header("X-Content-Type-Options", "nosniff")
+	c.Header("Content-Disposition", `attachment; filename="presale-report.csv"`)
+	c.Data(http.StatusOK, "text/csv; charset=utf-8", data)
 }
 
 func (h *Handler) reportRequest(c *gin.Context) (Actor, ReportQuery, bool) {
@@ -752,7 +757,70 @@ func (h *Handler) SelectExecutionDepartment(c *gin.Context) {
 	if !bindJSON(c, &input) {
 		return
 	}
-	value, err := h.service.SelectExecutionDepartment(c.Request.Context(), actor, id, input)
+	value, err := h.service.SelectExecutionDepartment(c.Request.Context(), actor, id, c.GetHeader("Idempotency-Key"), input)
+	if err != nil {
+		response.Error(c, apiError(err))
+		return
+	}
+	response.OK(c, requestView(value))
+}
+
+func (h *Handler) TakeoverExecutingTeamLead(c *gin.Context) {
+	actor, ok := h.actor(c)
+	if !ok {
+		return
+	}
+	id, ok := bindID(c, "id")
+	if !ok {
+		return
+	}
+	var in TakeoverExecutingTeamLeadInput
+	if !bindJSON(c, &in) {
+		return
+	}
+	value, err := h.service.TakeoverExecutingTeamLead(c.Request.Context(), actor, id, c.GetHeader("Idempotency-Key"), in)
+	if err != nil {
+		response.Error(c, apiError(err))
+		return
+	}
+	response.OK(c, requestView(value))
+}
+
+func (h *Handler) ReplaceExecutorAssignments(c *gin.Context) {
+	actor, ok := h.actor(c)
+	if !ok {
+		return
+	}
+	id, ok := bindID(c, "id")
+	if !ok {
+		return
+	}
+	var in ReplaceAssignmentsInput
+	if !bindJSON(c, &in) {
+		return
+	}
+	value, err := h.service.ReplaceExecutorAssignments(c.Request.Context(), actor, id, c.GetHeader("Idempotency-Key"), in)
+	if err != nil {
+		response.Error(c, apiError(err))
+		return
+	}
+	response.OK(c, requestView(value))
+}
+
+func (h *Handler) RejectExecutionAssignment(c *gin.Context) {
+	actor, ok := h.actor(c)
+	if !ok {
+		return
+	}
+	id, ok := bindID(c, "id")
+	if !ok {
+		return
+	}
+	var in RejectExecutionAssignmentInput
+	if !bindJSON(c, &in) {
+		return
+	}
+	value, err := h.service.RejectExecutionAssignment(c.Request.Context(), actor, id, c.GetHeader("Idempotency-Key"), in)
 	if err != nil {
 		response.Error(c, apiError(err))
 		return

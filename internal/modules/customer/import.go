@@ -82,11 +82,6 @@ func (s *Service) PreviewImport(ctx context.Context, file []byte, reason string)
 	if s.scanner == nil {
 		return nil, ErrImportScannerUnavailable
 	}
-	if s.importGateway != nil {
-		if err = s.importGateway.StoreImport(ctx, jobNo, principal.UserID, "customers.xlsx", file); err != nil {
-			return nil, ErrImportGatewayUnavailable
-		}
-	}
 	if err = s.scanner.Scan(ctx, file); err != nil {
 		if errors.Is(err, ErrImportFileUnsafe) {
 			return nil, ErrImportScanFailed
@@ -183,11 +178,30 @@ func (s *Service) PreviewImport(ctx context.Context, file []byte, reason string)
 		parsedRow.preview.Status, parsedRow.preview.Issues = status, parsedRow.issues
 		previewRows = append(previewRows, parsedRow.preview)
 	}
-	// 首个短事务建立幂等坐标并领取带过期时间的作业租约；浏览器断线后允许同一操作者接管，
-	// 但版本和 lockToken 会隔离旧执行者。
+	var source *ImportSource
+	if s.importGateway != nil {
+		// 作业和加密源文件意图先持久化。事务提交前绝不创建跨系统文件副作用，
+		// 上传失败、响应丢失或进程退出均由后台以相同请求身份恢复。
+		if s.importSources == nil {
+			return nil, ErrImportGatewayUnavailable
+		}
+		cipher, encryptErr := s.codec.Encrypt(string(file))
+		if encryptErr != nil {
+			return nil, encryptErr
+		}
+		source = &ImportSource{TenantID: job.TenantID, ActorID: job.ActorID, JobNo: job.JobNo,
+			RequestID: "crm-customer-import-" + job.JobNo, Filename: "customers.xlsx", ContentCipher: cipher,
+			Status: "PENDING", NextAttemptAt: now, CreatedAt: now, UpdatedAt: now}
+	}
 	err = database.WithTransaction(ctx, s.db, func(txCtx context.Context) error {
 		if createErr := s.imports.CreateImportPreview(txCtx, job, rows); createErr != nil {
 			return createErr
+		}
+		if source != nil {
+			source.JobID = job.ID
+			if sourceErr := s.importSources.CreateImportSource(txCtx, source); sourceErr != nil {
+				return sourceErr
+			}
 		}
 		return s.audit.Write(txCtx, audit.Event{TenantID: principal.TenantID, Module: "customer", Operation: "IMPORT_PREVIEW", ResourceType: "customer_import", ResourceID: job.JobNo, ActorID: principal.UserID, ActorNameSnapshot: principal.DisplayName, AfterJSON: audit.JSON(importAuditSummary(job)), Reason: reason, Result: "SUCCESS"})
 	})
@@ -242,8 +256,8 @@ func trimTrailingEmptyImportRows(rows [][]safexlsx.Cell) [][]safexlsx.Cell {
 }
 
 func parseImportRow(rowNo uint32, cells []safexlsx.Cell) parsedImportRow {
-	// Normalize the user-facing eight columns into the legacy internal shape.
-	// Ownership is derived from the importing principal, never from new workbooks.
+	// 将面向用户的八列规范化为旧版内部结构。
+	// 归属取自导入主体，绝不从新工作簿读取。
 	if len(cells) == len(importHeaders) {
 		expanded := make([]safexlsx.Cell, len(legacyImportHeaders))
 		copy(expanded[:5], cells[:5])
@@ -507,8 +521,8 @@ func (s *Service) commitImportRow(ctx context.Context, principal auth.Principal,
 	if err = json.Unmarshal([]byte(plaintext), &command); err != nil {
 		return err
 	}
-	// Directory membership may be revoked after preview; never use a stored ID
-	// pair as permanent write authorization.
+	// 预览后目录成员资格可能被撤销，不得将已存储的 ID
+	// 对视为永久写入授权。
 	if err = s.validateImportOwner(ctx, command.OwnerUserID, command.OwnerOrgID); err != nil {
 		if errors.Is(err, ownerdirectory.ErrSelectionInvalid) {
 			row.Status, row.ErrorColumn, row.ErrorCode, row.ErrorMessage, row.CommandCipher = "FAILED", "负责人", "OWNER_SELECTION_INVALID", "当前导入人已失效或主组织已变化，请重新上传预检", nil

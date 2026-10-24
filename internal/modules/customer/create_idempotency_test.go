@@ -353,8 +353,8 @@ func TestCustomerCreateCreditUniqueRaceRecoversOnlyAValidatedWinner(t *testing.T
 		t.Fatalf("validated credit winner result=%#v err=%v", result, err)
 	}
 
-	// An unrelated credit-code conflict has no winner for this actor/key and
-	// must remain the original business error rather than becoming a replay.
+	// 无关的信用代码冲突，在当前操作者和键下没有成功记录，
+	// 必须保持原业务错误，不能转为重放。
 	unrelatedRepo := &createIdempotencyRepoStub{transactionErr: creditDuplicate}
 	unrelatedService := newCreateTestService(t, unrelatedRepo, &createAuditStub{})
 	if result, err = unrelatedService.Create(auth.WithPrincipal(context.Background(), actor), input); result != nil || !errors.Is(err, creditDuplicate) {
@@ -393,7 +393,7 @@ func containsString(value, fragment string) bool {
 	return false
 }
 
-// Compile-time assertions keep this security stub aligned with both customer
-// persistence boundaries even as the production repository evolves.
+// 编译期断言使该安全测试桩始终符合客户的两处
+// 持久化边界，避免随生产仓储演进而偏离。
 var _ Repository = (*createIdempotencyRepoStub)(nil)
 var _ CreateRepository = (*createIdempotencyRepoStub)(nil)

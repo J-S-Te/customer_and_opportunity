@@ -11,7 +11,7 @@ type CreateRequest struct {
 	SourceIDs          []uint64 `json:"source_ids,omitempty" binding:"omitempty,max=50,dive,gt=0"`
 	ExpectedAmount     string   `json:"expected_amount" binding:"required"`
 	ExpectedSignDate   string   `json:"expected_sign_date" binding:"required"`
-	RequirementSummary string   `json:"requirement_summary" binding:"required"`
+	RequirementSummary string   `json:"requirement_summary" binding:"required,max=10000"`
 	SystemCount        uint32   `json:"system_count"`
 	PainPoints         string   `json:"pain_points" binding:"omitempty,max=10000"`
 	CompetitorInfo     string   `json:"competitor_info" binding:"omitempty,max=10000"`

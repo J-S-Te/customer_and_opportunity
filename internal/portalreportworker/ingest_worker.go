@@ -6,6 +6,8 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	core "github.com/J-S-Te/license-core"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/workerlicense"
 	"io"
 	"log"
 	"strings"
@@ -40,6 +42,9 @@ func newIngestWorker(store ingestStore, service ingestProjection, protector repo
 }
 
 func (w *IngestWorker) RunOnce(ctx context.Context) (int, error) {
+	if !workerlicense.Allowed(ctx, core.MUTATE_BUSINESS) {
+		return 0, nil
+	}
 	jobs, err := w.store.claim(ctx, w.workerID, w.now(), w.leaseDuration, w.batchSize)
 	if err != nil {
 		return 0, err
@@ -54,6 +59,11 @@ func (w *IngestWorker) RunOnce(ctx context.Context) (int, error) {
 }
 
 func (w *IngestWorker) dispatch(ctx context.Context, job report.IngestJob) error {
+	// 保留已认领任务的租约，不标记为成功或死信；
+	// 授权恢复后，任务在租约到期时可重新认领。
+	if err := workerlicense.Require(ctx, core.MUTATE_BUSINESS); err != nil {
+		return err
+	}
 	if job.ID == 0 || job.RequestID == 0 || strings.TrimSpace(job.EventID) == "" || strings.TrimSpace(job.TenantID) == "" || len(job.DescriptorCipher) == 0 || strings.TrimSpace(job.DescriptorHash) == "" {
 		return w.fail(ctx, job, errors.New("invalid Portal report ingest job"))
 	}
@@ -79,8 +89,18 @@ func (w *IngestWorker) dispatch(ctx context.Context, job report.IngestJob) error
 	providerTimeout := w.leaseDuration - time.Second
 	providerCtx, cancel := context.WithTimeout(ctx, providerTimeout)
 	defer cancel()
-	result, err := w.ingestor.Ingest(providerCtx, job.EventID, descriptor)
+	var result report.IngestResult
+	if scoped, ok := w.ingestor.(interface {
+		IngestForJob(context.Context, report.IngestJob, report.FileDescriptor) (report.IngestResult, error)
+	}); ok {
+		result, err = scoped.IngestForJob(providerCtx, job, descriptor)
+	} else {
+		result, err = w.ingestor.Ingest(providerCtx, job.EventID, descriptor)
+	}
 	if err == nil {
+		if denied := workerlicense.Require(ctx, core.MUTATE_BUSINESS); denied != nil {
+			return denied
+		}
 		err = w.service.CompleteIngest(ctx, job, descriptor, result)
 	}
 	if err != nil {

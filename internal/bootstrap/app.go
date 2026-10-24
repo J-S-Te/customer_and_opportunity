@@ -10,16 +10,19 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/commercial"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/filegateway"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/middleware"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/contractreference"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/credit"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/crmauth"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/customer"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/handover"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/notification"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/opportunity"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/ownerdirectory"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/portalinvite"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/portalreportreference"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/presale"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/apperror"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/audit"
@@ -32,15 +35,28 @@ import (
 )
 
 type App struct {
-	Config      Config
-	DB          *gorm.DB
-	Router      *gin.Engine
-	Server      *http.Server
-	auditCancel context.CancelFunc
-	auditDone   chan struct{}
+	licenseCancel    context.CancelFunc
+	Config           Config
+	DB               *gorm.DB
+	Router           *gin.Engine
+	Server           *http.Server
+	auditCancel      context.CancelFunc
+	auditDone        chan struct{}
+	importSourceDone chan struct{}
 }
 
 func New(config Config) (*App, error) {
+	licenseCtx, licenseCancel := context.WithCancel(context.Background())
+	started := false
+	defer func() {
+		if !started {
+			licenseCancel()
+		}
+	}()
+	licenseCheck, err := commercial.Start(licenseCtx, "customer_and_opportunity")
+	if err != nil {
+		return nil, err
+	}
 	// 这里仅完成连接池装配，健康检查再执行真实 Ping；这样依赖未就绪会体现在健康状态，
 	// 而配置、密钥或协议适配器错误仍会让进程在开放端口前失败。
 	db, err := gorm.Open(mysql.Open(config.MySQLDSN), &gorm.Config{DisableAutomaticPing: true})
@@ -68,12 +84,13 @@ func New(config Config) (*App, error) {
 		middleware.RequestID(),
 		middleware.RequestAudit(auditStore, middleware.RequestAuditOptions{
 			TenantID: config.OIDCTenantID, ApplicationCode: config.PlatformApplicationCode,
-			EnvironmentCode: config.PlatformEnvironmentCode,
+			EnvironmentCode: config.PlatformEnvironmentCode, TrustedProxies: config.TrustedProxies,
 		}),
 		middleware.AccessLog(slog.Default(), "crm", nil),
 		middleware.Recovery(slog.Default(), "crm"),
 	)
 	base := router.Group(strings.TrimRight(config.PathPrefix, "/"))
+	base.Use(commercial.Middleware(licenseCheck, "crm", config.PathPrefix))
 	databaseHealthy := func(ctx context.Context) bool {
 		sqlDB, pingErr := db.DB()
 		return pingErr == nil && sqlDB.PingContext(ctx) == nil
@@ -154,9 +171,9 @@ func New(config Config) (*App, error) {
 			"role_config_hash": principal.RoleConfigHash, "authz_revision": principal.AuthzRevision,
 		})
 	})
-	// This management endpoint uses an existing audit-read permission. It is
-	// intentionally separate from public liveness/readiness probes and exposes
-	// aggregate-only local Outbox state for the caller's tenant.
+	// 此管理端点复用现有的审计读取权限，
+	// 有意与公开的存活和就绪探针分离，仅暴露
+	// 调用方租户的本地 Outbox 聚合状态。
 	api.GET("/audit-outbox/status", middleware.RequirePermission("customer.audit.read"), auditOutboxStatusHandler(auditStore, config))
 	workerReadiness := presale.NewGORMWorkerReadinessRepository(db)
 	api.GET("/capabilities", runtimeCapabilitiesHandler(config, workerReadiness, config.PresaleWorkerHeartbeatMaxAge))
@@ -197,7 +214,7 @@ func New(config Config) (*App, error) {
 		if gatewayErr != nil {
 			return nil, gatewayErr
 		}
-		customerService.UseImportFileGateway(customer.NewImportGatewayAdapter(gatewayHTTPClient))
+		customerService.UseImportFileGateway(customer.NewImportGatewayAdapter(gatewayHTTPClient, config.AttachmentFileGatewayApplication))
 	}
 	customer.RegisterRoutes(api, customer.NewHandler(customerService))
 	creditHandler := credit.NewHandler(credit.NewService(db).UseOwnerDirectory(ownerCatalog))
@@ -369,7 +386,7 @@ func New(config Config) (*App, error) {
 		}
 		attachmentService.UseFileGatewayMigration(migration)
 	}
-	opportunityHandler := opportunity.NewHandler(opportunityService).UseStageAlerts(opportunity.NewStageAlertService(db)).UseAttachments(attachmentService)
+	opportunityHandler := opportunity.NewHandler(opportunityService).UseStageAlerts(opportunity.NewStageAlertService(db)).UseAttachments(attachmentService).UseOutboxAdmin(opportunityRepo)
 	opportunity.RegisterRoutes(api, opportunityHandler)
 	notification.RegisterRoutes(api, notification.NewHandler(notification.NewService(db)))
 	presaleRepo := presale.NewGORMRepository(db)
@@ -391,10 +408,39 @@ func New(config Config) (*App, error) {
 	if portalInviteHandler != nil {
 		portalinvite.RegisterInternalRoutes(internal, portalInviteHandler)
 	}
+	portalreportreference.RegisterRoutes(internal, portalreportreference.GORMReader{DB: db})
 	contractreference.RegisterInternalRoutes(internal, contractreference.NewHandler(contractreference.NewService(contractreference.NewGORMRepository(db))))
 	opportunity.RegisterIntegrationRoutes(internal, opportunityHandler)
 	presale.RegisterInternalRoutes(internal, presaleHandler)
 	credit.RegisterInternalRoutes(internal, creditHandler)
+	// 人员离职交接机器协议：责任冻结、权威责任清单与逐项转移（机器身份鉴权，租户来自令牌）。
+	handoverRepository, handoverErr := handover.NewGORMRepository(db)
+	if handoverErr != nil {
+		return nil, handoverErr
+	}
+	handoverRepository.UseOwnerOrgResolver(handoverOwnerOrgResolver{catalog: ownerCatalog})
+	handoverService, handoverErr := handover.NewService(handoverRepository, handover.NewID, time.Now)
+	if handoverErr != nil {
+		return nil, handoverErr
+	}
+	handover.RegisterInternalRoutes(internal, handover.NewHandler(handoverService))
+	// 审批责任必须由审批引擎确认当前审批人；未配置引擎时审批类责任不会出现在清单中。
+	if config.ApprovalTaskResolverEnabled {
+		approvalTasks, approvalErr := presale.NewHTTPApprovalTaskResolver(context.Background(), presale.ApprovalTaskResolverOptions{
+			Endpoint: config.ApprovalTaskURL, TokenURL: config.ApprovalTaskTokenURL,
+			ClientID: config.ApprovalTaskClientID, ClientSecret: config.ApprovalTaskClientSecret,
+			Scope: config.ApprovalTaskScope, TLS: config.ApprovalTaskTLS,
+		})
+		if approvalErr != nil {
+			return nil, approvalErr
+		}
+		presaleService.UseApprovalTaskResolver(approvalTasks)
+		handoverService.SetApprovalResolver(handoverApprovalResolver{resolver: approvalTasks})
+	}
+	// 写路径冻结覆盖：交接中的用户不得再被指派为客户/商机负责人。
+	customerService.UseFreezeChecker(handoverRepository)
+	opportunityService.UseFreezeChecker(handoverRepository)
+	presaleService.UseFreezeChecker(handoverRepository)
 	server := &http.Server{Addr: config.Address, Handler: router, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second}
 	auditContext, auditCancel := context.WithCancel(context.Background())
 	auditDone := make(chan struct{})
@@ -402,10 +448,18 @@ func New(config Config) (*App, error) {
 		defer close(auditDone)
 		auditDispatcher.Run(auditContext)
 	}()
-	// The preflight is deliberately asynchronous and read-only. A platform
-	// outage or a wrong audit publisher binding must surface clearly in logs,
-	// but must never prevent CRM from serving business traffic; the local Outbox
-	// retains events until delivery recovers.
+	var importSourceDone chan struct{}
+	if config.AttachmentFileGatewayMode != "legacy" {
+		importSourceDone = make(chan struct{})
+		go func() {
+			defer close(importSourceDone)
+			runCustomerImportSources(auditContext, config.OIDCTenantID, customerService, licenseCheck)
+		}()
+	}
+	// 预检采用异步只读方式。平台
+	// 不可用或审计发布者绑定错误必须在日志中明确呈现，
+	// 但不得阻止 CRM 处理业务流量；本地 Outbox
+	// 会保留事件，直至投递恢复。
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 		defer cancel()
@@ -413,10 +467,14 @@ func New(config Config) (*App, error) {
 			slog.Default().Warn("platform audit publisher preflight failed", "error_code", requestaudit.DeliveryErrorCode(err))
 		}
 	}()
-	return &App{Config: config, DB: db, Router: router, Server: server, auditCancel: auditCancel, auditDone: auditDone}, nil
+	started = true
+	return &App{Config: config, DB: db, Router: router, Server: server, auditCancel: auditCancel, auditDone: auditDone, licenseCancel: licenseCancel, importSourceDone: importSourceDone}, nil
 }
 
 func (a *App) Close(ctx context.Context) error {
+	if a.licenseCancel != nil {
+		a.licenseCancel()
+	}
 	// 先让 HTTP 在途请求收敛，再关闭共享连接池，避免请求持有的事务在优雅停机期间被截断。
 	shutdownErr := a.Server.Shutdown(ctx)
 	if a.auditCancel != nil {
@@ -425,6 +483,13 @@ func (a *App) Close(ctx context.Context) error {
 	if a.auditDone != nil {
 		select {
 		case <-a.auditDone:
+		case <-ctx.Done():
+			shutdownErr = errors.Join(shutdownErr, ctx.Err())
+		}
+	}
+	if a.importSourceDone != nil {
+		select {
+		case <-a.importSourceDone:
 		case <-ctx.Done():
 			shutdownErr = errors.Join(shutdownErr, ctx.Err())
 		}

@@ -81,7 +81,7 @@ func TestOwnerDirectoryHandlerFailsClosedWhenPlatformIsUnavailable(t *testing.T)
 
 func TestOwnerDirectoryRouteAllowsExactlyOneSupportedBusinessCapability(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	permissions := []string{"customer.read", "customer.create", "customer.update", "opportunity.create", "opportunity.owner.change", "opportunity.team.manage", "presale.report"}
+	permissions := []string{"customer.read", "customer.create", "customer.update", "opportunity.create", "opportunity.owner.change", "opportunity.team.manage", "presale.report", "presale.assign"}
 	for _, permission := range permissions {
 		t.Run(permission, func(t *testing.T) {
 			catalog := &catalogStub{page: Page{Items: []User{}, Page: 1, PageSize: 20}}
@@ -119,4 +119,41 @@ func serveDirectoryRoute(catalog Catalog, permissions map[string]struct{}) *http
 	response := httptest.NewRecorder()
 	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/owner-directory", nil))
 	return response
+}
+
+func TestAssignmentCandidatesProjectDutyBeforeDirectoryPagination(t *testing.T) {
+	for _, duty := range []string{"EXECUTOR", "TEAM_LEAD", "invalid"} {
+		catalog := &catalogStub{page: Page{Items: []User{}}}
+		response := httptest.NewRecorder()
+		ctx, _ := gin.CreateTestContext(response)
+		ctx.Request = httptest.NewRequest(http.MethodGet, "/owner-directory?assignment_duty="+duty+"&user_id=user-a&page=2&page_size=20", nil)
+		NewHandler(catalog).List(ctx)
+		if duty == "invalid" {
+			if response.Code != 422 || catalog.calls != 0 {
+				t.Errorf("invalid duty: status=%d calls=%d", response.Code, catalog.calls)
+			}
+			continue
+		}
+		if response.Code != 200 || catalog.query.UserID != "user-a" || catalog.query.Page != 2 || len(catalog.query.RoleCodes) == 0 {
+			t.Errorf("duty=%s status=%d query=%+v", duty, response.Code, catalog.query)
+		}
+		if qualificationHasRole(catalog.query.RoleCodes, "sales") {
+			t.Errorf("duty=%s selected unqualified sales", duty)
+		}
+		if duty == "EXECUTOR" && (!qualificationHasRole(catalog.query.RoleCodes, "technician") || qualificationHasRole(catalog.query.RoleCodes, "technical_director")) {
+			t.Errorf("executor projection=%v", catalog.query.RoleCodes)
+		}
+		if duty == "TEAM_LEAD" && (!qualificationHasRole(catalog.query.RoleCodes, "technical_director") || qualificationHasRole(catalog.query.RoleCodes, "technician")) {
+			t.Errorf("lead projection=%v", catalog.query.RoleCodes)
+		}
+	}
+}
+
+func qualificationHasRole(roles []string, want string) bool {
+	for _, role := range roles {
+		if role == want {
+			return true
+		}
+	}
+	return false
 }

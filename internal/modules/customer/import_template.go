@@ -14,9 +14,9 @@ var customerImportTemplateExample = []string{
 	"示例科技有限公司", "913100001234567890", "企业", "软件", "华东", "张三", "13800138000", "zhangsan@example.com",
 }
 
-// customerImportTemplateWorkbook produces the same macro-free OOXML shape the
-// import parser accepts. Keeping the header source shared with import.go
-// prevents the downloadable template from drifting from the server contract.
+// customerImportTemplateWorkbook 生成导入解析器接受的
+// 无宏 OOXML 结构。与 import.go 共享表头来源，
+// 防止下载模板偏离服务端契约。
 func customerImportTemplateWorkbook() ([]byte, error) {
 	var output bytes.Buffer
 	archive := zip.NewWriter(&output)

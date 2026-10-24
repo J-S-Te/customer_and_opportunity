@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/workerlicense"
 	"log"
 	"os/signal"
 	"syscall"
@@ -17,6 +18,10 @@ func main() {
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
+	ctx, err = workerlicense.Start(ctx, "customer_portal")
+	if err != nil {
+		log.Fatal("commercial license runtime configuration failed")
+	}
 	app, err := projectexportworker.New(ctx, cfg)
 	if err != nil {
 		log.Fatal(err)

@@ -40,9 +40,9 @@ type Query struct {
 	PageSize  int
 }
 
-// PrimaryOrganization returns the organization that the authoritative platform
-// directory marks as the user's primary organization. It deliberately only
-// considers the matching user entry returned by the directory.
+// PrimaryOrganization 返回权威平台目录标记的
+// 用户主组织。此处仅考虑
+// 目录中与该用户精确匹配的条目。
 func PrimaryOrganization(page Page, userID string) string {
 	userID = strings.TrimSpace(userID)
 	if userID == "" {
@@ -57,9 +57,9 @@ func PrimaryOrganization(page Page, userID string) string {
 				return strings.TrimSpace(organization.ID)
 			}
 		}
-		// Older directory responses may contain exactly one active organization
-		// without the primary marker. It is still safe to use because it is
-		// returned under this exact user entry by the authoritative directory.
+		// 旧版目录响应可能仅包含一个有效组织，
+		// 但没有主组织标记。仍可安全使用，
+		// 因为该组织由权威目录在此精确用户条目下返回。
 		if len(user.Organizations) == 1 {
 			return strings.TrimSpace(user.Organizations[0].ID)
 		}

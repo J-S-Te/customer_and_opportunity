@@ -316,8 +316,8 @@ func TestMergeIdempotencyIsActorAndPayloadBound(t *testing.T) {
 	if _, err := service.Merge(ctx, changed); !errors.Is(err, ErrIdempotencyConflict) {
 		t.Fatalf("payload conflict err=%v", err)
 	}
-	// A different actor cannot read user-a's replay result. It reaches normal
-	// state/scope validation and cannot turn the key into an authorization bypass.
+	// 其他操作者不能读取 user-a 的重放结果，而应进入正常的
+	// 状态和范围校验，不能利用该键绕过授权。
 	if _, err := service.Merge(mergeContext(allScopePrincipal("user-b", "tenant-a")), input); !errors.Is(err, ErrMergeInactive) {
 		t.Fatalf("actor isolation err=%v", err)
 	}

@@ -206,7 +206,7 @@ func reportNotificationRouteSessionHash(value string) string {
 	return base64.RawURLEncoding.EncodeToString(sum[:])
 }
 
-// ginRoute keeps request construction below focused on the public HTTP contract.
+// ginRoute 使下方请求构造聚焦公开 HTTP 契约。
 type ginRoute struct{ handler http.Handler }
 
 func (r *ginRoute) serve(method, target, origin, csrf string) *httptest.ResponseRecorder {

@@ -18,6 +18,7 @@ var requestStatuses = []RequestStatus{
 	StatusApprovalStarting,
 	StatusPendingApproval,
 	StatusApprovedPendingAssignment,
+	StatusPendingExecutionAssignment,
 	StatusExecuting,
 	StatusCompleted,
 	StatusRejected,
@@ -260,15 +261,16 @@ func (s *Service) RequestDetail(ctx context.Context, actor Actor, id uint64) (Re
 		return RequestDetailView{}, err
 	}
 	view := requestView(requestValue)
-	view.AssignmentAction, view.AssignmentRoleCode = assignmentActionForInstance(instance, actor)
+	view.AssignmentAction, view.AssignmentRoleCode, view.AssignmentActions = assignmentActionForRequest(instance, requestValue, actor)
 	availableActions := localAvailableActions(actor, requestValue.Status, requestValue.ApplicantID, assignees)
-	// Assignment authority is defined by the approval-rule snapshot.  Keep the
-	// legacy list/board action calculation for requests without a snapshot, but
-	// expose the configured person-assignment action to the authoritative detail
-	// endpoint as well.  Otherwise a technical_director (or another configured
-	// role) sees the picker but the frontend rejects the mutation locally because
-	// the action list does not contain ASSIGN.
-	if requestValue.Status == StatusApprovedPendingAssignment || requestValue.Status == StatusExecuting {
+	if instanceUsesTwoLevelAssignment(instance) {
+		// 两级流程的操作入口只由当前指派级别和当前团队负责人决定，不能沿用
+		// 角色粗筛结果，否则其他团队负责人或技术总监会看到无效按钮。
+		availableActions = removeAction(availableActions, "ASSIGN")
+		if actor.Can("presale.assign") && (view.AssignmentAction == ApprovalNodeTeamLead || view.AssignmentAction == ApprovalNodeExecutor) {
+			availableActions = appendUniqueAction(availableActions, "ASSIGN")
+		}
+	} else if requestValue.Status == StatusApprovedPendingAssignment || requestValue.Status == StatusExecuting {
 		if actor.Can("presale.assign") {
 			if action, _ := assignmentActionForInstance(instance, actor); action == ApprovalNodePerson {
 				availableActions = appendUniqueAction(availableActions, "ASSIGN")
@@ -292,6 +294,64 @@ func appendUniqueAction(actions []string, action string) []string {
 		}
 	}
 	return append(actions, action)
+}
+
+func removeAction(actions []string, action string) []string {
+	result := actions[:0]
+	for _, existing := range actions {
+		if existing != action {
+			result = append(result, existing)
+		}
+	}
+	return result
+}
+
+// assignmentActionForRequest 依据申请所固化的规则快照和当前指派级别，
+// 返回调用者此刻真正可以执行的指派动作。旧快照继续使用一级指派语义。
+func assignmentActionForRequest(instance *ApprovalInstance, request *PresaleRequest, actor Actor) (ApprovalNodeType, string, []ApprovalNodeType) {
+	if instance == nil || len(instance.NodesJSON) == 0 {
+		action, role := assignmentActionForInstance(instance, actor)
+		return action, role, nil
+	}
+	var nodes []ApprovalNode
+	if json.Unmarshal(instance.NodesJSON, &nodes) != nil {
+		return "", "", nil
+	}
+	if !UsesTwoLevelAssignment(nodes) {
+		action, role := assignmentActionForInstance(instance, actor)
+		return action, role, nil
+	}
+	switch request.Status {
+	case StatusApprovedPendingAssignment:
+		role := assignmentRoleForActions(nodes, actor, ApprovalNodeDepartment, ApprovalNodeTeamLead)
+		if role == "" {
+			return "", "", nil
+		}
+		return ApprovalNodeTeamLead, role, []ApprovalNodeType{ApprovalNodeDepartment, ApprovalNodeTeamLead}
+	case StatusPendingExecutionAssignment, StatusExecuting:
+		if actor.PersonID == "" || actor.PersonID != request.TeamLeadPersonID {
+			return "", "", nil
+		}
+		return ApprovalNodeExecutor, "team_lead", []ApprovalNodeType{ApprovalNodeExecutor}
+	default:
+		return "", "", nil
+	}
+}
+
+func assignmentRoleForActions(nodes []ApprovalNode, actor Actor, actions ...ApprovalNodeType) string {
+	for roleCode := range actor.Roles {
+		allowed := true
+		for _, action := range actions {
+			if !RoleHasAssignmentAction(nodes, roleCode, action) {
+				allowed = false
+				break
+			}
+		}
+		if allowed {
+			return strings.TrimSpace(roleCode)
+		}
+	}
+	return ""
 }
 
 func assignmentActionForInstance(instance *ApprovalInstance, actor Actor) (ApprovalNodeType, string) {
@@ -419,7 +479,7 @@ func localAvailableActions(actor Actor, status RequestStatus, applicantID string
 	}
 	if status == StatusPendingApproval && applicantID == actor.UserID {
 		actions = append(actions, "CANCEL")
-	} else if (status == StatusApprovedPendingAssignment || status == StatusExecuting) &&
+	} else if (status == StatusApprovedPendingAssignment || status == StatusPendingExecutionAssignment || status == StatusExecuting) &&
 		(actor.HasRole("team_lead") || actor.HasRole("crm_super_admin") || actor.Can("presale.cancel")) {
 		actions = append(actions, "CANCEL")
 	}

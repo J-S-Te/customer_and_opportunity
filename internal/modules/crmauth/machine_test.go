@@ -21,8 +21,8 @@ import (
 )
 
 func TestMachineClaimsFollowPlatformApplicationTokenContract(t *testing.T) {
-	// Platform application_jwt.go intentionally issues sub=client_id and
-	// oauth_client_id=registry row ID; equality would reject every real token.
+	// 平台 application_jwt.go 有意签发 sub=client_id 和
+	// oauth_client_id=注册表行 ID；要求二者相等会拒绝所有真实令牌。
 	valid := machineClaims{Subject: "quote-production", OAuthClientID: "01J-OAUTH-ROW", TenantID: "tenant-1", TokenUse: "application", Scopes: []string{"opportunity.status.write"}}
 	if err := validateMachineClaims(valid, "tenant-1"); err != nil {
 		t.Fatalf("valid platform claims rejected: %v", err)
@@ -166,7 +166,7 @@ func TestMachineAuthenticateAdmitsContractSignedWriteScope(t *testing.T) {
 		t.Fatalf("unexpected machine principal: %#v", principal)
 	}
 
-	// scope 全部不在白名单时仍必须 401（fail-closed），白名单扩充不能引入放行面。
+	// scope 全部不在白名单时仍必须 401（失败时安全拒绝），白名单扩充不能引入放行面。
 	unknown := base
 	unknown.Scopes = []string{"contract.read"}
 	if _, err = authenticator.Authenticate(t.Context(), request(signMachineTestToken(t, privateKey, unknown))); !errors.Is(err, ErrUnauthenticated) {

@@ -3,6 +3,8 @@ package portalaccessdisableworker
 import (
 	"context"
 	"errors"
+	core "github.com/J-S-Te/license-core"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/workerlicense"
 	"log"
 	"strings"
 	"time"
@@ -56,12 +58,18 @@ func (w *Worker) Run(ctx context.Context) error {
 }
 
 func (w *Worker) RunOnce(ctx context.Context) (int, error) {
+	if !workerlicense.Allowed(ctx, core.ESSENTIAL_SERVICE) {
+		return 0, nil
+	}
 	operations, err := w.store.claim(ctx, w.workerID, w.now(), w.leaseDuration, w.batchSize)
 	if err != nil {
 		return 0, err
 	}
 	var joined error
 	for i := range operations {
+		if err := workerlicense.Require(ctx, core.ESSENTIAL_SERVICE); err != nil {
+			return len(operations), err
+		}
 		operation := &operations[i]
 		// 稳定请求号贯穿本次恢复调用，便于远端幂等和审计串联；它不包含租户凭据或主体明文。
 		opCtx := requestctx.WithID(ctx, "portal-disable-worker:"+operation.OperationNo)

@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	core "github.com/J-S-Te/license-core"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/workerlicense"
 	"log"
 	"time"
 
@@ -64,6 +66,9 @@ func (a *App) Run(ctx context.Context) error {
 }
 
 func (a *App) RunOnce(ctx context.Context) (int, error) {
+	if !workerlicense.Allowed(ctx, core.MUTATE_BUSINESS) {
+		return 0, nil
+	}
 	now := a.now().UTC()
 	acquired, err := a.acquireLease(ctx, now)
 	if err != nil || !acquired {
@@ -123,6 +128,9 @@ ORDER BY f.first_response_due_at,f.id LIMIT ? FOR UPDATE SKIP LOCKED`
 			return err
 		}
 		for i := range items {
+			if err := workerlicense.Require(ctx, core.MUTATE_BUSINESS); err != nil {
+				return err
+			}
 			item := &items[i]
 			escalation := feedback.Escalation{TenantID: item.TenantID, FeedbackID: item.ID, Level: 1, Reason: "FIRST_RESPONSE_OVERDUE", SentAt: now}
 			result := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&escalation)

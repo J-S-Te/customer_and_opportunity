@@ -114,8 +114,8 @@ func TestCapabilitiesExposeFreshWorkerEvidenceWithoutClaimingRemoteHealth(t *tes
 			t.Fatalf("capability %s=%+v", name, value)
 		}
 	}
-	// Report download remains unavailable: worker liveness is not evidence that
-	// object storage, scanning, encryption, watermarking or risk providers work.
+	// 报告下载仍不可用：工作器存活不能证明
+	// 对象存储、扫描、加密、水印或风险提供方可用。
 	if envelope.Data["report_download"].Available {
 		t.Fatalf("report download incorrectly inferred from worker heartbeat: %+v", envelope.Data["report_download"])
 	}

@@ -198,3 +198,56 @@ func TestValidateConfigurationRejectsDifferentEnvironment(t *testing.T) {
 func jsonResponse(status int, body string) *http.Response {
 	return &http.Response{StatusCode: status, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))}
 }
+
+// AUD-IP-2026：请求审计必须同时上报登录地址、操作地址与来源标记；
+// 旧字段 user_login_ip 保留，保证滚动升级期间平台两种读法都能工作。
+func TestDispatcherEmitsLoginClientAndSourceIP(t *testing.T) {
+	var captured map[string]any
+	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		switch request.URL.Path {
+		case "/oauth2/token":
+			return jsonResponse(http.StatusOK, `{"access_token":"token","token_type":"Bearer","scope":"audit.ingest","expires_in":300}`), nil
+		case "/api/v1/audit/events/batch":
+			var payload struct {
+				Events []map[string]any `json:"events"`
+			}
+			if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+				t.Fatal(err)
+			}
+			if len(payload.Events) != 1 {
+				t.Fatalf("events = %d", len(payload.Events))
+			}
+			captured = payload.Events[0]
+			return jsonResponse(http.StatusAccepted, `{"code":"OK","data":[{"event_id":"event-ip","status":"ACCEPTED"}]}`), nil
+		default:
+			t.Fatalf("unexpected path %s", request.URL.Path)
+			return nil, nil
+		}
+	})}
+	dispatcher, err := NewDispatcher(NewStore(nil), DispatcherOptions{
+		PlatformBaseURL: "https://platform.example", ClientID: "audit-client", ClientSecret: "audit-secret",
+		ApplicationCode: "customer_and_opportunity", EnvironmentCode: "test", WorkerID: "worker-a",
+		PollInterval: time.Second, BatchSize: 100, HTTPClient: client,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	values := []Record{{
+		EventID: "event-ip", TenantID: "tenant-1", ApplicationCode: "customer_and_opportunity", EnvironmentCode: "test",
+		ActorType: "USER", ActorID: "user-1", UserLoginIP: "203.0.113.10", ClientIP: "10.8.0.5", IPSource: "TRUSTED_PROXY",
+		Action: "HTTP_GET /api/v1/customers", ResourceType: "http_route", RequestID: "request-1",
+		Method: "GET", Route: "/api/v1/customers", Result: "SUCCESS", RiskLevel: "LOW", OccurredAt: time.Now(),
+	}}
+
+	if err := dispatcher.deliver(context.Background(), values); err != nil {
+		t.Fatalf("deliver: %v", err)
+	}
+	for key, want := range map[string]string{
+		"login_ip": "203.0.113.10", "user_login_ip": "203.0.113.10",
+		"client_ip": "10.8.0.5", "ip_source": "TRUSTED_PROXY",
+	} {
+		if got, _ := captured[key].(string); got != want {
+			t.Errorf("%s = %q, want %q", key, got, want)
+		}
+	}
+}

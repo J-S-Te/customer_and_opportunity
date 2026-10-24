@@ -26,14 +26,14 @@ type Claims struct {
 	CustomerRef string
 }
 
-// DataScope is the application-scoped data boundary resolved online by the
-// basic platform. It is intentionally kept outside the OIDC token and is
-// persisted only with the Portal's server-side session snapshot.
+// DataScope 是基础平台在线解析的应用级数据边界，
+// 有意放在 OIDC 令牌之外，
+// 仅随 Portal 服务端会话快照持久化。
 //
-// The Portal remains customer-bound through IdentityLink.CustomerID; these
-// scopes are forwarded to the request principal so future Portal capabilities
-// can make explicit, role-aware data decisions without minting a second
-// authorization source.
+// Portal 始终通过 IdentityLink.CustomerID 绑定客户；
+// 这些范围转交请求主体，使未来 Portal 功能
+// 能按明确角色作出数据决策，而不创建第二个
+// 授权来源。
 type DataScope = sharedauth.DataScope
 
 // OIDCClient 负责授权地址、授权码兑换，以及发行方、受众、签名、nonce 与 token_use 的密码学校验。
@@ -89,10 +89,10 @@ type AccessDisableRepository interface {
 	DisableLink(context.Context, DisableCommand, time.Time) (DisableResult, error)
 }
 
-// IdentityReconciliationRepository exposes only the minimum read model needed
-// by the CRM reconciliation worker. It is deliberately separate from the
-// login Repository so test doubles and authentication paths cannot gain a
-// cross-customer listing capability by accident.
+// IdentityReconciliationRepository 仅公开 CRM 对账工作器
+// 所需的最小读取模型，有意独立于
+// 登录 Repository，避免测试替身及认证路径意外获得
+// 跨客户列举能力。
 type IdentityReconciliationRepository interface {
 	FindLinksBySubjects(context.Context, string, []string) ([]IdentityLink, error)
 }

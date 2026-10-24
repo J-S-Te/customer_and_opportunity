@@ -42,9 +42,9 @@ type CreateRequest struct {
 	Contacts                []ContactInput `json:"contacts" binding:"required,min=1,dive"`
 	DuplicateOverride       bool           `json:"duplicate_override"`
 	DuplicateOverrideReason string         `json:"duplicate_override_reason" binding:"omitempty,max=500"`
-	// Reason is accepted for rolling compatibility with older clients. New
-	// customer creation uses a server-owned audit reason and does not ask users
-	// to provide one.
+	// Reason 用于与旧客户端滚动兼容。新客户
+	// 创建采用服务端确定的审计原因，不要求用户
+	// 提供原因。
 	Reason         string `json:"reason,omitempty" binding:"omitempty,max=500"`
 	IdempotencyKey string `json:"-"`
 }
@@ -182,6 +182,15 @@ type DuplicateCandidate struct {
 	Name       string `json:"name"`
 	Status     string `json:"status"`
 	ExactCode  bool   `json:"exact_code"`
+}
+
+// DuplicateConflictDetails 是创建/更新查重失败时唯一对外披露的候选摘要。
+// 只有调用者数据范围内的候选才带名称、编号、状态和 ID；范围外命中仅以
+// 受限冲突和“需管理员处理”提示出现，避免通过错误响应枚举他人客户。
+type DuplicateConflictDetails struct {
+	VisibleCandidates   []DuplicateCandidate `json:"visible_candidates"`
+	RestrictedConflict  bool                 `json:"restricted_conflict"`
+	AdminReviewRequired bool                 `json:"admin_review_required"`
 }
 
 type ContactResponse struct {

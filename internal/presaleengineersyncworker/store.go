@@ -129,6 +129,12 @@ VALUES (?,?,?,?,?,1,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE person_name=VALUE
 		if err := inactive.Updates(map[string]any{"valid_flag": false, "updated_by": "pms-sync", "updated_at": now, "version": gorm.Expr("version+1")}).Error; err != nil {
 			return err
 		}
+		// 人员同步停用团队负责人后，同一事务把仍在等待执行指派的申请退回待重选。
+		// 状态日志、负责人移出证据与技术总监站内消息都在该事务内完成；任一写入失败
+		// 会回滚整批人员快照，避免“人员已停用但任务仍可推进”。
+		if err := invalidateTeamLeadsForInactiveEngineers(ctx, tx, job.TenantID); err != nil {
+			return err
+		}
 		if err := tx.Model(&presale.EngineerSyncState{}).Where("tenant_id=?", job.TenantID).Updates(map[string]any{"last_attempt_at": now, "last_successful_at": now, "last_source_revision": snapshot.Revision, "next_sync_at": now.Add(interval), "last_job_no": job.JobNo, "last_person_count": len(snapshot.Engineers), "updated_by": "pms-sync", "updated_at": now, "version": gorm.Expr("version+1")}).Error; err != nil {
 			return err
 		}

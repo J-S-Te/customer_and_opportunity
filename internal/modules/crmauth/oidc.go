@@ -109,9 +109,9 @@ func NewPlatformOIDCClient(ctx context.Context, options OIDCOptions) (*platformO
 	}, nil
 }
 
-// EndSessionEndpoint returns the provider-owned RP-initiated logout endpoint.
-// The value comes from OIDC Discovery; the legacy fallback is resolved once at
-// startup so request handlers never infer provider-specific paths themselves.
+// EndSessionEndpoint 返回提供方拥有的 RP 发起注销端点。
+// 该值来自 OIDC Discovery；旧版回退在启动时解析一次，
+// 请求处理器不得自行推断提供方特定路径。
 func (c *platformOIDCClient) EndSessionEndpoint() string {
 	if c == nil {
 		return ""
@@ -128,8 +128,8 @@ func discoverEndSessionEndpoint(provider *oidc.Provider, issuer string) (string,
 	}
 	endpoint := strings.TrimSpace(metadata.EndSessionEndpoint)
 	if endpoint == "" {
-		// Compatibility for the original base-platform issuer, whose historical
-		// discovery documents did not always publish end_session_endpoint.
+		// 兼容原基础平台签发者；其历史
+		// 发现文档不一定发布 end_session_endpoint。
 		endpoint = strings.TrimRight(strings.TrimSpace(issuer), "/") + "/oauth2/logout"
 	}
 	parsed, err := url.ParseRequestURI(endpoint)
@@ -180,7 +180,7 @@ func (c *platformOIDCClient) Exchange(ctx context.Context, code, verifier, nonce
 	if raw.Nonce != nonce || raw.TokenUse != "id_token" || token.AccessToken == "" {
 		return verifiedClaims{}, errors.New("CRM OIDC ID token purpose, nonce or access token is invalid")
 	}
-	// ID token 的 sub 是平台规范中的 canonical identity；若令牌同时返回别名，
+	// ID 令牌 的 sub 是平台规范中的 规范身份；若令牌同时返回别名，
 	// 两者必须一致，避免 CRM 在不同令牌载荷间产生两个主体。
 	claims := claimsFromPlatform(raw)
 	claims.AccessToken = token.AccessToken
@@ -385,15 +385,15 @@ func normalizeAuthorization(claims verifiedClaims, expectedTenantID, expectedRol
 			return verifiedClaims{}, errors.New("CRM OIDC primary_org_id is not in the active organization set")
 		}
 	}
-	_ = platformSuperAdmin // the controlled role alias does not expand permissions
+	_ = platformSuperAdmin // 受控角色别名不扩大权限。
 	claims.Roles, claims.Permissions, claims.OrganizationIDs, claims.DataScopes = roles, permissions, organizationIDs, canonicalScopes
 	return claims, nil
 }
 
-// canonicalCRMRole collapses retired CRM role codes at the authentication
-// boundary. The authorization catalog exposes only the canonical roles, while
-// existing sessions and historical platform bindings can continue to use the
-// old codes until administrators reassign them.
+// canonicalCRMRole 在认证边界将已退役的 CRM 角色编码
+// 收敛为规范编码。授权目录仅公开规范角色，
+// 既有会话及历史平台绑定仍可使用
+// 旧编码，直至管理员重新分配。
 func canonicalCRMRole(role string) string {
 	switch strings.TrimSpace(role) {
 	case "platform-super-admin":

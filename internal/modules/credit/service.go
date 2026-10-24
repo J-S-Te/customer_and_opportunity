@@ -153,12 +153,25 @@ func validatePaymentEvent(event PaymentEvent, due, paid decimal.Decimal) error {
 	if strings.TrimSpace(event.EventID) == "" || strings.TrimSpace(event.PaymentID) == "" || event.CustomerID == 0 || event.DueDate.IsZero() {
 		return apperror.New(400, "CRM_CREDIT_EVENT_INVALID", "event_id, payment_id, customer_id and due_date are required")
 	}
+	eventType := event.EventType
+	if eventType == "" {
+		eventType = PaymentEventCompleted
+	}
+	switch eventType {
+	case PaymentEventCompleted:
+		if event.ReversalOfPaymentID != "" {
+			return apperror.New(400, "CRM_CREDIT_EVENT_INVALID", "reversal_of_payment_id is only valid for a reversal event")
+		}
+	case PaymentEventReversed:
+		if event.ReversalOfPaymentID == "" || !paid.IsZero() {
+			return apperror.New(400, "CRM_CREDIT_EVENT_INVALID", "reversal requires reversal_of_payment_id and zero paid_amount")
+		}
+	default:
+		return apperror.New(400, "CRM_CREDIT_EVENT_INVALID", "event_type is not supported")
+	}
 	source := strings.ToLower(strings.TrimSpace(event.SourceSystem))
 	if _, ok := allowedCreditSources[source]; !ok {
 		return apperror.New(400, "CRM_CREDIT_EVENT_INVALID", "source_system is not allowed")
-	}
-	if event.PaidDate != nil && event.PaidDate.Before(event.DueDate) {
-		return apperror.New(400, "CRM_CREDIT_EVENT_INVALID", "paid_date cannot be earlier than due_date")
 	}
 	for name, value := range map[string]decimal.Decimal{"due_amount": due, "paid_amount": paid} {
 		if value.Exponent() < -2 || value.GreaterThan(decimal.NewFromFloat(999999999999999.99)) {
@@ -175,6 +188,7 @@ func validatePaymentEvent(event PaymentEvent, due, paid decimal.Decimal) error {
 
 func samePaymentPayload(existing creditPaymentRecord, event PaymentEvent) bool {
 	if existing.EventID != event.EventID || existing.PaymentID != event.PaymentID || existing.CustomerID != event.CustomerID ||
+		existing.EventType != event.EventType || existing.ReversalOfPaymentID != event.ReversalOfPaymentID ||
 		existing.ContractNo != event.ContractNo || existing.PeriodNo != event.PeriodNo || existing.SourceSystem != event.SourceSystem ||
 		existing.DueAmount != event.DueAmount || existing.PaidAmount != event.PaidAmount {
 		return false
@@ -256,6 +270,39 @@ func ruleSettingsFor(tx *gorm.DB, tenant string, now time.Time) (RuleSettings, e
 	return value, err
 }
 
+type creditState struct {
+	Level  string
+	OnTime uint32
+	Late   uint32
+	Last   *time.Time
+}
+
+func stateOf(customer struct {
+	ID           uint64
+	Level        string
+	OnTime, Late uint32
+	Last         *time.Time
+}) creditState {
+	return creditState{Level: customer.Level, OnTime: customer.OnTime, Late: customer.Late, Last: customer.Last}
+}
+
+func stateFromRecord(level *string, onTime, late *uint32, last *time.Time) (creditState, bool) {
+	if level == nil || onTime == nil || late == nil {
+		return creditState{}, false
+	}
+	return creditState{Level: *level, OnTime: *onTime, Late: *late, Last: last}, true
+}
+
+func sameState(left, right creditState) bool {
+	if left.Level != right.Level || left.OnTime != right.OnTime || left.Late != right.Late {
+		return false
+	}
+	if left.Last == nil || right.Last == nil {
+		return left.Last == nil && right.Last == nil
+	}
+	return left.Last.Equal(*right.Last)
+}
+
 func (s *Service) ProcessPayment(ctx context.Context, event PaymentEvent) (PaymentRecord, error) {
 	p, ok := auth.FromContext(ctx)
 	if !ok {
@@ -263,6 +310,14 @@ func (s *Service) ProcessPayment(ctx context.Context, event PaymentEvent) (Payme
 	}
 	event.EventID = strings.TrimSpace(event.EventID)
 	event.PaymentID = strings.TrimSpace(event.PaymentID)
+	event.EventType = strings.ToLower(strings.TrimSpace(event.EventType))
+	if event.EventType == "" {
+		event.EventType = PaymentEventCompleted
+	}
+	if event.EventType != PaymentEventCompleted && event.EventType != PaymentEventReversed {
+		return PaymentRecord{}, apperror.New(400, "CRM_CREDIT_EVENT_INVALID", "event_type is not supported")
+	}
+	event.ReversalOfPaymentID = strings.TrimSpace(event.ReversalOfPaymentID)
 	event.ContractNo = strings.TrimSpace(event.ContractNo)
 	event.PeriodNo = strings.TrimSpace(event.PeriodNo)
 	event.SourceSystem = strings.ToLower(strings.TrimSpace(event.SourceSystem))
@@ -276,6 +331,9 @@ func (s *Service) ProcessPayment(ctx context.Context, event PaymentEvent) (Payme
 	}
 	if err := validatePaymentEvent(event, due, paid); err != nil {
 		return PaymentRecord{}, err
+	}
+	if event.EventType == PaymentEventReversed {
+		return s.processReversal(ctx, p, event, paid)
 	}
 	now := s.now()
 	var result PaymentRecord
@@ -300,17 +358,18 @@ func (s *Service) ProcessPayment(ctx context.Context, event PaymentEvent) (Payme
 			OnTime, Late uint32
 			Last         *time.Time
 		}
-		if err := tx.Table("crm_customers").Clauses(clause.Locking{Strength: "UPDATE"}).Select("id,credit_level,consecutive_ontime_count AS on_time,consecutive_late_count AS late,last_payment_eval_at AS last").Where("tenant_id=? AND id=? AND status='ACTIVE' AND merged_into_id IS NULL AND deleted_at IS NULL", p.TenantID, event.CustomerID).Take(&customer).Error; err != nil {
+		if err := tx.Table("crm_customers").Clauses(clause.Locking{Strength: "UPDATE"}).Select("id,credit_level AS level,consecutive_ontime_count AS on_time,consecutive_late_count AS late,last_payment_eval_at AS last").Where("tenant_id=? AND id=? AND status='ACTIVE' AND merged_into_id IS NULL AND deleted_at IS NULL", p.TenantID, event.CustomerID).Take(&customer).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return s.insertRecord(tx, p.TenantID, event, "IGNORED_CUSTOMER_UNAVAILABLE", "CUSTOMER_UNAVAILABLE", rules.GraceDays, now, &result)
+				return s.insertRecord(tx, p.TenantID, event, "IGNORED_CUSTOMER_UNAVAILABLE", "CUSTOMER_UNAVAILABLE", rules.GraceDays, now, nil, nil, &result)
 			}
 			return err
 		}
+		previous := stateOf(customer)
 		if event.PaidDate != nil && customer.Last != nil && event.PaidDate.Before(*customer.Last) {
-			return s.insertRecord(tx, p.TenantID, event, "IGNORED_OUT_OF_ORDER", "OUT_OF_ORDER", rules.GraceDays, now, &result)
+			return s.insertRecord(tx, p.TenantID, event, "IGNORED_OUT_OF_ORDER", "OUT_OF_ORDER", rules.GraceDays, now, &previous, &previous, &result)
 		}
 		if !rules.Enabled {
-			return s.insertRecord(tx, p.TenantID, event, "IGNORED_RULE_DISABLED", "RULE_DISABLED", rules.GraceDays, now, &result)
+			return s.insertRecord(tx, p.TenantID, event, "IGNORED_RULE_DISABLED", "RULE_DISABLED", rules.GraceDays, now, &previous, &previous, &result)
 		}
 		evaluation := "IGNORED_INCOMPLETE"
 		ignoreReason := "INCOMPLETE_PAYMENT"
@@ -323,50 +382,52 @@ func (s *Service) ProcessPayment(ctx context.Context, event PaymentEvent) (Payme
 				evaluation = "LATE"
 			}
 		}
-		if err := s.insertRecord(tx, p.TenantID, event, evaluation, ignoreReason, rules.GraceDays, now, &result); err != nil {
+		if evaluation == "IGNORED_INCOMPLETE" {
+			return s.insertRecord(tx, p.TenantID, event, evaluation, ignoreReason, rules.GraceDays, now, &previous, &previous, &result)
+		}
+		next := previous
+		if evaluation == "ONTIME" {
+			next.OnTime++
+			next.Late = 0
+		} else {
+			next.Late++
+			next.OnTime = 0
+		}
+		next.Level = customer.Level
+		ruleHit := false
+		if evaluation == "ONTIME" && int(next.OnTime) >= rules.OnTimeThreshold {
+			next.Level = stepLevel(customer.Level, -rules.LevelStep)
+			next.OnTime = 0
+			ruleHit = true
+		}
+		if evaluation == "LATE" && int(next.Late) >= rules.LateThreshold {
+			next.Level = stepLevel(customer.Level, rules.LevelStep)
+			next.Late = 0
+			ruleHit = true
+		}
+		next.Last = event.PaidDate
+		if err := s.insertRecord(tx, p.TenantID, event, evaluation, ignoreReason, rules.GraceDays, now, &previous, &next, &result); err != nil {
 			return err
 		}
-		if evaluation == "IGNORED_INCOMPLETE" {
-			return nil
-		}
-		if evaluation == "ONTIME" {
-			customer.OnTime++
-			customer.Late = 0
-		} else {
-			customer.Late++
-			customer.OnTime = 0
-		}
-		newLevel := customer.Level
-		ruleHit := false
-		if evaluation == "ONTIME" && int(customer.OnTime) >= rules.OnTimeThreshold {
-			newLevel = stepLevel(customer.Level, -rules.LevelStep)
-			customer.OnTime = 0
-			ruleHit = true
-		}
-		if evaluation == "LATE" && int(customer.Late) >= rules.LateThreshold {
-			newLevel = stepLevel(customer.Level, rules.LevelStep)
-			customer.Late = 0
-			ruleHit = true
-		}
-		updates := map[string]any{"consecutive_ontime_count": customer.OnTime, "consecutive_late_count": customer.Late, "last_payment_eval_at": event.PaidDate}
+		updates := map[string]any{"consecutive_ontime_count": next.OnTime, "consecutive_late_count": next.Late, "last_payment_eval_at": next.Last}
 		if ruleHit {
 			reason := evaluation
 			logSource := "RULE"
-			if newLevel == customer.Level {
+			if next.Level == customer.Level {
 				logSource, reason = "RULE_CAP", evaluation+"_CAP_REACHED"
 			}
-			updates["credit_level"] = newLevel
-			if newLevel != customer.Level {
+			updates["credit_level"] = next.Level
+			if next.Level != customer.Level {
 				updates["credit_updated_at"], updates["credit_change_source"] = now, "RULE"
 			}
-			if err := tx.Create(&CreditLog{TenantID: p.TenantID, CustomerID: event.CustomerID, FromLevel: customer.Level, ToLevel: newLevel, Source: logSource, Reason: reason, EventID: event.EventID, PaymentID: event.PaymentID, OperatorID: "system", OccurredAt: now}).Error; err != nil {
+			if err := tx.Create(&CreditLog{TenantID: p.TenantID, CustomerID: event.CustomerID, FromLevel: customer.Level, ToLevel: next.Level, Source: logSource, Reason: reason, EventID: event.EventID, PaymentID: event.PaymentID, OperatorID: "system", OccurredAt: now}).Error; err != nil {
 				return err
 			}
-			if err := s.writeCustomerChangeLog(tx, p.TenantID, event.CustomerID, customer.Level, newLevel, logSource, reason, "system", now); err != nil {
+			if err := s.writeCustomerChangeLog(tx, p.TenantID, event.CustomerID, customer.Level, next.Level, logSource, reason, "system", now); err != nil {
 				return err
 			}
-			if newLevel != customer.Level {
-				if err := s.notifyRuleChange(tx, p.TenantID, event.CustomerID, customer.Level, newLevel, now); err != nil {
+			if next.Level != customer.Level {
+				if err := s.notifyRuleChange(tx, p.TenantID, event.CustomerID, customer.Level, next.Level, now); err != nil {
 					return err
 				}
 			}
@@ -376,8 +437,102 @@ func (s *Service) ProcessPayment(ctx context.Context, event PaymentEvent) (Payme
 	return result, err
 }
 
-func (s *Service) insertRecord(tx *gorm.DB, tenant string, event PaymentEvent, evaluation, ignoreReason string, grace int, now time.Time, result *PaymentRecord) error {
-	r := creditPaymentRecord{TenantID: tenant, CustomerID: event.CustomerID, EventID: event.EventID, PaymentID: event.PaymentID, ContractNo: event.ContractNo, PeriodNo: event.PeriodNo, SourceSystem: event.SourceSystem, DueDate: &event.DueDate, PaidDate: event.PaidDate, DueAmount: event.DueAmount, PaidAmount: event.PaidAmount, Evaluation: evaluation, IgnoreReason: ignoreReason, GraceDays: grace, EvaluatedAt: now, CreatedAt: now}
+func (s *Service) processReversal(ctx context.Context, p auth.Principal, event PaymentEvent, paid decimal.Decimal) (PaymentRecord, error) {
+	if paid.Sign() != 0 {
+		return PaymentRecord{}, apperror.New(400, "CRM_CREDIT_EVENT_INVALID", "reversal paid_amount must be zero")
+	}
+	now := s.now()
+	var result PaymentRecord
+	err := database.FromContext(ctx, s.db).Transaction(func(tx *gorm.DB) error {
+		rules, err := ruleSettingsFor(tx, p.TenantID, now)
+		if err != nil {
+			return err
+		}
+		var existing creditPaymentRecord
+		if err = tx.Where("tenant_id=? AND (event_id=? OR payment_id=?)", p.TenantID, event.EventID, event.PaymentID).First(&existing).Error; err == nil {
+			if !samePaymentPayload(existing, event) {
+				return apperror.New(409, "CRM_CREDIT_EVENT_IDEMPOTENCY_CONFLICT", "event id or payment id is already bound to different payment data")
+			}
+			result = toPaymentRecord(existing)
+			return nil
+		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+		var original creditPaymentRecord
+		if err = tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("tenant_id=? AND payment_id=?", p.TenantID, event.ReversalOfPaymentID).Take(&original).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return apperror.New(404, "CRM_CREDIT_PAYMENT_NOT_FOUND", "original credit payment was not found")
+			}
+			return err
+		}
+		if original.Evaluation != "ONTIME" && original.Evaluation != "LATE" {
+			return apperror.New(409, "CRM_CREDIT_REVERSAL_UNSUPPORTED", "only an evaluated payment can be reversed")
+		}
+		if original.ReversedAt != nil {
+			return apperror.New(409, "CRM_CREDIT_PAYMENT_ALREADY_REVERSED", "credit payment was already reversed")
+		}
+		if original.ResultLevel == nil || original.PrevLevel == nil || original.ResultOntimeCount == nil || original.ResultLateCount == nil || original.PrevOntimeCount == nil || original.PrevLateCount == nil {
+			return apperror.New(409, "CRM_CREDIT_REVERSAL_UNSUPPORTED", "credit payment has no reversal snapshot")
+		}
+		var customer struct {
+			ID           uint64
+			Level        string
+			OnTime, Late uint32
+			Last         *time.Time
+		}
+		if err = tx.Table("crm_customers").Clauses(clause.Locking{Strength: "UPDATE"}).Select("id,credit_level AS level,consecutive_ontime_count AS on_time,consecutive_late_count AS late,last_payment_eval_at AS last").Where("tenant_id=? AND id=? AND status='ACTIVE' AND merged_into_id IS NULL AND deleted_at IS NULL", p.TenantID, event.CustomerID).Take(&customer).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return apperror.New(404, "CRM_CUSTOMER_NOT_FOUND", "customer not found")
+			}
+			return err
+		}
+		var later int64
+		if err = tx.Model(&creditPaymentRecord{}).Where("tenant_id=? AND customer_id=? AND id>?", p.TenantID, event.CustomerID, original.ID).Count(&later).Error; err != nil {
+			return err
+		}
+		if later != 0 {
+			return apperror.New(409, "CRM_CREDIT_REVERSAL_NOT_LATEST", "only the latest credit payment can be reversed")
+		}
+		current := stateOf(customer)
+		applied := creditState{Level: *original.ResultLevel, OnTime: *original.ResultOntimeCount, Late: *original.ResultLateCount, Last: original.PaidDate}
+		if !sameState(current, applied) {
+			return apperror.New(409, "CRM_CREDIT_REVERSAL_STATE_CHANGED", "credit state changed after the payment; manual review is required")
+		}
+		restored := creditState{Level: *original.PrevLevel, OnTime: *original.PrevOntimeCount, Late: *original.PrevLateCount, Last: original.PrevLastEvalAt}
+		if err = tx.Model(&creditPaymentRecord{}).Where("tenant_id=? AND id=? AND reversed_at IS NULL", p.TenantID, original.ID).Updates(map[string]any{"reversed_at": now, "reversal_event_id": event.EventID}).Error; err != nil {
+			return err
+		}
+		reversal := event
+		reversal.EventType = PaymentEventReversed
+		reversal.ReversalOfPaymentID = original.PaymentID
+		if err = s.insertRecord(tx, p.TenantID, reversal, "REVERSED", "PAYMENT_REVERSED", rules.GraceDays, now, &current, &restored, &result); err != nil {
+			return err
+		}
+		if err = tx.Create(&CreditLog{TenantID: p.TenantID, CustomerID: event.CustomerID, FromLevel: current.Level, ToLevel: restored.Level, Source: "REVERSAL", Reason: "PAYMENT_REVERSED", EventID: event.EventID, PaymentID: event.PaymentID, OperatorID: "system", OccurredAt: now}).Error; err != nil {
+			return err
+		}
+		if err = s.writeCustomerChangeLog(tx, p.TenantID, event.CustomerID, current.Level, restored.Level, "REVERSAL", "PAYMENT_REVERSED", "system", now); err != nil {
+			return err
+		}
+		if restored.Level != current.Level {
+			if err = s.notifyRuleChange(tx, p.TenantID, event.CustomerID, current.Level, restored.Level, now); err != nil {
+				return err
+			}
+		}
+		updates := map[string]any{"credit_level": restored.Level, "consecutive_ontime_count": restored.OnTime, "consecutive_late_count": restored.Late, "last_payment_eval_at": restored.Last, "credit_updated_at": now, "credit_change_source": "REVERSAL"}
+		return tx.Table("crm_customers").Where("tenant_id=? AND id=?", p.TenantID, event.CustomerID).Updates(updates).Error
+	})
+	return result, err
+}
+
+func (s *Service) insertRecord(tx *gorm.DB, tenant string, event PaymentEvent, evaluation, ignoreReason string, grace int, now time.Time, previous, next *creditState, result *PaymentRecord) error {
+	r := creditPaymentRecord{TenantID: tenant, CustomerID: event.CustomerID, EventID: event.EventID, PaymentID: event.PaymentID, EventType: event.EventType, ReversalOfPaymentID: event.ReversalOfPaymentID, ContractNo: event.ContractNo, PeriodNo: event.PeriodNo, SourceSystem: event.SourceSystem, DueDate: &event.DueDate, PaidDate: event.PaidDate, DueAmount: event.DueAmount, PaidAmount: event.PaidAmount, Evaluation: evaluation, IgnoreReason: ignoreReason, GraceDays: grace, EvaluatedAt: now, CreatedAt: now}
+	if previous != nil {
+		r.PrevLevel, r.PrevOntimeCount, r.PrevLateCount, r.PrevLastEvalAt = &previous.Level, &previous.OnTime, &previous.Late, previous.Last
+	}
+	if next != nil {
+		r.ResultLevel, r.ResultOntimeCount, r.ResultLateCount = &next.Level, &next.OnTime, &next.Late
+	}
 	if err := tx.Create(&r).Error; err != nil {
 		return err
 	}
@@ -385,7 +540,7 @@ func (s *Service) insertRecord(tx *gorm.DB, tenant string, event PaymentEvent, e
 	return nil
 }
 func toPaymentRecord(r creditPaymentRecord) PaymentRecord {
-	return PaymentRecord{ID: r.ID, EventID: r.EventID, PaymentID: r.PaymentID, Evaluation: r.Evaluation, IgnoreReason: r.IgnoreReason, DueDate: r.DueDate, PaidDate: r.PaidDate, DueAmount: r.DueAmount, PaidAmount: r.PaidAmount, ContractNo: r.ContractNo, PeriodNo: r.PeriodNo, SourceSystem: r.SourceSystem, GraceDays: r.GraceDays, EvaluatedAt: r.EvaluatedAt}
+	return PaymentRecord{ID: r.ID, EventID: r.EventID, PaymentID: r.PaymentID, EventType: r.EventType, ReversalOfPaymentID: r.ReversalOfPaymentID, Evaluation: r.Evaluation, IgnoreReason: r.IgnoreReason, DueDate: r.DueDate, PaidDate: r.PaidDate, DueAmount: r.DueAmount, PaidAmount: r.PaidAmount, ContractNo: r.ContractNo, PeriodNo: r.PeriodNo, SourceSystem: r.SourceSystem, GraceDays: r.GraceDays, EvaluatedAt: r.EvaluatedAt, ReversedAt: r.ReversedAt, ReversalEventID: r.ReversalEventID}
 }
 func stepLevel(level string, delta int) string {
 	i := map[string]int{"A": 0, "B": 1, "C": 2, "D": 3}[level] + delta
@@ -413,7 +568,7 @@ func (s *Service) Apply(ctx context.Context, customerID uint64, in ApplyRequest)
 	// 原因用于审批和审计，去除首尾空格后至少保留两个字符，
 	// 避免单字符或纯空白内容形成不可追溯的调整记录。
 	in.Reason = strings.TrimSpace(in.Reason)
-	if !validLevel(in.TargetLevel) || len([]rune(in.Reason)) < 2 {
+	if !validLevel(in.TargetLevel) || len([]rune(in.Reason)) < 2 || len([]rune(in.Reason)) > 500 {
 		return nil, apperror.New(400, "CRM_CREDIT_APPLICATION_INVALID", "target level or reason is invalid")
 	}
 	now := s.now()
@@ -493,6 +648,9 @@ func (s *Service) Decide(ctx context.Context, applicationID uint64, approve bool
 		return nil, apperror.ErrForbidden
 	}
 	in.Opinion = strings.TrimSpace(in.Opinion)
+	if len([]rune(in.Opinion)) > 500 {
+		return nil, apperror.New(400, "CRM_CREDIT_OPINION_TOO_LONG", "credit opinion exceeds 500 characters")
+	}
 	if !approve && len([]rune(in.Opinion)) < 2 {
 		return nil, apperror.New(400, "CRM_CREDIT_REJECTION_OPINION_REQUIRED", "rejection opinion is required")
 	}
@@ -614,9 +772,9 @@ func (s *Service) Pending(ctx context.Context) ([]PendingApplication, error) {
 	if !auth.HasPermissionOrRole(p, "customer.credit.approve", "sales_director", "crm_super_admin") {
 		return nil, apperror.ErrForbidden
 	}
-	// Keep the collection shape stable for an empty inbox. A nil slice would
-	// serialize as JSON null, which makes clients mistake the response object
-	// for the item list when all pending applications have been processed.
+	// 待办箱为空时保持集合结构稳定。nil 切片会
+	// 序列化为 JSON null，导致客户端在全部待办处理完毕时
+	// 将响应对象误认为条目列表。
 	items := make([]PendingApplication, 0)
 	err := database.FromContext(ctx, s.db).
 		Table("crm_customer_credit_applications AS application").

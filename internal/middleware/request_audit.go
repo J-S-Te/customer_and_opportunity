@@ -4,11 +4,13 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"net/netip"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/apperror"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/audit"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/auth"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/loginip"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/observability"
@@ -19,6 +21,9 @@ import (
 
 type RequestAuditOptions struct {
 	TenantID, ApplicationCode, EnvironmentCode string
+	// TrustedProxies 是唯一允许采信 X-Real-IP / X-Forwarded-For 的直接对端集合。
+	// 未配置时只信任回环地址；绝不再按"对端是私网"推断可信。
+	TrustedProxies []netip.Prefix
 }
 
 type requestAuditStore interface {
@@ -26,9 +31,9 @@ type requestAuditStore interface {
 	Complete(context.Context, string, requestaudit.Completion) error
 }
 
-// RequestAudit reserves durable audit evidence before a request can enter an
-// authentication or business handler. It finalizes the allow-listed operation
-// summary after all inner middleware has established the platform principal.
+// RequestAudit 在请求进入认证或业务处理器前
+// 预留持久审计证据。在内层中间件确定平台主体后，
+// 再完成允许列表内的操作摘要。
 func RequestAudit(store requestAuditStore, options RequestAuditOptions) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// 健康检查由容器编排周期性调用，来源必然是 Docker 网络地址，
@@ -60,14 +65,17 @@ func RequestAudit(store requestAuditStore, options RequestAuditOptions) gin.Hand
 				actorType = "MACHINE"
 			}
 		}
-		// External OIDC providers (for example Keycloak) do not put the
-		// browser address in the authorization-context response. In that case
-		// use the address forwarded by our controlled frontend proxy. Without
-		// this fallback the outbox dispatcher sends no user_login_ip and the
-		// platform records its Docker-network delivery address (172.x) instead.
+		// 外部 OIDC 提供方（如 Keycloak）不会在
+		// 授权上下文响应中提供浏览器地址。此时
+		// 使用受控前端代理转发的地址。缺少
+		// 此回退时，Outbox 分发器不会发送 user_login_ip，
+		// 平台会记录其 Docker 网络投递地址（172.x）。
 		if userLoginIP == "" {
 			userLoginIP = loginip.FromRequest(c.Request)
 		}
+		// AUD-IP-2026：操作地址每个请求重新解析，且只在直接对端是显式可信代理时
+		// 采信转发头；它独立于登录地址存储，不再互相顶替。
+		clientIP, ipSource := loginip.Client(c.Request, options.TrustedProxies)
 		route := c.FullPath()
 		if route == "" {
 			route = "UNMATCHED"
@@ -88,20 +96,26 @@ func RequestAudit(store requestAuditStore, options RequestAuditOptions) gin.Hand
 		reason := observability.ErrorCode(c)
 		finalizeCtx, cancel := context.WithTimeout(context.WithoutCancel(c.Request.Context()), 2*time.Second)
 		defer cancel()
+		// AUD-IP-2026：业务层拿不到请求；把解析好的来源放进上下文，
+		// 业务审计写入时自动补齐，避免业务事件完全没有地址。
+		c.Request = c.Request.WithContext(audit.WithMeta(c.Request.Context(), audit.Meta{
+			LoginIP: userLoginIP, ClientIP: clientIP, IPSource: ipSource,
+		}))
 		if err := store.Complete(finalizeCtx, eventID, requestaudit.Completion{
 			ActorType: actorType, ActorID: actorID, ActorName: actorName, UserLoginIP: userLoginIP,
+			ClientIP: clientIP, IPSource: ipSource,
 			Action: "HTTP_" + safeHTTPMethod(c.Request.Method) + " " + route, Route: route,
 			HTTPStatus: status, Result: result, ReasonCode: reason, RiskLevel: risk, CompletedAt: completedAt,
 		}); err != nil {
-			// The STARTED reservation remains durable and is converted to an
-			// interrupted failure by the dispatcher. Never log request content.
+			// STARTED 预留记录保持持久化，由分发器
+			// 转为中断失败。禁止记录请求内容。
 			slog.Default().ErrorContext(finalizeCtx, "finalize request audit", "request_id", request.ID(c.Request.Context()), "error", err)
 		}
 	}
 }
 
-// isProbePath recognizes only infrastructure probe endpoints, including their
-// mounted-prefix forms. Similar business-route names must still be audited.
+// isProbePath 仅识别基础设施探针端点，包括其
+// 挂载前缀形式。名称相似的业务路由仍须审计。
 func isProbePath(path string) bool {
 	path = strings.TrimRight(strings.TrimSpace(path), "/")
 	return path == "/healthz" || path == "/livez" || path == "/readyz" || strings.HasSuffix(path, "/healthz") || strings.HasSuffix(path, "/livez") || strings.HasSuffix(path, "/readyz")

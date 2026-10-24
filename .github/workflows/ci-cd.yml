@@ -24,6 +24,7 @@ jobs:
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
+      - run: sh scripts/license-core-sync.sh --check
       - run: go test ./...
       - run: go vet ./...
       - name: Validate CRM and Portal OpenAPI contracts
@@ -68,6 +69,8 @@ jobs:
       - id: crm
         uses: docker/build-push-action@v6
         with:
+          build-args: |
+            APP_VERSION=${{ github.sha }}
           context: .
           target: crm-runtime
           push: true
@@ -80,6 +83,8 @@ jobs:
       - id: portal
         uses: docker/build-push-action@v6
         with:
+          build-args: |
+            APP_VERSION=${{ github.sha }}
           context: .
           target: portal-runtime
           push: true

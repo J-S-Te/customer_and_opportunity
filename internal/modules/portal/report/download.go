@@ -347,7 +347,8 @@ func (s *DownloadService) AuthorizeDownload(ctx context.Context, actor Actor, re
 		if s.risk != nil {
 			freeze, reason, riskErr := s.risk.Evaluate(tx, actor, request, grant, metadata)
 			if riskErr != nil {
-				return riskErr
+				decisionErr = ErrDownloadUnavailable
+				return s.auditDenied(tx, actor, requestID, grant, "DENIED", "RISK_POLICY_UNAVAILABLE", metadata, now)
 			}
 			if freeze {
 				publicID := ""

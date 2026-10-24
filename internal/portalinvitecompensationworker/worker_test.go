@@ -93,8 +93,8 @@ func TestReconciliationRunsOnStartupAndAtInterval(t *testing.T) {
 		t.Fatalf("calls after interval=%d", reconciler.calls)
 	}
 
-	// A restarted process has no in-memory deadline and reconciles immediately;
-	// durable run/finding rows make this safe and observable.
+	// 重启进程没有内存截止时间，会立即对账；
+	// 持久化运行及发现记录保证其安全且可观测。
 	restarted := NewWorker(&fakeStore{}, fakeRoles{}, fakeMappings{}, testConfig()).withReconciler(reconciler, time.Minute)
 	restarted.now = worker.now
 	if _, err := restarted.RunOnce(context.Background()); err != nil {

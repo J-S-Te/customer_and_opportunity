@@ -63,8 +63,34 @@ func TestPersonalInboxSeparatesUserAndPersonRecipientNamespaces(t *testing.T) {
 	}
 	statement := personalInboxQuery(db, auth.Principal{TenantID: "tenant-a", UserID: "user-a", PersonID: "person-a", Permissions: map[string]struct{}{"opportunity.read": {}, "presale.read": {}}}).Find(&[]Notification{}).Statement
 	sql, variables := statement.SQL.String(), statement.Vars
-	if !strings.Contains(sql, "type IN") || !containsVariable(variables, "user-a") || !containsVariable(variables, "person-a") {
+	if !strings.Contains(sql, "recipient_namespace=?") || !containsVariable(variables, "USER") || !containsVariable(variables, "user-a") || containsVariable(variables, "person-a") {
 		t.Fatalf("personal namespace predicates missing: sql=%q vars=%#v", sql, variables)
+	}
+}
+
+func TestHistoricalExecutorInboxRequiresUnambiguousAuthenticatedIdentity(t *testing.T) {
+	db, err := gorm.Open(mysql.New(mysql.Config{DSN: "gorm:gorm@tcp(127.0.0.1:9910)/gorm", SkipInitializeWithVersion: true}), &gorm.Config{DryRun: true, DisableAutomaticPing: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, personID := range []string{"", "person-a", "user-a"} {
+		statement := personalInboxQuery(db, auth.Principal{TenantID: "tenant-a", UserID: "user-a", PersonID: personID, Permissions: map[string]struct{}{"presale.read": {}}}).Find(&[]Notification{}).Statement
+		if got := containsVariable(statement.Vars, "PERSON"); got != (personID == "user-a") {
+			t.Fatalf("PMS=%q legacy visibility=%v vars=%v", personID, got, statement.Vars)
+		}
+	}
+}
+
+func TestPersonalInboxIncludesExecutionAssignmentWorkflowTypes(t *testing.T) {
+	db, err := gorm.Open(mysql.New(mysql.Config{DSN: "gorm:gorm@tcp(127.0.0.1:9910)/gorm?charset=utf8mb4&parseTime=True&loc=Local", SkipInitializeWithVersion: true}), &gorm.Config{DryRun: true, DisableAutomaticPing: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	statement := personalInboxQuery(db, auth.Principal{TenantID: "tenant-a", UserID: "user-a", PersonID: "person-a", Permissions: map[string]struct{}{"presale.read": {}}}).Find(&[]Notification{}).Statement
+	for _, notificationType := range []string{TypePresaleExecutorPending, TypePresaleExecutionRejected, TypePresaleTeamLeadInvalid} {
+		if !containsVariable(statement.Vars, notificationType) {
+			t.Fatalf("personal inbox is missing %s: %#v", notificationType, statement.Vars)
+		}
 	}
 }
 
@@ -80,5 +106,23 @@ func containsVariable(values []any, expected string) bool {
 func TestMarkReadIsIdempotentByContract(t *testing.T) {
 	if StatusRead != "READ" {
 		t.Fatal("already READ rows must be treated as idempotent replay")
+	}
+}
+
+func TestExecutorInboxUsesPlatformUserWithoutPMSIdentity(t *testing.T) {
+	db, err := gorm.Open(mysql.New(mysql.Config{DSN: "gorm:gorm@tcp(127.0.0.1:9910)/gorm", SkipInitializeWithVersion: true}), &gorm.Config{DryRun: true, DisableAutomaticPing: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, personID := range []string{"", "unrelated-person"} {
+		statement := personalInboxQuery(db, auth.Principal{TenantID: "tenant-a", UserID: "user-a", PersonID: personID, Permissions: map[string]struct{}{"presale.read": {}}}).Find(&[]Notification{}).Statement
+		for _, kind := range []string{TypePresaleAssigneeAdded, TypePresaleAssigneeRemoved, TypePresaleProgressAssignee} {
+			if !containsVariable(statement.Vars, kind) {
+				t.Errorf("PMS identity=%q missing executor type %s", personID, kind)
+			}
+		}
+		if personID != "" && containsVariable(statement.Vars, personID) {
+			t.Errorf("ambiguous legacy recipient exposed through PMS identity: %v", statement.Vars)
+		}
 	}
 }

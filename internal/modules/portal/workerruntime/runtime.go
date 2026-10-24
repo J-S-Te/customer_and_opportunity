@@ -15,6 +15,7 @@ import (
 
 const (
 	ReportDeliveryWorker = "portal_report_delivery"
+	ReportIngestWorker   = "portal_report_ingest"
 	ProjectExportWorker  = "portal_project_export"
 	HeartbeatInterval    = 5 * time.Second
 	HeartbeatMaxAge      = 30 * time.Second

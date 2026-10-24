@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/workerlicense"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -30,6 +31,11 @@ func main() {
 	}()
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
+	ctx, err = workerlicense.Start(ctx, "customer_and_opportunity")
+	if err != nil {
+		logger.Error("commercial license runtime configuration failed")
+		os.Exit(1)
+	}
 	// Run 以取消上下文结束领取循环；context.Canceled 是正常停机，不应被容器判定为任务失败。
 	if err = app.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 		logger.Error("worker stopped", "error", err)

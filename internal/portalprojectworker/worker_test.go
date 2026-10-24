@@ -21,8 +21,8 @@ func TestWorkerSuccessPersistsStableCursorAndReplaysIdempotently(t *testing.T) {
 	if store.appliedCursors[0] != "next" || source.cursors[0] != "old" {
 		t.Fatalf("cursor chain source=%v applied=%v", source.cursors, store.appliedCursors)
 	}
-	// Replaying the same snapshot is represented by the repository returning no
-	// change; the cursor still advances and success is recorded.
+	// 仓储返回未变更表示相同快照的重放；
+	// 游标仍会推进，并记录成功。
 	store.state = &syncState{ID: 1, TenantID: "tenant-a", CustomerID: 9, Cursor: "old", LockedBy: "worker-a", Version: 4}
 	store.changeCounts = []int{0}
 	source.pages = []sourcePage{{Bundles: []sourceBundle{{ProjectID: "P1", SourceUpdatedAt: now}}, NextCursor: "next", HasMore: false}}
@@ -33,8 +33,8 @@ func TestWorkerSuccessPersistsStableCursorAndReplaysIdempotently(t *testing.T) {
 }
 
 func TestWorkerNeverAppliesCrossCustomerSourceClaim(t *testing.T) {
-	// Tenant/customer identifiers are not parsed from source JSON. The only
-	// values passed to persistence come from the leased state.
+	// 租户和客户标识不从源 JSON 解析。传入
+	// 持久层的值仅来自已取得租约的状态。
 	now := time.Now().UTC()
 	state := &syncState{ID: 1, TenantID: "tenant-a", CustomerID: 42, LockedBy: "worker-a", Version: 1}
 	store := &fakeStore{state: state}

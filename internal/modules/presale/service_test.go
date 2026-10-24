@@ -271,8 +271,8 @@ func TestAddProgressResolvesCrossRequestUniqueKeyRace(t *testing.T) {
 		byKey:       map[string]*ProgressLog{},
 	}
 	service := NewService(base, nil, nil, fixedClock{}, fixedIDs{})
-	// Obtain the canonical hash through a normal successful write, then reuse
-	// that immutable record as the concurrently committed winner.
+	// 通过正常成功写入取得规范哈希，再将
+	// 该不可变记录复用为并发提交的胜出记录。
 	winner, err := service.AddProgress(context.Background(), actor, 7, "winner-key", input)
 	if err != nil {
 		t.Fatal(err)

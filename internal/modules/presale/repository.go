@@ -40,6 +40,7 @@ type Repository interface {
 	FindEngineers(context.Context, string, []string) ([]Engineer, error)
 	FindEngineersForUpdate(context.Context, string, []string) ([]Engineer, error)
 	ListCurrentAssignmentsForUpdate(context.Context, string, uint64) ([]Assignment, error)
+	ListAssignmentsForUpdate(context.Context, string, uint64) ([]Assignment, error)
 	ListAssignments(context.Context, string, uint64) ([]Assignment, error)
 	CreateAssignment(context.Context, *Assignment) error
 	EndAssignment(context.Context, string, uint64, uint64, string, time.Time) error
@@ -63,6 +64,7 @@ type Repository interface {
 	RequeueOutboxByAggregate(context.Context, string, string, string) error
 	UpdateWorklogDelivery(context.Context, string, uint64, map[string]any) error
 	CreateIntegrationAttempt(context.Context, *IntegrationAttempt) error
+	ListActiveUserIDsByRole(context.Context, string, string) ([]string, error)
 }
 
 type GORMRepository struct{ db *gorm.DB }
@@ -301,9 +303,9 @@ type requestAlertSummary struct {
 	basisAt *time.Time
 }
 
-// loadRequestListEnrichment replaces the former per-row correlated subqueries
-// with bounded, page-scoped batch queries. The list response still reports
-// exactly the same active opportunity, worklog and unread-alert state.
+// loadRequestListEnrichment 以有界、仅限当前页的批量查询
+// 替代原先逐行相关子查询。列表响应仍提供
+// 完全相同的有效商机、工时及未读告警状态。
 func (r *GORMRepository) loadRequestListEnrichment(ctx context.Context, tenant string, requests []requestListRow) (requestListEnrichment, error) {
 	result := requestListEnrichment{
 		opportunityNames: make(map[uint64]string),
@@ -376,7 +378,7 @@ func (r *GORMRepository) loadRequestListEnrichment(ctx context.Context, tenant s
 			continue
 		}
 		summary := result.alerts[alert.RequestID]
-		if alertAppliesToListRequestLevel(alert.AlertType, request) && (alert.AlertType == AlertApprovalNode1Overdue || alert.AlertType == AlertApprovalNode2Overdue || alert.AlertType == AlertAssignmentOverdue || alert.AlertType == AlertExecutionOverdue) {
+		if alertAppliesToListRequestLevel(alert.AlertType, request) && (alert.AlertType == AlertApprovalNode1Overdue || alert.AlertType == AlertApprovalNode2Overdue || alert.AlertType == AlertAssignmentOverdue || alert.AlertType == AlertExecutionAssignmentOverdue || alert.AlertType == AlertExecutionOverdue) {
 			summary.level = "OVERDUE"
 		} else if alertAppliesToListRequestLevel(alert.AlertType, request) && alert.AlertType == AlertExecutionDueSoon && summary.level != "OVERDUE" {
 			summary.level = "DUE_SOON"
@@ -399,6 +401,8 @@ func alertAppliesToListRequestLevel(alertType AlertType, request requestListRow)
 			(request.CurrentApprovalNode == 2 && alertType == AlertApprovalNode2Overdue)
 	case StatusApprovedPendingAssignment:
 		return alertType == AlertAssignmentOverdue
+	case StatusPendingExecutionAssignment:
+		return alertType == AlertExecutionAssignmentOverdue
 	case StatusExecuting:
 		return alertType == AlertExecutionDueSoon || alertType == AlertExecutionOverdue
 	default:
@@ -412,6 +416,8 @@ func alertAppliesToListRequestDates(alertType AlertType, request requestListRow)
 		return alertType == AlertApprovalNode1Overdue || alertType == AlertApprovalNode2Overdue
 	case StatusApprovedPendingAssignment:
 		return alertType == AlertAssignmentOverdue
+	case StatusPendingExecutionAssignment:
+		return alertType == AlertExecutionAssignmentOverdue
 	case StatusExecuting:
 		return alertType == AlertExecutionDueSoon || alertType == AlertExecutionOverdue
 	default:
@@ -550,7 +556,7 @@ func (r *GORMRepository) AlertAggregate(ctx context.Context, tenant string, requ
 	}
 	var value row
 	err := r.tx(ctx).Raw(`SELECT
-		CASE WHEN SUM(a.alert_type IN ('APPROVAL_NODE_1_OVERDUE','APPROVAL_NODE_2_OVERDUE','ASSIGNMENT_OVERDUE','EXECUTION_OVERDUE')) > 0 THEN 'OVERDUE'
+		CASE WHEN SUM(a.alert_type IN ('APPROVAL_NODE_1_OVERDUE','APPROVAL_NODE_2_OVERDUE','ASSIGNMENT_OVERDUE','EXECUTION_ASSIGNMENT_OVERDUE','EXECUTION_OVERDUE')) > 0 THEN 'OVERDUE'
 		     WHEN SUM(a.alert_type='EXECUTION_DUE_SOON') > 0 THEN 'DUE_SOON' ELSE 'NONE' END AS level,
 		MIN(a.due_at) AS due_at, MIN(a.basis_at) AS basis_at
 		FROM crm_presale_alerts a JOIN crm_presale_requests r ON r.tenant_id=a.tenant_id AND r.id=a.request_id
@@ -558,6 +564,7 @@ func (r *GORMRepository) AlertAggregate(ctx context.Context, tenant string, requ
 		AND ((r.status='PENDING_APPROVAL' AND r.current_approval_node=1 AND a.alert_type='APPROVAL_NODE_1_OVERDUE')
 		  OR (r.status='PENDING_APPROVAL' AND r.current_approval_node=2 AND a.alert_type='APPROVAL_NODE_2_OVERDUE')
 		  OR (r.status='APPROVED_PENDING_ASSIGNMENT' AND a.alert_type='ASSIGNMENT_OVERDUE')
+		  OR (r.status='PENDING_EXECUTION_ASSIGNMENT' AND a.alert_type='EXECUTION_ASSIGNMENT_OVERDUE')
 		  OR (r.status='EXECUTING' AND a.alert_type IN ('EXECUTION_DUE_SOON','EXECUTION_OVERDUE')))`, tenant, requestID).Scan(&value).Error
 	if value.Level == "" {
 		value.Level = "NONE"
@@ -571,7 +578,7 @@ func (r *GORMRepository) ListCurrentAssignments(ctx context.Context, tenant stri
 		return result, nil
 	}
 	var values []Assignment
-	err := r.tx(ctx).Where("tenant_id=? AND request_id IN ? AND is_current=1 AND deleted_at IS NULL", tenant, requestIDs).
+	err := r.tx(ctx).Where("tenant_id=? AND request_id IN ? AND is_current=1 AND assignment_kind=? AND deleted_at IS NULL", tenant, requestIDs, AssignmentKindExecutor).
 		Order("request_id,assigned_at,id").Find(&values).Error
 	for _, value := range values {
 		result[value.RequestID] = append(result[value.RequestID], value)
@@ -651,7 +658,14 @@ func (r *GORMRepository) FindEngineersForUpdate(ctx context.Context, tenant stri
 }
 func (r *GORMRepository) ListCurrentAssignmentsForUpdate(ctx context.Context, tenant string, id uint64) ([]Assignment, error) {
 	var v []Assignment
-	e := r.tx(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).Where("tenant_id=? AND request_id=? AND is_current=1", tenant, id).Find(&v).Error
+	e := r.tx(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("tenant_id=? AND request_id=? AND is_current=1 AND assignment_kind=?", tenant, id, AssignmentKindExecutor).Find(&v).Error
+	return v, e
+}
+func (r *GORMRepository) ListAssignmentsForUpdate(ctx context.Context, tenant string, id uint64) ([]Assignment, error) {
+	var v []Assignment
+	e := r.tx(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("tenant_id=? AND request_id=?", tenant, id).Order("id").Find(&v).Error
 	return v, e
 }
 func (r *GORMRepository) ListAssignments(ctx context.Context, tenant string, id uint64) ([]Assignment, error) {
@@ -851,6 +865,19 @@ func (r *GORMRepository) UpdateWorklogDelivery(ctx context.Context, tenant strin
 }
 func (r *GORMRepository) CreateIntegrationAttempt(ctx context.Context, v *IntegrationAttempt) error {
 	return r.tx(ctx).Create(v).Error
+}
+
+// ListActiveUserIDsByRole 从本地仍然有效的 CRM OIDC 会话解析管理角色收件人。
+// 该投影只用于站内消息投递，不把角色或会话当作业务授权；业务写路径仍需独立鉴权。
+func (r *GORMRepository) ListActiveUserIDsByRole(ctx context.Context, tenant, role string) ([]string, error) {
+	if tenant == "" || role == "" {
+		return nil, ErrInvalidInput
+	}
+	values := make([]string, 0)
+	err := r.tx(ctx).Table("crm_oidc_sessions").Distinct("platform_user_id").
+		Where("tenant_id=? AND platform_user_id<>'' AND revoked_at IS NULL AND expires_at>? AND JSON_CONTAINS(roles_json,JSON_QUOTE(?),'$')", tenant, time.Now().UTC(), role).
+		Order("platform_user_id").Pluck("platform_user_id", &values).Error
+	return values, err
 }
 
 func mapNotFound(err error) error {

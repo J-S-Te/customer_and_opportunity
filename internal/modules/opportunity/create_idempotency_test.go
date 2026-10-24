@@ -146,7 +146,7 @@ func TestCreateExactReplayPreservesOriginalResponseWithoutDuplicateNumberOrAudit
 	if err != nil {
 		t.Fatal(err)
 	}
-	// A later ordinary update must not change the historical creation response.
+	// 后续普通更新不得改变历史创建响应。
 	repo.resource.Name = "后来修改的名称"
 	repo.resource.Version = 9
 	second, err := service.Create(createTestContext(principal), createTestInput())
@@ -279,8 +279,8 @@ func TestCreateSameKeyIsIsolatedAcrossActors(t *testing.T) {
 	if _, err := service.Create(createTestContext(actorA), createTestInput()); err != nil {
 		t.Fatal(err)
 	}
-	// The repository stub emulates the actor-qualified lookup by hiding actor A's
-	// replay. Actor B is entitled to independently consume the same opaque key.
+	// 仓储测试桩通过隐藏操作者 A 的重放，模拟按操作者限定的查询。
+	// 操作者 B 有权独立使用同一个不透明键。
 	repo.replay = nil
 	actorB := auth.Principal{TenantID: "tenant-a", UserID: "actor-b"}
 	if _, err := service.Create(createTestContext(actorB), createTestInput()); err != nil {

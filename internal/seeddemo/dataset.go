@@ -2,6 +2,11 @@
 // 中的稳定身份和业务名称，使本地 UAT 页面在多次初始化后仍可识别。
 package seeddemo
 
+import "time"
+
+// demoDate 返回距今天 days 天的日期，避免演示数据的预期签约日期随时间过期而被业务规则拒绝。
+func demoDate(days int) string { return time.Now().AddDate(0, 0, days).Format("2006-01-02") }
+
 const (
 	DefaultTenantID  = "tenant-demo"
 	DefaultActorID   = "01KYDVHC00000000000000000C"
@@ -185,7 +190,7 @@ func opportunities() []opportunitySeed {
 	return []opportunitySeed{
 		{
 			Key: "bank-core-etc", Name: "核心交易系统等保测评", CustomerKey: "zhongcheng",
-			Type: "新购", Source: "线索", ExpectedAmount: "45.80", ExpectedSignDate: "2026-09-30",
+			Type: "新购", Source: "线索", ExpectedAmount: "45.80", ExpectedSignDate: demoDate(45),
 			RequirementSummary: "客户核心交易系统拟做等保三级测评，需出具技术方案与初步差距分析。",
 			SystemCount:        2, PainPoints: "对测评周期和整改成本敏感，需要分阶段实施路径。",
 			CompetitorInfo: "中诚安全测评有限公司报价偏低，但服务覆盖范围较窄。",
@@ -201,14 +206,14 @@ func opportunities() []opportunitySeed {
 		},
 		{
 			Key: "bank-online-etc", Name: "网上交易系统等保测评", CustomerKey: "zhongcheng",
-			Type: "新购", Source: "自主开发", ExpectedAmount: "62.00", ExpectedSignDate: "2026-10-15",
+			Type: "新购", Source: "自主开发", ExpectedAmount: "62.00", ExpectedSignDate: demoDate(60),
 			RequirementSummary: "网上银行系统按监管要求完成等保测评与整改复测。",
 			SystemCount:        2, PainPoints: "互联网暴露面大，需要兼顾业务连续性。",
 			OwnerKey: "李娜", Stage: "方案制定",
 		},
 		{
 			Key: "binjiang-platform", Name: "医院信息平台安全建设", CustomerKey: "binjiang",
-			Type: "新购", Source: "自主开发", ExpectedAmount: "85.20", ExpectedSignDate: "2026-09-10",
+			Type: "新购", Source: "自主开发", ExpectedAmount: "85.20", ExpectedSignDate: demoDate(30),
 			RequirementSummary: "医院信息平台整体安全建设，含等保测评、边界防护与安全运营。",
 			SystemCount:        3, PainPoints: "门诊高峰时段业务不能中断，整改窗口有限。",
 			CompetitorInfo: "安恒信息技术有限公司品牌知名度高，但报价偏高。",
@@ -216,7 +221,7 @@ func opportunities() []opportunitySeed {
 		},
 		{
 			Key: "huaxing-core-etc", Name: "证券核心系统等保测评", CustomerKey: "huaxing",
-			Type: "新购", Source: "老客户转介绍", ExpectedAmount: "128.00", ExpectedSignDate: "2026-08-30",
+			Type: "新购", Source: "老客户转介绍", ExpectedAmount: "128.00", ExpectedSignDate: demoDate(25),
 			RequirementSummary: "证券集中交易系统等保三级测评、渗透测试与整改协助。",
 			SystemCount:        2, PainPoints: "交易时段保护要求高，测试窗口受交易所休市限制。",
 			CompetitorInfo: "绿盟科技股份有限公司进入二轮比价。",
@@ -231,7 +236,7 @@ func opportunities() []opportunitySeed {
 		},
 		{
 			Key: "pengcheng-scada", Name: "新能源集控系统风险评估", CustomerKey: "pengcheng",
-			Type: "新购", Source: "公开招标", ExpectedAmount: "96.50", ExpectedSignDate: "2026-11-20",
+			Type: "新购", Source: "公开招标", ExpectedAmount: "96.50", ExpectedSignDate: demoDate(90),
 			RequirementSummary: "新能源集控系统风险评估与安全加固，按公开招标文件执行。",
 			SystemCount:        1, PainPoints: "招标文件对资质与同类案例要求严格。",
 			CompetitorInfo: "两家本地测评机构参与投标。",
@@ -247,42 +252,42 @@ func opportunities() []opportunitySeed {
 		},
 		{
 			Key: "huaxing-pentest", Name: "经纪业务系统渗透测试", CustomerKey: "huaxing",
-			Type: "新购", Source: "线索", ExpectedAmount: "32.00", ExpectedSignDate: "2026-12-31",
+			Type: "新购", Source: "线索", ExpectedAmount: "32.00", ExpectedSignDate: demoDate(120),
 			RequirementSummary: "经纪业务系统上线前渗透测试与代码审计。",
 			SystemCount:        2, PainPoints: "系统迭代频繁，测试范围需按版本锁定。",
 			OwnerKey: "刘洋", Stage: "初步接触",
 		},
 		{
 			Key: "binjiang-healthcloud", Name: "健康云平台安全建设", CustomerKey: "binjiang",
-			Type: "新购", Source: "渠道合作", ExpectedAmount: "55.00", ExpectedSignDate: "2026-10-31",
+			Type: "新购", Source: "渠道合作", ExpectedAmount: "55.00", ExpectedSignDate: demoDate(75),
 			RequirementSummary: "健康云平台等保测评与数据安全体系建设。",
 			SystemCount:        2, PainPoints: "涉及个人健康数据，隐私合规要求高。",
 			OwnerKey: "张伟", Stage: "报价",
 		},
 		{
 			Key: "huaxing-advisory", Name: "数据安全合规咨询", CustomerKey: "huaxing",
-			Type: "服务", Source: "老客户转介绍", ExpectedAmount: "18.80", ExpectedSignDate: "2026-07-15",
+			Type: "服务", Source: "老客户转介绍", ExpectedAmount: "18.80", ExpectedSignDate: demoDate(12),
 			RequirementSummary: "数据安全分级分类与合规差距咨询。",
 			SystemCount:        0, OwnerKey: "李娜", Stage: "已签约",
 			Terminal: &terminalSeed{Stage: "已签约", FromStage: "报价", PendingType: "NONE", ContractRef: "HT-2026-0088"},
 		},
 		{
 			Key: "pengcheng-legacy", Name: "老旧系统改造等保测评", CustomerKey: "pengcheng",
-			Type: "新购", Source: "公开招标", ExpectedAmount: "40.00", ExpectedSignDate: "2026-06-30",
+			Type: "新购", Source: "公开招标", ExpectedAmount: "40.00", ExpectedSignDate: demoDate(7),
 			RequirementSummary: "老旧工业控制系统改造后的等保测评。",
 			SystemCount:        1, OwnerKey: "王强", Stage: "失败",
 			Terminal: &terminalSeed{Stage: "失败", FromStage: "投标", PendingType: "NONE", LostReason: "预算不足"},
 		},
 		{
 			Key: "zhongcheng-cloud", Name: "云平台迁移安全评估", CustomerKey: "zhongcheng",
-			Type: "服务", Source: "自主开发", ExpectedAmount: "26.50", ExpectedSignDate: "2026-08-20",
+			Type: "服务", Source: "自主开发", ExpectedAmount: "26.50", ExpectedSignDate: demoDate(20),
 			RequirementSummary: "核心系统云迁移前安全评估与迁移方案评审。",
 			SystemCount:        2, OwnerKey: "张伟", Stage: "已签约",
 			Terminal: &terminalSeed{Stage: "已签约", FromStage: "报价", PendingType: "CONTRACT"},
 		},
 		{
 			Key: "binjiang-audit", Name: "内网安全基线审计", CustomerKey: "binjiang",
-			Type: "服务", Source: "线索", ExpectedAmount: "15.00", ExpectedSignDate: "2026-09-30",
+			Type: "服务", Source: "线索", ExpectedAmount: "15.00", ExpectedSignDate: demoDate(45),
 			RequirementSummary: "院内网安全基线核查与整改建议。",
 			SystemCount:        1, OwnerKey: "刘洋", Stage: "失败",
 			Terminal: &terminalSeed{Stage: "失败", FromStage: "报价", PendingType: "LOST_REASON"},
