@@ -11,7 +11,6 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/apperror"
 	sharedauthorization "github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/authorizationcontext"
-	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/loginip"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/response"
 )
 
@@ -49,7 +48,7 @@ func (h *Handler) Callback(c *gin.Context) {
 		response.Error(c, apperror.ErrUnauthenticated)
 		return
 	}
-	result, err := h.service.CompleteLogin(c.Request.Context(), c.Query("state"), c.Query("code"), loginip.FromRequest(c.Request))
+	result, err := h.service.CompleteLogin(c.Request.Context(), c.Query("state"), c.Query("code"))
 	if err != nil {
 		// 浏览器响应保持通用错误，同时保留有类型的
 		// 服务端原因。否则服务发现、授权码

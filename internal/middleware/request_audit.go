@@ -65,14 +65,9 @@ func RequestAudit(store requestAuditStore, options RequestAuditOptions) gin.Hand
 				actorType = "MACHINE"
 			}
 		}
-		// 外部 OIDC 提供方（如 Keycloak）不会在
-		// 授权上下文响应中提供浏览器地址。此时
-		// 使用受控前端代理转发的地址。缺少
-		// 此回退时，Outbox 分发器不会发送 user_login_ip，
-		// 平台会记录其 Docker 网络投递地址（172.x）。
-		if userLoginIP == "" {
-			userLoginIP = loginip.FromRequest(c.Request)
-		}
+		// 统一审计方案 §2.3：登录地址缺失时保持未知，绝不用"当前请求地址"回填。
+		// 回填会把客户端可伪造的转发头写成会话级登录地址，污染此后所有事件。
+		// 登录地址只来自会话建立时记录的权威值（principal.LoginIP）。
 		// AUD-IP-2026：操作地址每个请求重新解析，且只在直接对端是显式可信代理时
 		// 采信转发头；它独立于登录地址存储，不再互相顶替。
 		clientIP, ipSource := loginip.Client(c.Request, options.TrustedProxies)

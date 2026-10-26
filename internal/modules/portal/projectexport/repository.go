@@ -3,17 +3,56 @@ package projectexport
 import (
 	"context"
 	"errors"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/audit"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/database"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
 
-type GORMRepository struct{ db *gorm.DB }
+type GORMRepository struct {
+	db *gorm.DB
+	// auditWriter 把门户导出/下载事件同步进统一审计；缺失时只保留本地事件表。
+	auditWriter audit.Writer
+}
 
 func NewGORMRepository(db *gorm.DB) *GORMRepository { return &GORMRepository{db: db} }
+
+// UseAuditWriter 注入统一审计写入器（组合根调用）。
+func (r *GORMRepository) UseAuditWriter(writer audit.Writer) *GORMRepository {
+	r.auditWriter = writer
+	return r
+}
+
+// recordEvent 在业务事务内同时写本地事件与统一审计。
+// 门户下载/拒绝必须能被平台审计检索到，而不是只留在门户本地表里。
+func (r *GORMRepository) recordEvent(ctx context.Context, actor Actor, event Event) error {
+	if event.OccurredAt.IsZero() {
+		event.OccurredAt = time.Now().UTC()
+	}
+	if err := r.session(ctx).Create(&event).Error; err != nil {
+		return err
+	}
+	if r.auditWriter == nil {
+		return nil
+	}
+	result := "SUCCESS"
+	switch strings.ToUpper(event.Result) {
+	case "DENIED", "REJECTED":
+		result = "DENIED"
+	case "FAILED", "FAILURE":
+		result = "FAILURE"
+	}
+	return r.auditWriter.Write(ctx, audit.Event{
+		TenantID: actor.TenantID, Module: "customer_portal", Operation: "PORTAL_" + event.EventType,
+		ResourceType: "project_export", ResourceID: strconv.FormatUint(event.ExportID, 10),
+		ActorID: actor.AccountID, ActorNameSnapshot: actor.AccountID,
+		Reason: event.ReasonCode, Result: result,
+	})
+}
 func (r *GORMRepository) session(ctx context.Context) *gorm.DB {
 	return database.FromContext(ctx, r.db).WithContext(ctx)
 }
@@ -64,7 +103,7 @@ func (r *GORMRepository) CreateGrant(ctx context.Context, actor Actor, exportPub
 		if err := tx.Create(&result).Error; err != nil {
 			return err
 		}
-		return tx.Create(&Event{TenantID: actor.TenantID, CustomerID: actor.CustomerID, AccountID: actor.AccountID, ExportID: job.ID, EventType: "DOWNLOAD_GRANT_ISSUED", Result: "SUCCESS", OccurredAt: now}).Error
+		return r.recordEvent(ctx, actor, Event{TenantID: actor.TenantID, CustomerID: actor.CustomerID, AccountID: actor.AccountID, ExportID: job.ID, EventType: "DOWNLOAD_GRANT_ISSUED", Result: "SUCCESS", OccurredAt: now})
 	})
 	return &result, err
 }
@@ -98,7 +137,7 @@ func (r *GORMRepository) ConsumeGrant(ctx context.Context, actor Actor, exportPu
 		if updateResult.RowsAffected != 1 {
 			return ErrInvalidGrant
 		}
-		return tx.Create(&Event{TenantID: actor.TenantID, CustomerID: actor.CustomerID, AccountID: actor.AccountID, ExportID: result.ID, EventType: "DOWNLOAD_GRANT_CONSUMED", Result: "SUCCESS", RequestTrace: trace, OccurredAt: now}).Error
+		return r.recordEvent(ctx, actor, Event{TenantID: actor.TenantID, CustomerID: actor.CustomerID, AccountID: actor.AccountID, ExportID: result.ID, EventType: "DOWNLOAD_GRANT_CONSUMED", Result: "SUCCESS", RequestTrace: trace, OccurredAt: now})
 	})
 	return &result, err
 }
@@ -109,5 +148,5 @@ func (r *GORMRepository) RecordDeliveryOutcome(ctx context.Context, actor Actor,
 	if !success {
 		eventType, result = "DOWNLOAD_STREAM_FAILED", "FAILED"
 	}
-	return r.session(ctx).Create(&Event{TenantID: actor.TenantID, CustomerID: actor.CustomerID, AccountID: actor.AccountID, ExportID: exportID, EventType: eventType, Result: result, ReasonCode: strings.TrimSpace(reason), RequestTrace: trace, OccurredAt: now}).Error
+	return r.recordEvent(ctx, actor, Event{TenantID: actor.TenantID, CustomerID: actor.CustomerID, AccountID: actor.AccountID, ExportID: exportID, EventType: eventType, Result: result, ReasonCode: strings.TrimSpace(reason), RequestTrace: trace, OccurredAt: now})
 }

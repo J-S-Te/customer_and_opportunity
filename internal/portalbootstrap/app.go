@@ -24,6 +24,7 @@ import (
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/portal/report"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/portal/workerruntime"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/projectexportworker"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/audit"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/request"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/requestaudit"
 	"gorm.io/driver/mysql"
@@ -77,6 +78,8 @@ func New(ctx context.Context, config Config) (*App, error) {
 	if err != nil {
 		return nil, fmt.Errorf("initialize Portal request audit: %w", err)
 	}
+	// 门户导出/下载事件同步进统一审计：复用门户 request audit outbox，投递失败会自动重试。
+	platformAuditWriter := audit.NewGORMWriter(db).UsePlatformOutbox(auditStore, config.PlatformEnvironmentCode)
 	oidcAdapter, err := NewOIDCAdapter(ctx, config)
 	if err != nil {
 		return nil, err
@@ -115,7 +118,7 @@ func New(ctx context.Context, config Config) (*App, error) {
 	// 已同步数据，但不能伪装实时同步或安全下载能力可用。
 	workerReadiness := workerruntime.NewRepository(db)
 	customerCapabilities := capability.NewCachedReader(capability.NewGORMStore(db), 30*time.Second)
-	projectExportService := projectexport.NewService(projectexport.NewGORMRepository(db), projectService, systemClock{}, requestIDGenerator{}, 15*time.Minute).
+	projectExportService := projectexport.NewService(projectexport.NewGORMRepository(db).UseAuditWriter(platformAuditWriter), projectService, systemClock{}, requestIDGenerator{}, 15*time.Minute).
 		UseWorkerReadiness(workerReadiness, workerruntime.HeartbeatMaxAge)
 	projectMessageService := projectmessage.NewService(projectmessage.NewGORMRepository(db), systemClock{}, requestIDGenerator{})
 	codec, err := NewAEADCodec(config.EncryptionKey)
