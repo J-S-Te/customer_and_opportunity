@@ -38,6 +38,7 @@ type Session struct {
 	database.Model
 	PublicID               string      `gorm:"size:64;not null;uniqueIndex"`
 	SessionIDHash          string      `gorm:"size:64;not null;uniqueIndex"`
+	Username               string      `gorm:"size:255;not null;default:''"`
 	PlatformUserID         string      `gorm:"size:128;not null;index"`
 	OIDCSessionID          string      `gorm:"column:oidc_sid;size:128;not null;index"`
 	LoginIP                string      `gorm:"size:45;not null"`

@@ -24,6 +24,7 @@ type Session struct {
 	PlatformUserID         string `gorm:"size:128;not null;index"`
 	OIDCSessionID          string `gorm:"column:oidc_sid;size:128;not null;index"`
 	PersonID               string `gorm:"size:64;not null"`
+	Username               string `gorm:"size:255;not null;default:''"`
 	DisplayName            string `gorm:"size:200;not null"`
 	LoginIP                string `gorm:"size:45;not null"`
 	PrimaryOrgID           string `gorm:"size:64;not null"`

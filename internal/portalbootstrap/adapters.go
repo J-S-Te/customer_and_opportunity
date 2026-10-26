@@ -113,6 +113,22 @@ func (a *OIDCAdapter) ExchangeAndValidate(ctx context.Context, code, verifier, n
 		return account.Claims{}, errors.New("OIDC identity claims are invalid")
 	}
 	claims := compactPortalClaims(raw, a.roleConfigHash, earliestExpiry(idToken.Expiry, token.Expiry), token.AccessToken)
+
+	if strings.TrimSpace(claims.Username) == "" {
+		info, profileErr := a.provider.UserInfo(oidcContext, oauth2.StaticTokenSource(token))
+		if profileErr != nil {
+			return account.Claims{}, fmt.Errorf("load portal OIDC UserInfo: %w", profileErr)
+		}
+		var profile struct {
+			Subject  string `json:"sub"`
+			Username string `json:"preferred_username"`
+		}
+		if profileErr = info.Claims(&profile); profileErr != nil || profile.Subject != claims.Subject {
+			return account.Claims{}, errors.New("portal UserInfo subject changed")
+		}
+		claims.Username = strings.TrimSpace(profile.Username)
+	}
+
 	// 详细角色、权限和授权版本由基础平台按当前访问令牌计算，不能依赖 Keycloak
 	// Token 中可能过期的业务权限快照。
 	contextClaims, effectiveToken, contextErr := a.authorizationContextWithRefresh(ctx, token)
@@ -122,6 +138,7 @@ func (a *OIDCAdapter) ExchangeAndValidate(ctx context.Context, code, verifier, n
 		}
 		contextClaims.RoleConfigHash = a.roleConfigHash
 		contextClaims.OIDCSessionID = claims.OIDCSessionID
+		contextClaims.Username = claims.Username
 		contextClaims.ExpiresAt = earliestExpiry(claims.ExpiresAt, effectiveToken.Expiry)
 		contextClaims.AccessToken = effectiveToken.AccessToken
 		return contextClaims, nil
@@ -132,6 +149,7 @@ func (a *OIDCAdapter) ExchangeAndValidate(ctx context.Context, code, verifier, n
 func compactPortalClaims(raw compactOIDCClaims, roleConfigHash string, expiresAt time.Time, accessToken string) account.Claims {
 	return account.Claims{
 		Subject:        raw.Subject,
+		Username:       strings.TrimSpace(raw.PreferredUsername),
 		OIDCSessionID:  strings.TrimSpace(raw.SessionID),
 		IdentityID:     raw.IdentityID,
 		TenantID:       raw.TenantID,
@@ -154,12 +172,13 @@ func (a *OIDCAdapter) UserInfo(ctx context.Context, accessToken string) (account
 }
 
 type compactOIDCClaims struct {
-	Subject    string `json:"sub"`
-	IdentityID string `json:"identity_id"`
-	Nonce      string `json:"nonce"`
-	TenantID   string `json:"tenant_id"`
-	TokenUse   string `json:"token_use"`
-	SessionID  string `json:"sid"`
+	PreferredUsername string `json:"preferred_username"`
+	Subject           string `json:"sub"`
+	IdentityID        string `json:"identity_id"`
+	Nonce             string `json:"nonce"`
+	TenantID          string `json:"tenant_id"`
+	TokenUse          string `json:"token_use"`
+	SessionID         string `json:"sid"`
 }
 
 func validCompactPortalIdentity(raw compactOIDCClaims, nonce, accessToken string) bool {

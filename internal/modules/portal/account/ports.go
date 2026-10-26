@@ -8,6 +8,7 @@ import (
 )
 
 type Claims struct {
+	Username       string
 	Subject        string
 	OIDCSessionID  string
 	IdentityID     string

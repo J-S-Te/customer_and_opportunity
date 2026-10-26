@@ -67,6 +67,7 @@ var baseFiles = map[Schema][]string{
 		"000117_presale_multi_approval_nodes.up.sql",
 		"000120_customer_import_source_lifecycle.up.sql",
 		"000121_presale_notification_identity.up.sql",
+		"000122_crm_session_username.up.sql",
 	},
 	Portal: {
 		"000008_create_portal_core.up.sql", "000011_portal_session_claims.up.sql", "000016_portal_project_sync.up.sql",
@@ -84,6 +85,7 @@ var baseFiles = map[Schema][]string{
 		"000104_portal_oidc_backchannel_logout.up.sql",
 		"000109_portal_report_revision_ledger.up.sql", "000118_portal_project_permission_modes.up.sql",
 		"000119_add_ip_provenance_to_portal_request_audit_outbox.up.sql",
+		"000123_portal_session_username.up.sql",
 	},
 }
 

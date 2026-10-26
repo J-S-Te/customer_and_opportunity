@@ -178,7 +178,7 @@ func (s *Service) CompleteLogin(ctx context.Context, state, code string, callbac
 	if err != nil {
 		return LoginResult{}, err
 	}
-	session := &Session{SessionIDHash: tokenHash(rawSession), TenantID: claims.TenantID, PlatformUserID: claims.IdentityID, OIDCSessionID: claims.OIDCSessionID, PersonID: claims.PersonID, DisplayName: claims.DisplayName, LoginIP: claims.LoginIP, PrimaryOrgID: claims.PrimaryOrgID, OrganizationIDsJSON: organizationIDsJSON, RolesJSON: rolesJSON, PermissionsJSON: permissionsJSON, DataScopesJSON: dataScopesJSON, RoleConfigHash: claims.RoleConfigHash, AuthzRevision: claims.AuthzRevision, AccessTokenCipher: accessTokenCipher, ExpiresAt: expiresAt, AuthorizationCheckedAt: now, CreatedAt: now, LastSeenAt: now}
+	session := &Session{SessionIDHash: tokenHash(rawSession), TenantID: claims.TenantID, PlatformUserID: claims.IdentityID, OIDCSessionID: claims.OIDCSessionID, PersonID: claims.PersonID, DisplayName: claims.DisplayName, Username: claims.Username, LoginIP: claims.LoginIP, PrimaryOrgID: claims.PrimaryOrgID, OrganizationIDsJSON: organizationIDsJSON, RolesJSON: rolesJSON, PermissionsJSON: permissionsJSON, DataScopesJSON: dataScopesJSON, RoleConfigHash: claims.RoleConfigHash, AuthzRevision: claims.AuthzRevision, AccessTokenCipher: accessTokenCipher, ExpiresAt: expiresAt, AuthorizationCheckedAt: now, CreatedAt: now, LastSeenAt: now}
 	if err := s.repo.CreateSession(ctx, session); err != nil {
 		return LoginResult{}, err
 	}
@@ -255,7 +255,7 @@ func claimsFromSession(session *Session) (verifiedClaims, error) {
 	if err := json.Unmarshal(session.DataScopesJSON, &dataScopes); err != nil {
 		return verifiedClaims{}, err
 	}
-	return verifiedClaims{Subject: session.PlatformUserID, IdentityID: session.PlatformUserID, TenantID: session.TenantID, PersonID: session.PersonID, DisplayName: session.DisplayName, LoginIP: loginip.Normalize(session.LoginIP), PrimaryOrgID: session.PrimaryOrgID, OrganizationIDs: organizationIDs, Roles: roles, Permissions: permissions, DataScopes: dataScopes, RoleConfigHash: session.RoleConfigHash, AuthzRevision: session.AuthzRevision}, nil
+	return verifiedClaims{Subject: session.PlatformUserID, IdentityID: session.PlatformUserID, TenantID: session.TenantID, PersonID: session.PersonID, DisplayName: session.DisplayName, Username: session.Username, LoginIP: loginip.Normalize(session.LoginIP), PrimaryOrgID: session.PrimaryOrgID, OrganizationIDs: organizationIDs, Roles: roles, Permissions: permissions, DataScopes: dataScopes, RoleConfigHash: session.RoleConfigHash, AuthzRevision: session.AuthzRevision}, nil
 }
 
 func principalFromClaims(claims verifiedClaims) sharedauth.Principal {
@@ -266,7 +266,7 @@ func principalFromClaims(claims verifiedClaims) sharedauth.Principal {
 	scope := scopeForDataScopes(claims.DataScopes)
 	// PersonID 只能来自平台显式、租户内的人员绑定；没有绑定时保持为空，绝不能由 sub 猜测，
 	// 否则售前任务等以人员身份授权的数据会被错误归属。
-	return sharedauth.Principal{UserID: claims.Subject, PersonID: claims.PersonID, TenantID: claims.TenantID, DisplayName: claims.DisplayName, LoginIP: claims.LoginIP, PrimaryOrgID: claims.PrimaryOrgID, Roles: append([]string(nil), claims.Roles...), Permissions: permissions, DataScopes: append([]sharedauth.DataScope(nil), claims.DataScopes...), ScopeMode: scope, OrganizationIDs: append([]string(nil), claims.OrganizationIDs...), RoleConfigHash: claims.RoleConfigHash, AuthzRevision: claims.AuthzRevision}
+	return sharedauth.Principal{UserID: claims.Subject, PersonID: claims.PersonID, TenantID: claims.TenantID, DisplayName: claims.DisplayName, Username: claims.Username, LoginIP: claims.LoginIP, PrimaryOrgID: claims.PrimaryOrgID, Roles: append([]string(nil), claims.Roles...), Permissions: permissions, DataScopes: append([]sharedauth.DataScope(nil), claims.DataScopes...), ScopeMode: scope, OrganizationIDs: append([]string(nil), claims.OrganizationIDs...), RoleConfigHash: claims.RoleConfigHash, AuthzRevision: claims.AuthzRevision}
 }
 
 func scopeForDataScopes(scopes []sharedauth.DataScope) sharedauth.ScopeMode {

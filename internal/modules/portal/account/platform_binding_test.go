@@ -112,6 +112,7 @@ func TestCompleteLoginPlatformBindingSkipsLocalLink(t *testing.T) {
 	repository := &completeLoginRepository{activation: activation}
 	claims := validPortalClaims("7")
 	claims.LoginIP = "203.0.113.9"
+	claims.Username = "alice"
 	oidc := &completeLoginOIDC{claims: claims}
 	service := NewServiceWithOptions(repository, oidc, portalInviteNoop{}, passthroughProtector{}, fixedClock{now: now}, &sequenceRandom{}, "catalog-v1", 15*time.Minute, "dev", WithPlatformBinding())
 
@@ -127,6 +128,9 @@ func TestCompleteLoginPlatformBindingSkipsLocalLink(t *testing.T) {
 	}
 	if repository.createdSession == nil || repository.createdSession.CustomerID != 7 {
 		t.Fatalf("created session = %#v", repository.createdSession)
+	}
+	if repository.createdSession.Username != "alice" {
+		t.Fatalf("session username=%q", repository.createdSession.Username)
 	}
 	if repository.createdSession.LoginIP != "203.0.113.9" {
 		t.Fatalf("session login IP=%q", repository.createdSession.LoginIP)

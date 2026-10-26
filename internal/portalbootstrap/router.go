@@ -480,7 +480,7 @@ func authenticate(deps RouterDependencies) gin.HandlerFunc {
 func me(c *gin.Context) {
 	session := currentSession(c)
 	response.OK(c, gin.H{
-		"platform_user_id": session.PlatformUserID, "customer_id": session.CustomerID, "tenant_id": session.TenantID,
+		"username": session.Username, "platform_user_id": session.PlatformUserID, "customer_id": session.CustomerID, "tenant_id": session.TenantID,
 		"role_config_hash": session.RoleConfigHash, "authz_revision": session.AuthzRevision, "expires_at": session.ExpiresAt,
 		"roles": session.Roles, "permissions": session.Permissions, "data_scopes": session.DataScopes,
 	})

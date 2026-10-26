@@ -29,16 +29,16 @@ type OIDCOptions struct {
 }
 
 type verifiedClaims struct {
-	Subject, IdentityID, TenantID, PersonID, DisplayName, RoleConfigHash string
-	OIDCSessionID                                                        string
-	PrimaryOrgID                                                         string
-	OrganizationIDs                                                      []string
-	DataScopes                                                           []sharedauth.DataScope
-	Roles, Permissions                                                   []string
-	AuthzRevision                                                        uint64
-	ExpiresAt                                                            time.Time
-	AccessToken                                                          string
-	LoginIP                                                              string
+	Subject, IdentityID, TenantID, PersonID, DisplayName, RoleConfigHash, Username string
+	OIDCSessionID                                                                  string
+	PrimaryOrgID                                                                   string
+	OrganizationIDs                                                                []string
+	DataScopes                                                                     []sharedauth.DataScope
+	Roles, Permissions                                                             []string
+	AuthzRevision                                                                  uint64
+	ExpiresAt                                                                      time.Time
+	AccessToken                                                                    string
+	LoginIP                                                                        string
 }
 
 type oidcClient interface {
@@ -183,6 +183,22 @@ func (c *platformOIDCClient) Exchange(ctx context.Context, code, verifier, nonce
 	// ID 令牌 的 sub 是平台规范中的 规范身份；若令牌同时返回别名，
 	// 两者必须一致，避免 CRM 在不同令牌载荷间产生两个主体。
 	claims := claimsFromPlatform(raw)
+
+	if strings.TrimSpace(claims.Username) == "" {
+		info, profileErr := c.provider.UserInfo(oidcContext, oauth2.StaticTokenSource(token))
+		if profileErr != nil {
+			return verifiedClaims{}, fmt.Errorf("load CRM OIDC UserInfo: %w", profileErr)
+		}
+		var profile struct {
+			Subject  string `json:"sub"`
+			Username string `json:"preferred_username"`
+		}
+		if profileErr = info.Claims(&profile); profileErr != nil || profile.Subject != claims.Subject {
+			return verifiedClaims{}, errors.New("CRM UserInfo subject changed")
+		}
+		claims.Username = strings.TrimSpace(profile.Username)
+	}
+
 	claims.AccessToken = token.AccessToken
 	claims.ExpiresAt = earliestExpiry(idToken.Expiry, token.Expiry)
 	// Keycloak Token 只承载稳定身份和少量 OIDC 元数据。详细角色、权限和组织范围
@@ -195,6 +211,7 @@ func (c *platformOIDCClient) Exchange(ctx context.Context, code, verifier, nonce
 		return verifiedClaims{}, errors.New("CRM authorization context identity does not match OIDC identity")
 	}
 	contextClaims.DisplayName = claims.DisplayName
+	contextClaims.Username = claims.Username
 	contextClaims.OIDCSessionID = claims.OIDCSessionID
 	contextClaims.PersonID = firstNonEmpty(contextClaims.PersonID, claims.PersonID)
 	contextClaims.ExpiresAt = earliestExpiry(claims.ExpiresAt, effectiveToken.Expiry)
@@ -228,6 +245,7 @@ func (c *platformOIDCClient) UserInfo(ctx context.Context, accessToken string) (
 		return verifiedClaims{}, errors.New("CRM UserInfo subject changed")
 	}
 	claims.DisplayName = firstNonEmpty(raw.Name, raw.PreferredUsername, raw.Email)
+	claims.Username = strings.TrimSpace(raw.PreferredUsername)
 	return claims, nil
 }
 
@@ -307,7 +325,7 @@ func claimsFromPlatform(raw platformClaims) verifiedClaims {
 	if identityID == "" {
 		return verifiedClaims{}
 	}
-	return verifiedClaims{Subject: raw.Subject, IdentityID: identityID, TenantID: raw.TenantID, PersonID: raw.PersonID, DisplayName: displayName, OIDCSessionID: strings.TrimSpace(raw.SessionID)}
+	return verifiedClaims{Subject: raw.Subject, IdentityID: identityID, TenantID: raw.TenantID, PersonID: raw.PersonID, DisplayName: displayName, Username: strings.TrimSpace(raw.PreferredUsername), OIDCSessionID: strings.TrimSpace(raw.SessionID)}
 }
 
 func normalizeAuthorization(claims verifiedClaims, expectedTenantID, expectedRoleConfigHash, expectedEnvironmentCode string, maxRoles int) (verifiedClaims, error) {

@@ -128,3 +128,10 @@ func TestPortalAuthorizationURLCarriesBrokerHintAndPKCE(t *testing.T) {
 		}
 	}
 }
+
+func TestCompactPortalClaimsCarriesLoginUsernameWithoutReplacingSubject(t *testing.T) {
+	claims := compactPortalClaims(compactOIDCClaims{Subject: "subject", IdentityID: "identity", PreferredUsername: " alice "}, "catalog", time.Now().Add(time.Hour), "token")
+	if claims.Username != "alice" || claims.Subject != "subject" || claims.IdentityID != "identity" {
+		t.Fatalf("claims=%#v", claims)
+	}
+}

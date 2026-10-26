@@ -410,3 +410,23 @@ func TestNormalizeAuthorizationMapsPlatformSuperAdminToCRMSuperAdmin(t *testing.
 		t.Fatalf("normalized permissions = %#v, want CRM super-admin catalog", normalized.Permissions)
 	}
 }
+
+func TestCRMSessionRestoresLoginUsernameSeparatelyFromDisplayName(t *testing.T) {
+	now := time.Date(2026, 10, 26, 0, 0, 0, 0, time.UTC)
+	claims := validClaims(now)
+	claims.Username = "alice"
+	repo := newMemoryRepo()
+	service := newTestService(t, repo, &fakeOIDC{exchanged: claims}, now)
+	start, err := service.BeginLogin(context.Background(), "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := service.CompleteLogin(context.Background(), strings.Split(start.AuthorizationURL, "state=")[1], "code")
+	if err != nil {
+		t.Fatal(err)
+	}
+	principal, err := service.Authenticate(context.Background(), result.SessionToken)
+	if err != nil || principal.Username != "alice" || principal.DisplayName != "User One" {
+		t.Fatalf("principal=%#v err=%v", principal, err)
+	}
+}

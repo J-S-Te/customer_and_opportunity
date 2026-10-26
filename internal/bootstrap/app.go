@@ -165,7 +165,7 @@ func New(config Config) (*App, error) {
 		sort.Strings(permissions)
 		response.OK(c, gin.H{
 			"user_id": principal.UserID, "person_id": principal.PersonID,
-			"tenant_id": principal.TenantID, "display_name": principal.DisplayName,
+			"tenant_id": principal.TenantID, "display_name": principal.DisplayName, "username": principal.Username,
 			"primary_org_id": principal.PrimaryOrgID, "organization_ids": append([]string{}, principal.OrganizationIDs...),
 			"roles": principal.Roles, "permissions": permissions, "scope_mode": principal.ScopeMode,
 			"role_config_hash": principal.RoleConfigHash, "authz_revision": principal.AuthzRevision,
