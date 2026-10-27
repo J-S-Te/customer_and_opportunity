@@ -13,6 +13,8 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -23,6 +25,9 @@ type DispatcherOptions struct {
 	PollInterval                                                                        time.Duration
 	BatchSize                                                                           int
 	HTTPClient                                                                          *http.Client
+	// DeliveredRetention 是 DELIVERED 行的保留时长（审计 P1）。零值默认 30 天；
+	// 负值关闭清理。过期行由 Run 循环周期性删除。
+	DeliveredRetention time.Duration
 }
 
 type deliveryStore interface {
@@ -31,6 +36,7 @@ type deliveryStore interface {
 	HoldSourceMismatch(context.Context, string, []Record, time.Time) error
 	Retry(context.Context, string, []Record, string, time.Time, time.Time) error
 	Delivered(context.Context, string, []Record, time.Time) error
+	PurgeDelivered(context.Context, time.Time) (int64, error)
 }
 
 type Dispatcher struct {
@@ -45,6 +51,7 @@ type Dispatcher struct {
 	mu                       sync.Mutex
 	token                    string
 	tokenExpiresAt           time.Time
+	deliveredRetention       time.Duration
 }
 
 type platformHTTPError struct{ status int }
@@ -79,6 +86,16 @@ func NewDispatcher(store *Store, options DispatcherOptions) (*Dispatcher, error)
 	if options.BatchSize <= 0 || options.BatchSize > 100 {
 		options.BatchSize = 100
 	}
+	// DELIVERED 行保留时长（审计 P1）：默认 30 天；可用 AUDIT_OUTBOX_DELIVERED_RETENTION_DAYS
+	// 覆盖（单位天，负值关闭清理）；显式正值选项优先于环境变量。
+	if options.DeliveredRetention == 0 {
+		options.DeliveredRetention = 30 * 24 * time.Hour
+		if raw := strings.TrimSpace(os.Getenv("AUDIT_OUTBOX_DELIVERED_RETENTION_DAYS")); raw != "" {
+			if days, err := strconv.Atoi(raw); err == nil {
+				options.DeliveredRetention = time.Duration(days) * 24 * time.Hour
+			}
+		}
+	}
 	client := options.HTTPClient
 	if client == nil {
 		client = &http.Client{Timeout: 8 * time.Second}
@@ -89,6 +106,7 @@ func NewDispatcher(store *Store, options DispatcherOptions) (*Dispatcher, error)
 		store: store, baseURL: strings.TrimRight(options.PlatformBaseURL, "/"), clientID: options.ClientID,
 		clientSecret: options.ClientSecret, application: options.ApplicationCode, environment: options.EnvironmentCode,
 		workerID: options.WorkerID, pollInterval: options.PollInterval, batchSize: options.BatchSize, client: &clientCopy,
+		deliveredRetention: options.DeliveredRetention,
 	}, nil
 }
 
@@ -104,6 +122,23 @@ func (d *Dispatcher) Run(ctx context.Context) {
 				slog.ErrorContext(ctx, "request audit dispatch failed", "application_code", d.application,
 					"environment_code", d.environment, "worker_id", d.workerID, "error_code", deliveryErrorCode(err))
 				lastFailureLog = time.Now()
+			}
+		}
+		// DELIVERED 行周期清理（审计 P1）：保留 deliveredRetention，单批最多 1000 行，
+		// 连续删到清空或 20 批为止；清理失败不影响投递主流程，只记结构化日志。
+		if d.deliveredRetention > 0 {
+			olderThan := time.Now().UTC().Add(-d.deliveredRetention)
+			for batch := 0; batch < 20; batch++ {
+				purged, err := d.store.PurgeDelivered(ctx, olderThan)
+				if err != nil {
+					if !errors.Is(err, context.Canceled) {
+						slog.WarnContext(ctx, "purge delivered audit outbox rows failed", "error", err.Error())
+					}
+					break
+				}
+				if purged == 0 {
+					break
+				}
 			}
 		}
 		select {

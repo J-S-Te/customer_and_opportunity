@@ -34,6 +34,7 @@ func (s *holdTestStore) Delivered(_ context.Context, _ string, rows []Record, _ 
 	s.delivered = rows
 	return nil
 }
+func (s *holdTestStore) PurgeDelivered(context.Context, time.Time) (int64, error) { return 0, nil }
 
 func TestRunOnceHoldsWrongSourceAndDeliversMatchingRows(t *testing.T) {
 	s := &holdTestStore{values: []Record{

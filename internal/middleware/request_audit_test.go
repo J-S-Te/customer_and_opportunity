@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -16,9 +18,10 @@ import (
 )
 
 type requestAuditCapture struct {
-	start      requestaudit.Start
-	completion requestaudit.Completion
-	startErr   error
+	start       requestaudit.Start
+	completion  requestaudit.Completion
+	startErr    error
+	completeErr error
 }
 
 func (c *requestAuditCapture) Start(_ context.Context, value requestaudit.Start) error {
@@ -28,7 +31,7 @@ func (c *requestAuditCapture) Start(_ context.Context, value requestaudit.Start)
 
 func (c *requestAuditCapture) Complete(_ context.Context, _ string, value requestaudit.Completion) error {
 	c.completion = value
-	return nil
+	return c.completeErr
 }
 
 func TestRequestAuditCapturesPlatformPrincipalAndNormalizedRoute(t *testing.T) {
@@ -221,5 +224,131 @@ func TestRequestAuditFailsClosedBeforeHandlerWhenReservationFails(t *testing.T) 
 	}
 	if !store.completion.CompletedAt.Equal(time.Time{}) {
 		t.Fatalf("unexpected completion=%+v", store.completion)
+	}
+}
+
+// requestAuditBusinessRouter 注册一条写路由：挂载平台主体并写出业务响应，供强制审计模式用例复用。
+func requestAuditBusinessRouter(store requestAuditStore, body string, writes int) *gin.Engine {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.Use(RequestID(), RequestAudit(store, RequestAuditOptions{TenantID: "tenant-a", ApplicationCode: "customer_and_opportunity", EnvironmentCode: "test"}))
+	router.POST("/customers", func(c *gin.Context) {
+		principal := auth.Principal{UserID: "user-a", DisplayName: "User A", TenantID: "tenant-a", LoginIP: "203.0.113.9"}
+		c.Request = c.Request.WithContext(auth.WithPrincipal(c.Request.Context(), principal))
+		c.Header("X-Business-Header", "value")
+		c.Status(http.StatusCreated)
+		for i := 0; i < writes; i++ {
+			_, _ = c.Writer.WriteString(body)
+		}
+	})
+	return router
+}
+
+// SEC-D4b 对齐平台：强制审计模式下 Complete 失败必须拒绝请求——扣留的业务响应被丢弃，
+// 客户端收到 503 COMMON_AUDIT_UNAVAILABLE，不能只剩分发器补出的匿名“请求已开始→中断”记录却放行成功。
+func TestRequestAuditRequiredModeRejectsWhenFinalizeFails(t *testing.T) {
+	t.Setenv("PLATFORM_AUDIT_REQUIRED", "true")
+	store := &requestAuditCapture{completeErr: errors.New("audit outbox unavailable")}
+	router := requestAuditBusinessRouter(store, "customer created", 1)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/customers", nil))
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), "COMMON_AUDIT_UNAVAILABLE") || strings.Contains(response.Body.String(), "customer created") {
+		t.Fatalf("body=%s", response.Body.String())
+	}
+	if response.Header().Get("X-Business-Header") != "" {
+		t.Fatal("business headers must not leak when the request is rejected")
+	}
+	if store.completion.ActorID != "user-a" || store.completion.Route != "/customers" {
+		t.Fatalf("completion must still be attempted with the full operation summary: %+v", store.completion)
+	}
+}
+
+// 强制审计模式 + Complete 成功：扣留的响应原样提交（状态码、头、体）。
+func TestRequestAuditRequiredModeFlushesResponseWhenFinalizeSucceeds(t *testing.T) {
+	t.Setenv("PLATFORM_AUDIT_REQUIRED", "true")
+	store := &requestAuditCapture{}
+	router := requestAuditBusinessRouter(store, "customer created", 1)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/customers", nil))
+	if response.Code != http.StatusCreated || response.Body.String() != "customer created" || response.Header().Get("X-Business-Header") != "value" {
+		t.Fatalf("status=%d body=%q header=%q", response.Code, response.Body.String(), response.Header().Get("X-Business-Header"))
+	}
+	if store.completion.Result != "SUCCESS" || store.completion.HTTPStatus != http.StatusCreated {
+		t.Fatalf("completion=%+v", store.completion)
+	}
+}
+
+// 非强制模式保持旧行为：Complete 失败只记日志，业务响应照常返回（滞留 STARTED 由分发器转中断失败）。
+func TestRequestAuditNonRequiredModeKeepsLegacyBehaviorWhenFinalizeFails(t *testing.T) {
+	t.Setenv("PLATFORM_AUDIT_REQUIRED", "false")
+	store := &requestAuditCapture{completeErr: errors.New("audit outbox unavailable")}
+	router := requestAuditBusinessRouter(store, "customer created", 1)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/customers", nil))
+	if response.Code != http.StatusCreated || response.Body.String() != "customer created" {
+		t.Fatalf("status=%d body=%q", response.Code, response.Body.String())
+	}
+}
+
+// 大响应溢写临时文件后仍受同一拒绝语义约束，成功时逐字节原样回放，临时文件随即清理。
+func TestRequestAuditRequiredModeSpillsLargeResponseAndReplaysIntact(t *testing.T) {
+	t.Setenv("PLATFORM_AUDIT_REQUIRED", "true")
+	tmp := t.TempDir()
+	t.Setenv("TMPDIR", tmp)
+	store := &requestAuditCapture{}
+	chunk := strings.Repeat("x", 1024)
+	writes := maxRequestAuditBufferedResponseBytes/len(chunk) + 2
+	router := requestAuditBusinessRouter(store, chunk, writes)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/customers", nil))
+	if response.Code != http.StatusCreated || response.Body.String() != strings.Repeat(chunk, writes) {
+		t.Fatalf("status=%d len=%d want=%d", response.Code, response.Body.Len(), len(chunk)*writes)
+	}
+	assertNoRequestAuditSpillFiles(t, tmp)
+
+	failing := &requestAuditCapture{completeErr: errors.New("audit outbox unavailable")}
+	response = httptest.NewRecorder()
+	requestAuditBusinessRouter(failing, chunk, writes).ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/customers", nil))
+	if response.Code != http.StatusServiceUnavailable || strings.Contains(response.Body.String(), chunk[:64]) {
+		t.Fatalf("spilled response must be discarded on finalize failure: status=%d", response.Code)
+	}
+	assertNoRequestAuditSpillFiles(t, tmp)
+}
+
+// 超过硬上限：审计如实记为 FAILURE / AUDIT_RESPONSE_TOO_LARGE，客户端收到 503，不能“审计记成功、客户端拿 503”。
+func TestRequestAuditRequiredModeRejectsResponseBeyondSpillHardLimit(t *testing.T) {
+	t.Setenv("PLATFORM_AUDIT_REQUIRED", "true")
+	tmp := t.TempDir()
+	t.Setenv("TMPDIR", tmp)
+	original := maxRequestAuditSpilledResponseBytes
+	maxRequestAuditSpilledResponseBytes = 2048
+	defer func() { maxRequestAuditSpilledResponseBytes = original }()
+	store := &requestAuditCapture{}
+	router := requestAuditBusinessRouter(store, strings.Repeat("x", 1024), 3)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/customers", nil))
+	if response.Code != http.StatusServiceUnavailable || !strings.Contains(response.Body.String(), "COMMON_AUDIT_RESPONSE_TOO_LARGE") {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	if store.completion.Result != "FAILURE" || store.completion.ReasonCode != "AUDIT_RESPONSE_TOO_LARGE" || store.completion.RiskLevel != "HIGH" {
+		t.Fatalf("completion=%+v", store.completion)
+	}
+	if store.completion.HTTPStatus != http.StatusCreated {
+		t.Fatalf("handler status must be preserved for traceability: %+v", store.completion)
+	}
+	assertNoRequestAuditSpillFiles(t, tmp)
+}
+
+func assertNoRequestAuditSpillFiles(t *testing.T, dir string) {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read TMPDIR %q: %v", dir, err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("spill temp files left behind in %s: %d entries", dir, len(entries))
 	}
 }

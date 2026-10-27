@@ -139,6 +139,16 @@ func (s *Store) Delivered(ctx context.Context, workerID string, values []Record,
 		}).Error
 }
 
+// PurgeDelivered 清理已成功投递且 delivered_at 早于 cutoff 的 Outbox 行
+// （审计 P1：DELIVERED 行此前永不清理，表会无限增长）。仅删除 DELIVERED 状态；
+// 失败/重试/挂起事件一律保留。返回删除行数。条件全部参数化。
+func (s *Store) PurgeDelivered(ctx context.Context, olderThan time.Time) (int64, error) {
+	result := s.db.WithContext(ctx).Table(s.tableName).
+		Where("delivery_status = ? AND delivered_at IS NOT NULL AND delivered_at < ?", StatusDelivered, olderThan.UTC()).
+		Delete(map[string]any{})
+	return result.RowsAffected, result.Error
+}
+
 // HoldSourceMismatch 保留永久不匹配事件，避免重复写入。
 // Claim 会排除 next_attempt_at 为 NULL 的记录，旧工作器同样如此。
 // 租约持有者条件阻止过期工作器修改其他认领。

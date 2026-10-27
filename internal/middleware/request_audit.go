@@ -5,6 +5,8 @@ import (
 	"log/slog"
 	"net/http"
 	"net/netip"
+	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -54,6 +56,24 @@ func RequestAudit(store requestAuditStore, options RequestAuditOptions) gin.Hand
 			return
 		}
 
+		// 强制审计模式（SEC-D4b，与平台/data_analysis/project_management 同一判定）：
+		// 先扣留业务响应，Complete 成功后才放行；失败即丢弃响应并返回 503，
+		// 保证“审计写不完整 ⇒ 客户端拿不到成功”，避免只剩匿名“请求已开始→中断”记录。
+		// 非强制模式行为不变（响应照常返回，滞留 STARTED 行由分发器转中断失败）。
+		required := auditRequired()
+		origWriter := c.Writer
+		var buffered *requestAuditBuffer
+		if required {
+			buffered = newRequestAuditBuffer(origWriter, slog.Default())
+			c.Writer = buffered
+		}
+		// handler panic 展平时先恢复真实 writer；扣留的半成品响应直接丢弃并清理临时文件。
+		defer func() {
+			c.Writer = origWriter
+			if buffered != nil {
+				buffered.dispose()
+			}
+		}()
 		c.Next()
 		completedAt := time.Now().UTC()
 		actorType, actorID, actorName, userLoginIP := "SYSTEM", "", "", ""
@@ -89,6 +109,14 @@ func RequestAudit(store requestAuditStore, options RequestAuditOptions) gin.Hand
 			risk = "MEDIUM"
 		}
 		reason := observability.ErrorCode(c)
+		// 响应超过硬上限时无法在审计确认前完整扣留：按失败如实记录（保留 handler 状态码供
+		// 追溯），随后拒绝请求——绝不记录“成功”却把 503 交给客户端。
+		oversized := buffered != nil && buffered.oversized
+		if oversized {
+			result = "FAILURE"
+			reason = "AUDIT_RESPONSE_TOO_LARGE"
+			risk = "HIGH"
+		}
 		finalizeCtx, cancel := context.WithTimeout(context.WithoutCancel(c.Request.Context()), 2*time.Second)
 		defer cancel()
 		// AUD-IP-2026：业务层拿不到请求；把解析好的来源放进上下文，
@@ -102,11 +130,38 @@ func RequestAudit(store requestAuditStore, options RequestAuditOptions) gin.Hand
 			Action: "HTTP_" + safeHTTPMethod(c.Request.Method) + " " + route, Route: route,
 			HTTPStatus: status, Result: result, ReasonCode: reason, RiskLevel: risk, CompletedAt: completedAt,
 		}); err != nil {
-			// STARTED 预留记录保持持久化，由分发器
-			// 转为中断失败。禁止记录请求内容。
+			// 强制审计模式：丢弃扣留的响应并返回 503，客户端不能在审计未确认时拿到成功；
+			// 业务写入虽已提交，但重试路径普遍携带幂等键（SEC-D4b 与平台同一取舍）。
+			// 非强制模式保持旧行为：STARTED 预留记录保持持久化，由分发器转为中断失败。
+			// 禁止记录请求内容。
 			slog.Default().ErrorContext(finalizeCtx, "finalize request audit", "request_id", request.ID(c.Request.Context()), "error", err)
+			if buffered != nil {
+				c.Writer = origWriter
+				response.Error(c, apperror.New(http.StatusServiceUnavailable, "COMMON_AUDIT_UNAVAILABLE", "operation audit is unavailable"))
+				return
+			}
+		}
+		if oversized {
+			// 审计已如实记录“响应超限、未被确认”，客户端同样不能拿到成功。
+			c.Writer = origWriter
+			response.Error(c, apperror.New(http.StatusServiceUnavailable, "COMMON_AUDIT_RESPONSE_TOO_LARGE", "response exceeds audit hold limit"))
+			return
+		}
+		if buffered != nil {
+			buffered.flushTo(origWriter)
 		}
 	}
+}
+
+// auditRequired 判定是否处于强制审计模式：PLATFORM_AUDIT_REQUIRED 显式设置优先，
+// 否则环境码为 prod 时默认强制。与平台 / data_analysis / project_management 的判定一致。
+func auditRequired() bool {
+	raw := strings.TrimSpace(os.Getenv("PLATFORM_AUDIT_REQUIRED"))
+	if raw != "" {
+		required, err := strconv.ParseBool(raw)
+		return err == nil && required
+	}
+	return strings.EqualFold(strings.TrimSpace(os.Getenv("PLATFORM_ENVIRONMENT_CODE")), "prod")
 }
 
 // isProbePath 仅识别基础设施探针端点，包括其
