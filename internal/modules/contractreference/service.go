@@ -17,6 +17,9 @@ import (
 
 var ErrInvalidReference = apperror.New(http.StatusUnprocessableEntity, "CRM_CONTRACT_REFERENCE_INVALID", "customer or opportunity reference is invalid")
 
+var ErrActorContextRequired = apperror.New(http.StatusUnprocessableEntity,
+	"CRM_CONTRACT_REFERENCE_ACTOR_CONTEXT_REQUIRED", "请使用同一账号连接 CRM 后重试")
+
 const maximumActorAuthorizationAge = 2 * time.Minute
 
 type CustomerReference struct {
@@ -103,8 +106,8 @@ type Service struct{ repository Repository }
 func NewService(repository Repository) *Service { return &Service{repository: repository} }
 
 // Resolve 返回合同管理所需的最小权威 CRM 快照。
-// 租户始终取自已验证的机器主体；
-// 不接受调用方传入的租户或客户名称。
+// 参数：ctx提供已验证机器租户，客户/商机ID及actorID限定当前操作者的数据范围。
+// 返回值：最小引用；缺少近期授权、无效引用及依赖错误分别返回，不披露不可见客户。
 func (service *Service) Resolve(ctx context.Context, customerID uint64, opportunityID *uint64, actorID string) (Reference, error) {
 	machine, ok := auth.FromContext(ctx)
 	if !ok || machine.TenantID == "" {
@@ -114,7 +117,13 @@ func (service *Service) Resolve(ctx context.Context, customerID uint64, opportun
 		return Reference{}, ErrInvalidReference
 	}
 	actor, err := service.repository.ActorPrincipal(ctx, machine.TenantID, actorID, time.Now().UTC())
-	if err != nil || !actor.HasPermission("customer.read") || opportunityID != nil && !actor.HasPermission("opportunity.read") {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return Reference{}, ErrActorContextRequired
+	}
+	if err != nil {
+		return Reference{}, err
+	}
+	if !actor.HasPermission("customer.read") || opportunityID != nil && !actor.HasPermission("opportunity.read") {
 		return Reference{}, ErrInvalidReference
 	}
 	customerReference, err := service.repository.ActiveCustomer(ctx, actor, customerID)
