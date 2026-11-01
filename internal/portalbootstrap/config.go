@@ -101,9 +101,9 @@ func LoadConfig() (Config, error) {
 	if err != nil {
 		return Config{}, fmt.Errorf("PORTAL_ALLOW_INSECURE_HTTP_SESSION: %w", err)
 	}
-	centralEnabled, err := strconv.ParseBool(valueOrDefault("CENTRAL_SESSION_ENABLED", "false"))
+	centralEnabled, err := strconv.ParseBool(valueOrDefault("PORTAL_CENTRAL_SESSION_ENABLED", "false"))
 	if err != nil {
-		return Config{}, fmt.Errorf("CENTRAL_SESSION_ENABLED: %w", err)
+		return Config{}, fmt.Errorf("PORTAL_CENTRAL_SESSION_ENABLED: %w", err)
 	}
 	ttl, err := time.ParseDuration(valueOrDefault("PORTAL_SESSION_TTL", "15m"))
 	if err != nil {
@@ -159,7 +159,7 @@ func LoadConfig() (Config, error) {
 	}
 	config := Config{
 		CentralSessionEnabled:       centralEnabled,
-		CentralSessionPublicBaseURL: valueOrDefault("CENTRAL_SESSION_PUBLIC_BASE_URL", os.Getenv("PORTAL_PUBLIC_ORIGIN")),
+		CentralSessionPublicBaseURL: valueOrDefault("PORTAL_CENTRAL_SESSION_PUBLIC_BASE_URL", os.Getenv("PORTAL_PUBLIC_ORIGIN")),
 		Address:                     valueOrDefault("PORTAL_HTTP_ADDRESS", ":8091"), MySQLDSN: os.Getenv("PORTAL_MYSQL_DSN"),
 		PathPrefix: valueOrDefault("PORTAL_PATH_PREFIX", "/customer-portal"), PublicOrigin: os.Getenv("PORTAL_PUBLIC_ORIGIN"),
 		TenantID: os.Getenv("PORTAL_OIDC_TENANT_ID"), RoleConfigHash: os.Getenv("PORTAL_ROLE_CONFIG_HASH"),
