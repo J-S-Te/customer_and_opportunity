@@ -17,10 +17,12 @@ import (
 	sharedauth "github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/auth"
 	sharedauthorization "github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/authorizationcontext"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/loginip"
+	central "github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/sessiongovernance"
 	"golang.org/x/oauth2"
 )
 
 type OIDCOptions struct {
+	CentralClient                                                                    central.Client
 	Issuer, BackchannelBaseURL, PlatformBaseURL, ClientID, ClientSecret, RedirectURI string
 	ApplicationCode, EnvironmentCode                                                 string
 	IdentityProviderHint                                                             string
@@ -29,6 +31,9 @@ type OIDCOptions struct {
 }
 
 type verifiedClaims struct {
+	RefreshToken                                                                   string
+	AccessTokenExpiresAt                                                           time.Time
+	CentralBinding                                                                 central.Binding
 	Subject, IdentityID, TenantID, PersonID, DisplayName, RoleConfigHash, Username string
 	OIDCSessionID                                                                  string
 	PrimaryOrgID                                                                   string
@@ -64,6 +69,7 @@ type platformClaims struct {
 }
 
 type platformOIDCClient struct {
+	central              central.Client
 	config               oauth2.Config
 	verifier             *oidc.IDTokenVerifier
 	provider             *oidc.Provider
@@ -74,6 +80,12 @@ type platformOIDCClient struct {
 	expectedContext      sharedauthorization.Expectation
 }
 
+// NewPlatformOIDCClient 装配受登记发行者约束的OIDC客户端。
+// 参数：ctx为调用上下文与取消边界。
+//
+//	options为本应用认证及运行选项。
+//
+// 返回值：装配后的应用或认证实例；配置与依赖装配失败时返回错误。
 func NewPlatformOIDCClient(ctx context.Context, options OIDCOptions) (*platformOIDCClient, error) {
 	httpClient := &http.Client{Timeout: 10 * time.Second}
 	if options.BackchannelBaseURL != "" {
@@ -99,6 +111,7 @@ func NewPlatformOIDCClient(ctx context.Context, options OIDCOptions) (*platformO
 		return nil, err
 	}
 	return &platformOIDCClient{
+		central:    options.CentralClient,
 		httpClient: httpClient, provider: provider,
 		platformBaseURL:      strings.TrimRight(options.PlatformBaseURL, "/"),
 		identityProviderHint: strings.TrimSpace(options.IdentityProviderHint),
@@ -143,10 +156,24 @@ func (c *platformOIDCClient) AuthorizationURL(state, nonce, verifier string) str
 	return c.AuthorizationURLWithPrompt(state, nonce, verifier, false)
 }
 
+// AuthorizationURLWithPrompt 保留原state、nonce和PKCE构造指定认证提示的地址。
+// 参数：state为原始登录事务随机状态。
+//
+//	nonce为原OIDC登录随机校验材料。
+//	verifier为原PKCE秘密。
+//	forceLogin为是否要求重新认证。
+//
+// 返回值：绑定原登录事务的授权地址；构造失败按原错误模型返回。
 func (c *platformOIDCClient) AuthorizationURLWithPrompt(state, nonce, verifier string, forceLogin bool) string {
 	options := []oauth2.AuthCodeOption{oidc.Nonce(nonce), oauth2.S256ChallengeOption(verifier)}
+	if c.central != nil {
+		options = append(options, oauth2.SetAuthURLParam("claims", `{"id_token":{"auth_time":{"essential":true}}}`))
+	}
 	if forceLogin {
 		options = append(options, oauth2.SetAuthURLParam("prompt", "login"))
+		if c.central != nil {
+			options = append(options, oauth2.SetAuthURLParam("max_age", "0"))
+		}
 	}
 	if c.identityProviderHint != "" {
 		// Keycloak 的 kc_idp_hint 会直接把认证请求交给基础平台 Broker。
@@ -156,7 +183,29 @@ func (c *platformOIDCClient) AuthorizationURLWithPrompt(state, nonce, verifier s
 	return c.config.AuthCodeURL(state, options...)
 }
 
+// Exchange 交换授权码并独立验证身份与授权声明。
+// 参数：ctx为调用上下文与取消边界。
+//
+//	code为一次性OIDC授权码。
+//	verifier为原PKCE秘密。
+//	nonce为原OIDC登录随机校验材料。
+//
+// 返回值：已经校验的身份或轮换材料；协议、签名或依赖失败返回错误。
 func (c *platformOIDCClient) Exchange(ctx context.Context, code, verifier, nonce string) (verifiedClaims, error) {
+	return c.exchange(ctx, code, verifier, nonce, "")
+}
+
+// ExchangeWithCentral 以完整OIDC验证结果完成中央绑定，再读取业务授权快照。
+// 参数：ctx为请求，code为授权码，verifier/nonce为原事务秘密，ticket为一次性桥接票据。
+// 返回值：保持原始中央截止的授权声明；任一可信链路失败均不创建本地会话。
+func (c *platformOIDCClient) ExchangeWithCentral(ctx context.Context, code, verifier, nonce, ticket string) (verifiedClaims, error) {
+	return c.exchange(ctx, code, verifier, nonce, ticket)
+}
+
+// exchange 统一处理标准换码和受控中央桥接，不允许跳过nonce、签名或业务授权。
+// 参数：ctx为请求，code/verifier/nonce为OIDC材料，ticket为中央票据或旧模式空值。
+// 返回值：有效授权及仅服务器可见的刷新、绑定材料；失败返回错误。
+func (c *platformOIDCClient) exchange(ctx context.Context, code, verifier, nonce, ticket string) (verifiedClaims, error) {
 	if strings.TrimSpace(code) == "" || verifier == "" || nonce == "" {
 		return verifiedClaims{}, errors.New("CRM OIDC callback parameters are incomplete")
 	}
@@ -183,6 +232,22 @@ func (c *platformOIDCClient) Exchange(ctx context.Context, code, verifier, nonce
 	// ID 令牌 的 sub 是平台规范中的 规范身份；若令牌同时返回别名，
 	// 两者必须一致，避免 CRM 在不同令牌载荷间产生两个主体。
 	claims := claimsFromPlatform(raw)
+	var binding central.Binding
+	if c.central != nil {
+		if ticket == "" {
+			return verifiedClaims{}, ErrUnauthenticated
+		}
+		binding, err = c.central.Complete(ctx, ticket, token.AccessToken, rawIDToken)
+		if errors.Is(err, central.ErrUnavailable) {
+			return verifiedClaims{}, sharedauthorization.ErrUnavailable
+		}
+		if err != nil {
+			return verifiedClaims{}, ErrUnauthenticated
+		}
+		if binding.Context.SubjectID != claims.IdentityID || binding.Context.TenantID != claims.TenantID {
+			return verifiedClaims{}, ErrUnauthenticated
+		}
+	}
 
 	if strings.TrimSpace(claims.Username) == "" {
 		info, profileErr := c.provider.UserInfo(oidcContext, oauth2.StaticTokenSource(token))
@@ -216,6 +281,9 @@ func (c *platformOIDCClient) Exchange(ctx context.Context, code, verifier, nonce
 	contextClaims.PersonID = firstNonEmpty(contextClaims.PersonID, claims.PersonID)
 	contextClaims.ExpiresAt = earliestExpiry(claims.ExpiresAt, effectiveToken.Expiry)
 	contextClaims.AccessToken = effectiveToken.AccessToken
+	contextClaims.RefreshToken = effectiveToken.RefreshToken
+	contextClaims.AccessTokenExpiresAt = effectiveToken.Expiry.UTC()
+	contextClaims.CentralBinding = binding
 	return contextClaims, nil
 }
 

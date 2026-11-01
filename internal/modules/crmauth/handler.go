@@ -29,16 +29,48 @@ func NewHandler(service *Service, options HTTPOptions) *Handler {
 	return &Handler{service: service, options: options}
 }
 
+// Login 建立原state、nonce和PKCE事务并进入可信登录流程。
+// 参数：c为当前HTTP请求上下文。
+// 返回值：无。
 func (h *Handler) Login(c *gin.Context) {
 	result, err := h.service.BeginLogin(c.Request.Context(), c.Query("return_to"), strings.EqualFold(strings.TrimSpace(c.Query("prompt")), "login"))
 	if err != nil {
 		response.Error(c, err)
 		return
 	}
+	if h.service.options.CentralClient != nil {
+		http.SetCookie(c.Writer, &http.Cookie{Name: h.options.CookieName + "_oidc_state", Value: result.State, Path: h.cookiePath(), HttpOnly: true, Secure: h.options.CookieSecure, SameSite: http.SameSiteLaxMode, MaxAge: 600})
+	}
 	c.Redirect(http.StatusFound, result.AuthorizationURL)
 }
 
+// Callback 消费原登录事务，验证身份并创建受中央期限约束的本地会话。
+// 参数：c为当前HTTP请求上下文。
+// 返回值：无。
 func (h *Handler) Callback(c *gin.Context) {
+	if h.service.options.CentralClient != nil {
+		cookie, err := c.Request.Cookie(h.options.CookieName + "_oidc_state")
+		if err != nil || cookie.Value == "" || cookie.Value != c.Query("state") {
+			response.Error(c, apperror.ErrUnauthenticated)
+			return
+		}
+		c.Header("Cache-Control", "no-store")
+		c.Header("Referrer-Policy", "no-referrer")
+		if ticket := c.Query("session_link_ticket"); ticket != "" {
+			if c.Query("code") != "" {
+				response.Error(c, apperror.ErrUnauthenticated)
+				return
+			}
+			start, err := h.service.AcceptSessionLink(c.Request.Context(), cookie.Value, ticket)
+			if err != nil {
+				writeSessionFailure(c, err)
+				return
+			}
+			c.Redirect(http.StatusFound, start.AuthorizationURL)
+			return
+		}
+		http.SetCookie(c.Writer, &http.Cookie{Name: h.options.CookieName + "_oidc_state", Value: "", Path: h.cookiePath(), HttpOnly: true, Secure: h.options.CookieSecure, SameSite: http.SameSiteLaxMode, MaxAge: -1})
+	}
 	if providerError := strings.TrimSpace(c.Query("error")); providerError != "" {
 		slog.Default().Warn("CRM OIDC provider callback rejected",
 			"provider_error", providerError,

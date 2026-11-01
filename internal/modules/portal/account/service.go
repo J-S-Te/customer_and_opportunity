@@ -15,6 +15,7 @@ import (
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/database"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/loginip"
 	requestctx "github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/request"
+	central "github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/sessiongovernance"
 )
 
 const (
@@ -30,15 +31,17 @@ const authorizationMaxStale = 60 * time.Second
 const portalSessionIdleTimeout = 30 * time.Minute
 
 type Service struct {
-	repo            Repository
-	oidc            OIDCClient
-	invites         InviteClient
-	protector       SecretProtector
-	clock           Clock
-	random          RandomSource
-	roleConfigHash  string
-	maxSessionAge   time.Duration
-	environmentCode string
+	centralClient      central.Client
+	centralExpectation central.Expectation
+	repo               Repository
+	oidc               OIDCClient
+	invites            InviteClient
+	protector          SecretProtector
+	clock              Clock
+	random             RandomSource
+	roleConfigHash     string
+	maxSessionAge      time.Duration
+	environmentCode    string
 	// usePlatformBinding 打开后，非邀请登录以平台 authorization-context 下发的
 	// customer_ref 作为客户边界，不再依赖本地 portal_identity_links（Phase 4）。
 	usePlatformBinding bool
@@ -46,6 +49,13 @@ type Service struct {
 
 // ServiceOption 允许装配层在 Phase 4 过渡期打开平台绑定路径；默认关闭保持旧行为。
 type ServiceOption func(*Service)
+
+// WithCentralSessions 由组合根接入平台唯一生命周期，不改变门户客户绑定及权限。
+// 参数：client为服务器协议客户端，expected为门户独立client及环境范围。
+// 返回值：装配选项；不得从浏览器请求动态设置。
+func WithCentralSessions(client central.Client, expected central.Expectation) ServiceOption {
+	return func(s *Service) { s.centralClient = client; s.centralExpectation = expected }
+}
 
 // WithPlatformBinding 打开平台客户绑定路径（nil 语义：调用即开启）。
 func WithPlatformBinding() ServiceOption {
@@ -229,6 +239,16 @@ func (s *Service) BeginLogin(ctx context.Context, tenantID, returnPath string) (
 	return s.begin(ctx, tenantID, "", 0, "", returnPath)
 }
 
+// begin 建立门户原始nonce、PKCE与客户边界上下文。
+// 参数：ctx为调用上下文与取消边界。
+//
+//	tenantID为可信租户标识。
+//	subject为经过验证的身份主体。
+//	customerID为可信租户内客户标识。
+//	inviteToken为原始客户邀请材料。
+//	returnPath为经过同源限制的登录返回路径。
+//
+// 返回值：与该调用匹配的核验或持久化结果；失败保留原有错误语义。
 func (s *Service) begin(ctx context.Context, tenantID, subject string, customerID uint64, inviteToken, returnPath string) (LoginStart, error) {
 	if !safeReturnPath(returnPath) {
 		returnPath = "/"
@@ -270,6 +290,9 @@ func (s *Service) begin(ctx context.Context, tenantID, subject string, customerI
 		return LoginStart{}, err
 	}
 	challengeSum := sha256.Sum256([]byte(verifier))
+	if s.centralClient != nil {
+		return LoginStart{AuthorizationURL: s.centralClient.BeginURL(state, nonce), State: state}, nil
+	}
 	url, err := s.oidc.AuthorizationURL(state, nonce, base64.RawURLEncoding.EncodeToString(challengeSum[:]), returnPath)
 	if err != nil {
 		return LoginStart{}, err
@@ -288,6 +311,14 @@ type LoginMetadata struct {
 	IPHash, IPMasked, Location, Device, UserAgentHash string
 }
 
+// CompleteLogin 消费原登录事务并在核验身份后建立本地会话。
+// 参数：ctx为调用上下文与取消边界。
+//
+//	state为原始登录事务随机状态。
+//	code为一次性OIDC授权码。
+//	metadata为受控变更的原有操作元数据。
+//
+// 返回值：受原始期限约束的登录结果；身份、绑定或依赖失败返回错误。
 func (s *Service) CompleteLogin(ctx context.Context, state, code string, metadata LoginMetadata) (LoginResult, error) {
 	// state 先按摘要一次性消费，再解密 nonce/PKCE 完成令牌校验，防止回调重放与授权码替换。
 	now := s.clock.Now().UTC()
@@ -303,7 +334,17 @@ func (s *Service) CompleteLogin(ctx context.Context, state, code string, metadat
 	if err != nil {
 		return LoginResult{}, err
 	}
-	claims, err := s.oidc.ExchangeAndValidate(ctx, code, string(verifier), string(nonce))
+	var claims Claims
+	if s.centralClient != nil {
+		ticket, unwrapErr := s.protector.Decrypt(ctx, activation.CentralTicketCipher)
+		exchanger, ok := s.oidc.(CentralOIDCClient)
+		if unwrapErr != nil || len(ticket) == 0 || !ok {
+			return LoginResult{}, ErrInvalidLoginState
+		}
+		claims, err = exchanger.ExchangeWithCentral(ctx, code, string(verifier), string(nonce), string(ticket))
+	} else {
+		claims, err = s.oidc.ExchangeAndValidate(ctx, code, string(verifier), string(nonce))
+	}
 	if err != nil {
 		s.writeLoginSecurityEvent(ctx, activation, "LOGIN_FAILED", "MEDIUM", "OIDC_EXCHANGE_REJECTED", metadata, now)
 		if errors.Is(err, sharedauthorization.ErrForbidden) {
@@ -404,6 +445,12 @@ func (s *Service) CompleteLogin(ctx context.Context, state, code string, metadat
 	if capAt := now.Add(s.maxSessionAge); expires.After(capAt) {
 		expires = capAt
 	}
+	if s.centralClient != nil {
+		if central.Validate(claims.CentralBinding.Context, s.centralExpectation, claims.IdentityID) != nil || claims.CentralBinding.Token == "" || claims.RefreshToken == "" {
+			return LoginResult{}, ErrInvalidClaims
+		}
+		expires = claims.CentralBinding.Context.AbsoluteExpiresAt
+	}
 	accessTokenCipher, err := s.protector.Encrypt(ctx, []byte(claims.AccessToken))
 	if err != nil {
 		return LoginResult{}, err
@@ -413,6 +460,18 @@ func (s *Service) CompleteLogin(ctx context.Context, state, code string, metadat
 		return LoginResult{}, err
 	}
 	session := &Session{Model: newModel(claims.TenantID, claims.IdentityID, now), PublicID: publicSessionID, SessionIDHash: hash(rawSession), PlatformUserID: claims.IdentityID, Username: claims.Username, OIDCSessionID: claims.OIDCSessionID, LoginIP: loginip.Normalize(claims.LoginIP), CustomerID: customerID, AuthzRevision: claims.AuthzRevision, RoleConfigHash: claims.RoleConfigHash, Roles: append([]string(nil), claims.Roles...), Permissions: append([]string(nil), claims.Permissions...), DataScopes: cloneDataScopes(claims.DataScopes), AccessTokenCipher: accessTokenCipher, AuthorizationCheckedAt: now, ExpiresAt: expires, AbsoluteExpiry: expires, LastSeenAt: now, IPHash: metadata.IPHash, UserAgentHash: metadata.UserAgentHash, IPMasked: metadata.IPMasked, LocationSnapshot: metadata.Location, DeviceSnapshot: metadata.Device}
+	if s.centralClient != nil {
+		session.CentralBindingCipher, err = s.protector.Encrypt(ctx, []byte(claims.CentralBinding.Token))
+		if err != nil {
+			return LoginResult{}, err
+		}
+		session.RefreshTokenCipher, err = s.protector.Encrypt(ctx, []byte(claims.RefreshToken))
+		if err != nil {
+			return LoginResult{}, err
+		}
+		session.CentralSessionID = claims.CentralBinding.Context.SessionID
+		session.AccessTokenExpiresAt = claims.AccessTokenExpiresAt.UTC()
+	}
 	successEvent, err := s.newSecurityEvent(claims.TenantID, claims.IdentityID, customerID, "LOGIN_SUCCEEDED", "LOW", "", metadata, now)
 	if err != nil {
 		return LoginResult{}, err
@@ -500,19 +559,40 @@ func isPortalSuperAdmin(roles []string) bool {
 	return ok && roleCode == portalSuperAdminRole
 }
 
-// AuthenticateSession 校验本地会话并在线复核授权。allowStale 仅对只读请求为 true：
-// 授权服务不可用时可放行受控陈旧窗口；写请求必须在线复核（P1-3）。
+// AuthenticateSession 核验门户会话、中央期限和客户授权边界。
+//
+//	AuthenticateSession 校验本地会话并在线复核授权。allowStale 仅对只读请求为 true：
+//	授权服务不可用时可放行受控陈旧窗口；写请求必须在线复核（P1-3）。
+//
+// 参数：ctx为调用上下文与取消边界。
+//
+//	tenantID为可信租户标识。
+//	rawToken为浏览器提交的原始会话材料。
+//	allowStale为是否允许既有只读路径使用有界旧权限快照。
+//
+// 返回值：经过核验的主体或会话；明确失效与暂时依赖错误分别返回。
 func (s *Service) AuthenticateSession(ctx context.Context, tenantID, rawToken string, allowStale bool) (*Session, error) {
 	// Cookie 仅携带高熵令牌，数据库按摘要检索；租户、撤销和到期边界均由服务端重新验证。
 	now := s.clock.Now().UTC()
 	sessionHash := hash(rawToken)
 	session, err := s.repo.FindSession(ctx, tenantID, sessionHash, now)
 	if err != nil {
+		if s.centralClient != nil && !errors.Is(err, ErrInvalidLoginState) && !errors.Is(err, ErrSessionNotFound) {
+			return nil, ErrAuthorizationUnavailable
+		}
 		return nil, ErrInvalidLoginState
 	}
 	// 服务层再次校验空闲边界，避免非 GORM 仓储实现或测试替身绕过会话策略。
 	// 临界时刻按已超时处理，必须重新登录后才能建立新会话。
-	if session.LastSeenAt.IsZero() || !session.LastSeenAt.Add(portalSessionIdleTimeout).After(now) {
+	if s.centralClient != nil {
+		if _, err = s.readCentral(ctx, session, false); err != nil {
+			return nil, err
+		}
+		session, err = s.refreshCentralAccess(ctx, session)
+		if err != nil {
+			return nil, err
+		}
+	} else if session.LastSeenAt.IsZero() || !session.LastSeenAt.Add(portalSessionIdleTimeout).After(now) {
 		return nil, ErrInvalidLoginState
 	}
 	var link *IdentityLink

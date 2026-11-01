@@ -19,27 +19,29 @@ import (
 const maxOIDCSessionTTL = 15 * time.Minute
 
 type Config struct {
-	Address                   string
-	MySQLDSN                  string
-	PathPrefix                string
-	PublicOrigin              string
-	EncryptionKey             []byte
-	HMACKey                   []byte
-	OIDCIssuer                string
-	OIDCBackchannelBaseURL    string
-	OIDCClientID              string
-	OIDCClientSecret          string
-	OIDCIDPHint               string
-	OIDCRedirectURI           string
-	OIDCPostLogoutRedirectURI string
-	OIDCScopes                []string
-	OIDCTenantID              string
-	OIDCRoleConfigHash        string
-	OIDCSessionCookieName     string
-	OIDCSessionTTL            time.Duration
-	OIDCBackchannelLogoutTTL  time.Duration
-	OIDCSessionSecure         bool
-	OIDCMaxRoles              int
+	Address                     string
+	MySQLDSN                    string
+	PathPrefix                  string
+	PublicOrigin                string
+	EncryptionKey               []byte
+	HMACKey                     []byte
+	OIDCIssuer                  string
+	OIDCBackchannelBaseURL      string
+	OIDCClientID                string
+	OIDCClientSecret            string
+	OIDCIDPHint                 string
+	OIDCRedirectURI             string
+	OIDCPostLogoutRedirectURI   string
+	OIDCScopes                  []string
+	OIDCTenantID                string
+	OIDCRoleConfigHash          string
+	OIDCSessionCookieName       string
+	OIDCSessionTTL              time.Duration
+	CentralSessionEnabled       bool
+	CentralSessionPublicBaseURL string
+	OIDCBackchannelLogoutTTL    time.Duration
+	OIDCSessionSecure           bool
+	OIDCMaxRoles                int
 	// AllowInsecureHTTPSession 仅用于无 HTTPS 的测试服务器：显式开启后允许非回环 HTTP
 	// 源使用非 Secure 会话 Cookie。默认关闭，生产部署不得开启。
 	AllowInsecureHTTPSession         bool
@@ -155,6 +157,9 @@ type Config struct {
 	PresaleWorkerHeartbeatMaxAge time.Duration
 }
 
+// LoadConfig 读取并校验应用运行配置及中央接入开关。
+// 参数：无。
+// 返回值：校验后的运行配置及解析或约束错误。
 func LoadConfig() (Config, error) {
 	// 配置在进程开放监听端口前一次性解析并校验。任何布尔值、时长或密钥格式错误都失败退出，
 	// 避免运行中根据环境变量变化形成同一副本内不一致的安全策略。
@@ -164,6 +169,10 @@ func LoadConfig() (Config, error) {
 	}
 	if developmentAuth {
 		return Config{}, fmt.Errorf("DEV_AUTH_ENABLED is no longer supported; CRM identity and authorization must use the base platform")
+	}
+	centralSessionEnabled, err := strconv.ParseBool(valueOrDefault("CENTRAL_SESSION_ENABLED", "false"))
+	if err != nil {
+		return Config{}, fmt.Errorf("CENTRAL_SESSION_ENABLED: %w", err)
 	}
 	encryptionKey, err := base64.StdEncoding.DecodeString(os.Getenv("SENSITIVE_ENCRYPTION_KEY_BASE64"))
 	if err != nil {
@@ -328,7 +337,9 @@ func LoadConfig() (Config, error) {
 		}
 	}
 	config := Config{
-		Address: valueOrDefault("HTTP_ADDRESS", ":8090"), MySQLDSN: os.Getenv("MYSQL_DSN"), PathPrefix: valueOrDefault("APP_PATH_PREFIX", "/customer-opportunity"), PublicOrigin: os.Getenv("APP_PUBLIC_ORIGIN"), EncryptionKey: encryptionKey, HMACKey: hmacKey,
+		CentralSessionEnabled:       centralSessionEnabled,
+		CentralSessionPublicBaseURL: valueOrDefault("CENTRAL_SESSION_PUBLIC_BASE_URL", os.Getenv("APP_PUBLIC_ORIGIN")),
+		Address:                     valueOrDefault("HTTP_ADDRESS", ":8090"), MySQLDSN: os.Getenv("MYSQL_DSN"), PathPrefix: valueOrDefault("APP_PATH_PREFIX", "/customer-opportunity"), PublicOrigin: os.Getenv("APP_PUBLIC_ORIGIN"), EncryptionKey: encryptionKey, HMACKey: hmacKey,
 		OIDCIssuer: os.Getenv("OIDC_ISSUER"), OIDCBackchannelBaseURL: os.Getenv("OIDC_BACKCHANNEL_BASE_URL"),
 		OIDCClientID: os.Getenv("OIDC_CLIENT_ID"), OIDCClientSecret: os.Getenv("OIDC_CLIENT_SECRET"), OIDCIDPHint: strings.TrimSpace(valueOrDefault("OIDC_IDP_HINT", "basic-platform")), OIDCRedirectURI: os.Getenv("OIDC_REDIRECT_URI"), OIDCPostLogoutRedirectURI: os.Getenv("OIDC_POST_LOGOUT_REDIRECT_URI"),
 		OIDCScopes: splitFields(valueOrDefault("OIDC_SCOPES", "openid profile")), OIDCTenantID: os.Getenv("OIDC_TENANT_ID"), OIDCRoleConfigHash: os.Getenv("OIDC_ROLE_CONFIG_HASH"),
@@ -739,6 +750,9 @@ func LoadConfig() (Config, error) {
 	return config, nil
 }
 
+// validateOIDC 核验OIDC与中央接入所需的配置关系。
+// 参数：无。
+// 返回值：无；参数、校验、存储或依赖失败时返回错误。
 func (c Config) validateOIDC() error {
 	// OIDC、浏览器 Origin 和机器令牌材料作为一个生产认证契约整体校验，防止只配置登录
 	// 却留下内部接口无验签，或 Cookie 在非回环明文 HTTP 上传输。
@@ -748,8 +762,17 @@ func (c Config) validateOIDC() error {
 			return fmt.Errorf("%s is required", key)
 		}
 	}
-	if c.OIDCSessionTTL <= 0 || c.OIDCSessionTTL > maxOIDCSessionTTL {
+	maximumSessionTTL := maxOIDCSessionTTL
+	if c.CentralSessionEnabled {
+		maximumSessionTTL = 8 * time.Hour
+	}
+	if c.OIDCSessionTTL <= 0 || c.OIDCSessionTTL > maximumSessionTTL {
 		return fmt.Errorf("OIDC_SESSION_TTL must be positive and at most %s", maxOIDCSessionTTL)
+	}
+	if c.CentralSessionEnabled {
+		if err := validateHTTPOrigin("CENTRAL_SESSION_PUBLIC_BASE_URL", c.CentralSessionPublicBaseURL); err != nil {
+			return err
+		}
 	}
 	if c.OIDCBackchannelLogoutTTL != 0 && (c.OIDCBackchannelLogoutTTL < 30*time.Second || c.OIDCBackchannelLogoutTTL > 15*time.Minute) {
 		return fmt.Errorf("OIDC_BACKCHANNEL_LOGOUT_MAX_TTL must be between 30s and 15m")

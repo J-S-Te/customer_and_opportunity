@@ -30,6 +30,7 @@ import (
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/requestaudit"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/response"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/security"
+	central "github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/sessiongovernance"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
 )
@@ -45,6 +46,9 @@ type App struct {
 	importSourceDone chan struct{}
 }
 
+// New 装配当前应用的配置、存储、认证及服务入口。
+// 参数：config为当前应用运行配置。
+// 返回值：装配后的应用或认证实例；配置与依赖装配失败时返回错误。
 func New(config Config) (*App, error) {
 	licenseCtx, licenseCancel := context.WithCancel(context.Background())
 	started := false
@@ -106,8 +110,17 @@ func New(config Config) (*App, error) {
 	})
 	// 浏览器和机器调用使用两条独立的基础平台信任链：前者只认服务端 OIDC 会话 Cookie，
 	// 后者只认平台应用令牌。不存在请求头身份或本地权限降级路径。
+	var centralClient central.Client
+	if config.CentralSessionEnabled {
+		client, err := central.NewHTTPClient(config.PlatformBaseURL, config.CentralSessionPublicBaseURL, config.OIDCClientID, config.OIDCRedirectURI)
+		if err != nil {
+			return nil, err
+		}
+		centralClient = client
+	}
 	oidcClient, oidcErr := crmauth.NewPlatformOIDCClient(context.Background(), crmauth.OIDCOptions{
-		Issuer: config.OIDCIssuer, BackchannelBaseURL: config.OIDCBackchannelBaseURL,
+		CentralClient: centralClient,
+		Issuer:        config.OIDCIssuer, BackchannelBaseURL: config.OIDCBackchannelBaseURL,
 		PlatformBaseURL: config.PlatformBaseURL,
 		ClientID:        config.OIDCClientID, ClientSecret: config.OIDCClientSecret,
 		ApplicationCode: config.PlatformApplicationCode, EnvironmentCode: config.PlatformEnvironmentCode,
@@ -127,7 +140,9 @@ func New(config Config) (*App, error) {
 	}
 	authRepository := crmauth.NewGORMRepository(db)
 	authService, authErr := crmauth.NewService(authRepository, oidcClient, config.EncryptionKey, crmauth.Options{
-		TenantID: config.OIDCTenantID, RoleConfigHash: config.OIDCRoleConfigHash,
+		CentralClient:      centralClient,
+		CentralExpectation: central.Expectation{TenantID: config.OIDCTenantID, ClientID: config.OIDCClientID, ApplicationCode: config.PlatformApplicationCode, EnvironmentCode: config.PlatformEnvironmentCode},
+		TenantID:           config.OIDCTenantID, RoleConfigHash: config.OIDCRoleConfigHash,
 		EnvironmentCode: config.PlatformEnvironmentCode, SessionTTL: config.OIDCSessionTTL, MaxRoles: config.OIDCMaxRoles,
 	}, brokerVerifier)
 	if authErr != nil {
@@ -140,6 +155,8 @@ func New(config Config) (*App, error) {
 	authMiddleware := middleware.SessionAuth(authService, config.OIDCSessionCookieName)
 	base.GET("/auth/login", authHandler.Login)
 	base.GET("/auth/callback", authHandler.Callback)
+	base.GET("/auth/session", authMiddleware, authHandler.SessionState)
+	base.POST("/auth/activity", authMiddleware, authHandler.RequireSameOrigin, authHandler.Activity)
 	base.POST("/auth/logout", authMiddleware, authHandler.RequireSameOrigin, authHandler.Logout)
 	// local-logout 由前端裸 fetch 调用且不带 X-CSRF-Token，因此走仅 Origin 精确校验的同源防护
 	//（浏览器同源 POST 自动携带 Origin），阻断跨站盲注销；Origin 缺失同样拒绝。
@@ -163,8 +180,27 @@ func New(config Config) (*App, error) {
 			permissions = append(permissions, code)
 		}
 		sort.Strings(permissions)
+		var sessionContext *central.Context
+		if config.CentralSessionEnabled {
+			cookie, _ := c.Request.Cookie(config.OIDCSessionCookieName)
+			if cookie == nil {
+				response.Error(c, apperror.ErrUnauthenticated)
+				return
+			}
+			state, err := authService.Lifecycle(c.Request.Context(), cookie.Value, false)
+			if err != nil {
+				if errors.Is(err, crmauth.ErrUnauthenticated) {
+					response.Error(c, apperror.ErrUnauthenticated)
+				} else {
+					response.Error(c, apperror.Wrap(err, http.StatusServiceUnavailable, "COMMON_DEPENDENCY_UNAVAILABLE", "会话服务暂不可用"))
+				}
+				return
+			}
+			sessionContext = &state
+		}
 		response.OK(c, gin.H{
-			"user_id": principal.UserID, "person_id": principal.PersonID,
+			"session_context": sessionContext,
+			"user_id":         principal.UserID, "person_id": principal.PersonID,
 			"tenant_id": principal.TenantID, "display_name": principal.DisplayName, "username": principal.Username,
 			"primary_org_id": principal.PrimaryOrgID, "organization_ids": append([]string{}, principal.OrganizationIDs...),
 			"roles": principal.Roles, "permissions": permissions, "scope_mode": principal.ScopeMode,

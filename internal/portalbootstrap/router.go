@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net"
@@ -102,6 +103,9 @@ type machineAuthenticator interface {
 	Authenticate(context.Context, *http.Request) (sharedauth.Principal, error)
 }
 
+// NewRouter 装配原有许可、认证、授权和会话技术路由。
+// 参数：deps为既有应用装配依赖。
+// 返回值：与该调用匹配的核验或持久化结果；失败保留原有错误语义。
 func NewRouter(deps RouterDependencies) *gin.Engine {
 	logger := deps.Logger
 	if logger == nil {
@@ -151,9 +155,17 @@ func NewRouter(deps RouterDependencies) *gin.Engine {
 			response.Error(c, err)
 			return
 		}
+		if deps.Config.CentralSessionEnabled {
+			cookie := sessionCookie(deps.Config, result.State, time.Now().UTC().Add(10*time.Minute))
+			cookie.Name = deps.Config.SessionCookieName + "_oidc_state"
+			cookie.MaxAge = 600
+			http.SetCookie(c.Writer, cookie)
+		}
 		c.Redirect(http.StatusFound, result.AuthorizationURL)
 	})
 	base.GET("/auth/callback", completeLogin(deps))
+	base.GET("/auth/session", authenticate(deps), centralLifecycle(deps, false))
+	base.POST("/auth/activity", authenticate(deps), originAndCSRF(deps.Config), centralLifecycle(deps, true))
 	base.POST("/auth/logout", authenticate(deps), originAndCSRF(deps.Config), logout(deps))
 	if deps.BackchannelLogout != nil {
 		base.POST("/auth/backchannel-logout", deps.BackchannelLogout)
@@ -396,8 +408,37 @@ func beginLogin(deps RouterDependencies) gin.HandlerFunc {
 	}
 }
 
+// completeLogin 完成已核验门户登录并写入独立Cookie。
+// 参数：deps为既有应用装配依赖。
+// 返回值：与该调用匹配的核验或持久化结果；失败保留原有错误语义。
 func completeLogin(deps RouterDependencies) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		if deps.Config.CentralSessionEnabled {
+			cookie, err := c.Request.Cookie(deps.Config.SessionCookieName + "_oidc_state")
+			if err != nil || cookie.Value == "" || cookie.Value != c.Query("state") {
+				response.Error(c, account.ErrInvalidLoginState)
+				return
+			}
+			c.Header("Cache-Control", "no-store")
+			c.Header("Referrer-Policy", "no-referrer")
+			if ticket := c.Query("session_link_ticket"); ticket != "" {
+				if c.Query("code") != "" {
+					response.Error(c, account.ErrInvalidLoginState)
+					return
+				}
+				target, err := deps.Account.AcceptSessionLink(c.Request.Context(), cookie.Value, ticket)
+				if err != nil {
+					response.Error(c, err)
+					return
+				}
+				c.Redirect(http.StatusFound, target)
+				return
+			}
+			expired := sessionCookie(deps.Config, "", time.Unix(1, 0))
+			expired.Name = deps.Config.SessionCookieName + "_oidc_state"
+			expired.MaxAge = -1
+			http.SetCookie(c.Writer, expired)
+		}
 		if c.Query("error") != "" {
 			response.Error(c, account.ErrInvalidClaims)
 			return
@@ -434,6 +475,9 @@ func logout(deps RouterDependencies) gin.HandlerFunc {
 	}
 }
 
+// authenticate 取得当前门户会话的可信客户上下文。
+// 参数：deps为既有应用装配依赖。
+// 返回值：经过核验的主体或会话；明确失效与暂时依赖错误分别返回。
 func authenticate(deps RouterDependencies) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		cookie, err := c.Request.Cookie(deps.Config.SessionCookieName)
@@ -446,6 +490,11 @@ func authenticate(deps RouterDependencies) gin.HandlerFunc {
 		allowStale := c.Request.Method == http.MethodGet || c.Request.Method == http.MethodHead || c.Request.Method == http.MethodOptions
 		session, err := deps.Account.AuthenticateSession(c.Request.Context(), deps.Config.TenantID, cookie.Value, allowStale)
 		if err != nil {
+			if errors.Is(err, account.ErrAuthorizationUnavailable) {
+				response.Error(c, err)
+				c.Abort()
+				return
+			}
 			response.Error(c, apperror.ErrUnauthenticated)
 			c.Abort()
 			return
