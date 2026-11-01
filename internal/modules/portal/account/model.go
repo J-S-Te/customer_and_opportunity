@@ -36,7 +36,7 @@ func (IdentityLink) TableName() string { return "portal_identity_links" }
 
 type Session struct {
 	RefreshTokenCipher   []byte
-	AccessTokenExpiresAt time.Time
+	AccessTokenExpiresAt time.Time `gorm:"default:null"`
 	CentralBindingCipher []byte
 	CentralSessionID     string
 	database.Model

@@ -2,6 +2,7 @@ package account
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -15,6 +16,7 @@ import (
 	central "github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/sessiongovernance"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/testsupport/sessionmysql"
 	"golang.org/x/oauth2"
+	"gorm.io/gorm"
 )
 
 type mysqlPortalCentral struct {
@@ -83,6 +85,7 @@ func TestCentralSessionRotationCheckpointMySQL(t *testing.T) {
 	service.centralClient = authority
 	service.centralExpectation = expectation
 	session := Session{Model: database.Model{TenantID: "tenant-a"}, PublicID: "qa-portal-session", SessionIDHash: hash("qa-opaque"), PlatformUserID: "subject-a", CustomerID: 7, AuthzRevision: 3, RoleConfigHash: "catalog-v1", Roles: []string{"portal_customer"}, Permissions: []string{"report.read"}, DataScopes: []DataScope{{RoleCode: "portal_customer", ScopeType: "APPLICATION"}}, AccessTokenCipher: []byte("old-access"), RefreshTokenCipher: []byte("initial-refresh"), CentralBindingCipher: []byte("server-binding"), CentralSessionID: "canonical-login", AccessTokenExpiresAt: now.Add(10 * time.Second), AuthorizationCheckedAt: now, ExpiresAt: now.Add(8 * time.Hour), AbsoluteExpiry: now.Add(8 * time.Hour), LastSeenAt: now}
+	assertLegacyPortalSessionCreateMySQL(t, db, session)
 	if err := db.Create(&session).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -112,5 +115,29 @@ func TestCentralSessionRotationCheckpointMySQL(t *testing.T) {
 	}
 	if _, err := service.readCentral(context.Background(), &stored, false); err != nil && !errors.Is(err, ErrAuthorizationUnavailable) {
 		t.Fatal(err)
+	}
+}
+
+// assertLegacyPortalSessionCreateMySQL 核验关闭中央模式时新增可空列不会写入非法零日期。
+// 参数：t为隔离库上下文，db为完成真实迁移的测试库，sample为有效合成会话。
+// 返回值：无；建会话失败或空到期时间未持久化为NULL即失败。
+func assertLegacyPortalSessionCreateMySQL(t *testing.T, db *gorm.DB, sample Session) {
+	t.Helper()
+	sample.PublicID = "qa-portal-legacy-session"
+	sample.SessionIDHash = hash("qa-portal-legacy-opaque")
+	sample.CentralSessionID = ""
+	sample.CentralBindingCipher = nil
+	sample.RefreshTokenCipher = nil
+	sample.AccessTokenExpiresAt = time.Time{}
+	if err := NewGORMRepository(db).CreateSession(context.Background(), &sample); err != nil {
+		t.Fatalf("legacy session create after central migration: %v", err)
+	}
+	var expiry sql.NullTime
+	if err := db.Raw("SELECT access_token_expires_at FROM portal_sessions WHERE id = ?",
+		sample.ID).Row().Scan(&expiry); err != nil {
+		t.Fatal(err)
+	}
+	if expiry.Valid {
+		t.Fatal("legacy session stored a fabricated access-token deadline")
 	}
 }
