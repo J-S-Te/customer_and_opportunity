@@ -287,6 +287,9 @@ func (c *platformOIDCClient) exchange(ctx context.Context, code, verifier, nonce
 	return contextClaims, nil
 }
 
+// UserInfo 核验当前授权并读取提供方资料，中央模式下依赖故障不能冒充身份失效。
+// 参数：ctx为原请求上下文，accessToken为服务器持有的当前访问材料。
+// 返回值：已核验声明；明确拒绝与暂时依赖失败保留不同错误类别。
 func (c *platformOIDCClient) UserInfo(ctx context.Context, accessToken string) (verifiedClaims, error) {
 	if strings.TrimSpace(accessToken) == "" {
 		return verifiedClaims{}, errors.New("CRM OIDC access token is missing")
@@ -298,7 +301,7 @@ func (c *platformOIDCClient) UserInfo(ctx context.Context, accessToken string) (
 	oidcContext := oidc.ClientContext(ctx, c.httpClient)
 	info, userInfoErr := c.provider.UserInfo(oidcContext, oauth2.StaticTokenSource(&oauth2.Token{AccessToken: accessToken, TokenType: "Bearer"}))
 	if userInfoErr != nil {
-		return verifiedClaims{}, fmt.Errorf("load CRM OIDC UserInfo: %w", userInfoErr)
+		return verifiedClaims{}, c.dependencyError("load CRM OIDC UserInfo", userInfoErr)
 	}
 	var raw struct {
 		Subject           string `json:"sub"`
@@ -317,18 +320,21 @@ func (c *platformOIDCClient) UserInfo(ctx context.Context, accessToken string) (
 	return claims, nil
 }
 
+// AuthorizationContext 读取并验证预期应用及环境的完整授权快照。
+// 参数：ctx为原请求上下文，accessToken为服务器持有的当前访问材料。
+// 返回值：可信权限声明；令牌拒绝、权限拒绝与暂时依赖故障分别返回。
 func (c *platformOIDCClient) AuthorizationContext(ctx context.Context, accessToken string) (verifiedClaims, error) {
 	if c.platformBaseURL == "" {
-		return verifiedClaims{}, errors.New("CRM platform authorization context endpoint is not configured")
+		return verifiedClaims{}, c.dependencyError("CRM platform authorization context", errors.New("endpoint is not configured"))
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.platformBaseURL+"/oauth2/authorization-context", nil)
 	if err != nil {
-		return verifiedClaims{}, fmt.Errorf("create CRM authorization context request: %w", err)
+		return verifiedClaims{}, c.dependencyError("create CRM authorization context request", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return verifiedClaims{}, fmt.Errorf("request CRM authorization context: %w", err)
+		return verifiedClaims{}, c.dependencyError("request CRM authorization context", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -342,12 +348,12 @@ func (c *platformOIDCClient) AuthorizationContext(ctx context.Context, accessTok
 			if resp.StatusCode >= http.StatusInternalServerError {
 				return verifiedClaims{}, fmt.Errorf("CRM authorization context returned HTTP %d: %w", resp.StatusCode, sharedauthorization.ErrUnavailable)
 			}
-			return verifiedClaims{}, fmt.Errorf("CRM authorization context returned unexpected HTTP %d", resp.StatusCode)
+			return verifiedClaims{}, c.dependencyError("CRM authorization context", fmt.Errorf("unexpected HTTP %d", resp.StatusCode))
 		}
 	}
 	var raw sharedauthorization.Response
 	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
-		return verifiedClaims{}, fmt.Errorf("decode CRM authorization context: %w", err)
+		return verifiedClaims{}, c.dependencyError("decode CRM authorization context", err)
 	}
 	scopes, decision, err := sharedauthorization.Validate(raw, c.expectedContext)
 	if err != nil {
@@ -614,4 +620,14 @@ func (t *backchannelTransport) RoundTrip(request *http.Request) (*http.Response,
 	clone := request.Clone(request.Context())
 	clone.URL.Scheme, clone.URL.Host = t.backchannel.Scheme, t.backchannel.Host
 	return t.base.RoundTrip(clone)
+}
+
+// dependencyError 在中央模式下保留资料与授权网络故障的503语义，不触发确定退出。
+// 参数：stage为失败步骤，cause为原始网络、取消或响应解析错误。
+// 返回值：含依赖分类的错误；关闭中央管理时保留原有错误类别。
+func (c *platformOIDCClient) dependencyError(stage string, cause error) error {
+	if c.central != nil {
+		cause = errors.Join(sharedauthorization.ErrUnavailable, cause)
+	}
+	return fmt.Errorf("%s: %w", stage, cause)
 }

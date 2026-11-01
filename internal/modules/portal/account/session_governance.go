@@ -91,7 +91,10 @@ func (s *Service) Lifecycle(ctx context.Context, tenant, token string, interact 
 	}
 	session, err := s.repo.FindSession(ctx, tenant, hash(token), s.clock.Now().UTC())
 	if err != nil {
-		return central.Context{}, err
+		if s.dependencyUnavailable(err) {
+			return central.Context{}, ErrAuthorizationUnavailable
+		}
+		return central.Context{}, ErrInvalidLoginState
 	}
 	return s.readCentral(ctx, session, interact)
 }
@@ -145,4 +148,13 @@ func (s *Service) refreshCentralAccess(ctx context.Context, session *Session) (*
 		current.AuthorizationCheckedAt = time.Unix(1, 0).UTC()
 		return true, nil
 	})
+}
+
+// dependencyUnavailable 区分在线身份确定失效与原请求取消、数据库等暂时依赖故障。
+// 参数：err为认证调用链返回的原错误。
+// 返回值：中央模式下未知依赖故障为true；已知失效保持原有拒绝语义。
+func (s *Service) dependencyUnavailable(err error) bool {
+	return s.centralClient != nil && err != nil &&
+		!errors.Is(err, ErrInvalidLoginState) && !errors.Is(err, ErrSessionNotFound) &&
+		!errors.Is(err, ErrIdentityDisabled) && !errors.Is(err, ErrNotProvisioned)
 }

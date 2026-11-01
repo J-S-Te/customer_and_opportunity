@@ -299,7 +299,7 @@ func (s *Service) Authenticate(ctx context.Context, rawSession string) (sharedau
 		}
 		current, currentErr := s.oidc.UserInfo(ctx, accessToken)
 		if errors.Is(currentErr, sharedauthorization.ErrUnavailable) {
-			if now.Sub(session.AuthorizationCheckedAt) > authorizationMaxStale {
+			if s.options.CentralClient != nil || now.Sub(session.AuthorizationCheckedAt) > authorizationMaxStale {
 				return sharedauth.Principal{}, ErrAuthorizationUnavailable
 			}
 			if err := s.repo.TouchSession(ctx, session.SessionIDHash, now, time.Time{}); err != nil {

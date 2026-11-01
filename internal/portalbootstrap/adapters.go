@@ -256,18 +256,21 @@ func validCompactPortalIdentity(raw compactOIDCClaims, nonce, accessToken string
 		strings.TrimSpace(accessToken) != ""
 }
 
+// authorizationContext 读取门户当前授权和客户边界，中央模式下保留依赖故障语义。
+// 参数：ctx为原请求上下文，accessToken为服务器持有的访问材料。
+// 返回值：已核验门户声明；明确失效、权限拒绝和暂时依赖失败分别返回。
 func (a *OIDCAdapter) authorizationContext(ctx context.Context, accessToken string) (account.Claims, error) {
 	if a.platformBaseURL == "" {
 		return account.Claims{}, errors.New("portal platform authorization context endpoint is not configured")
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, a.platformBaseURL+"/oauth2/authorization-context", nil)
 	if err != nil {
-		return account.Claims{}, fmt.Errorf("create portal authorization context request: %w", err)
+		return account.Claims{}, a.dependencyError("create portal authorization context request", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	resp, err := a.httpClient.Do(req)
 	if err != nil {
-		return account.Claims{}, fmt.Errorf("request portal authorization context: %w", err)
+		return account.Claims{}, a.dependencyError("request portal authorization context", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -281,12 +284,12 @@ func (a *OIDCAdapter) authorizationContext(ctx context.Context, accessToken stri
 			if resp.StatusCode >= http.StatusInternalServerError {
 				return account.Claims{}, fmt.Errorf("portal authorization context returned HTTP %d: %w", resp.StatusCode, sharedauthorization.ErrUnavailable)
 			}
-			return account.Claims{}, fmt.Errorf("portal authorization context returned unexpected HTTP %d", resp.StatusCode)
+			return account.Claims{}, a.dependencyError("portal authorization context", fmt.Errorf("unexpected HTTP %d", resp.StatusCode))
 		}
 	}
 	var raw sharedauthorization.Response
 	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
-		return account.Claims{}, fmt.Errorf("decode portal authorization context: %w", err)
+		return account.Claims{}, a.dependencyError("decode portal authorization context", err)
 	}
 	scopes, _, err := sharedauthorization.Validate(raw, a.expectedContext)
 	if err != nil {
@@ -491,4 +494,14 @@ func hashText(key []byte, value string) string {
 	mac := hmac.New(sha256.New, key)
 	_, _ = mac.Write([]byte(value))
 	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+}
+
+// dependencyError 在中央模式下保留授权网络故障语义，不以旧权限快照掩盖本次失败。
+// 参数：stage为失败步骤，cause为原始网络、取消或响应解析错误。
+// 返回值：含依赖分类的错误；关闭中央管理时保留原有错误类别。
+func (a *OIDCAdapter) dependencyError(stage string, cause error) error {
+	if a.central != nil {
+		cause = errors.Join(sharedauthorization.ErrUnavailable, cause)
+	}
+	return fmt.Errorf("%s: %w", stage, cause)
 }

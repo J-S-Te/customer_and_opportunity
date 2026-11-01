@@ -606,7 +606,10 @@ func (s *Service) AuthenticateSession(ctx context.Context, tenantID, rawToken st
 		}
 	} else {
 		found, linkErr := s.repo.FindLink(ctx, tenantID, session.PlatformUserID)
-		if linkErr != nil || found.Status != IdentityActive || found.CustomerID != session.CustomerID {
+		if s.dependencyUnavailable(linkErr) {
+			return nil, ErrAuthorizationUnavailable
+		}
+		if linkErr != nil || found == nil || found.Status != IdentityActive || found.CustomerID != session.CustomerID {
 			return nil, ErrIdentityDisabled
 		}
 		link = found
@@ -621,10 +624,13 @@ func (s *Service) AuthenticateSession(ctx context.Context, tenantID, rawToken st
 		current, currentErr := s.oidc.UserInfo(ctx, string(accessToken))
 		if errors.Is(currentErr, sharedauthorization.ErrUnavailable) {
 			// P1-3：陈旧授权只放行只读方法；写请求与超窗请求必须在线复核。
-			if !allowStale || now.Sub(session.AuthorizationCheckedAt) > authorizationMaxStale {
+			if s.centralClient != nil || !allowStale || now.Sub(session.AuthorizationCheckedAt) > authorizationMaxStale {
 				return nil, ErrAuthorizationUnavailable
 			}
 			if err = s.repo.TouchSession(ctx, tenantID, sessionHash, now, time.Time{}); err != nil {
+				if s.dependencyUnavailable(err) {
+					return nil, ErrAuthorizationUnavailable
+				}
 				return nil, ErrInvalidLoginState
 			}
 			session.LastSeenAt = now
@@ -645,6 +651,9 @@ func (s *Service) AuthenticateSession(ctx context.Context, tenantID, rawToken st
 		checkedAt = now
 		if link != nil {
 			if err = s.repo.MarkLinkVerified(ctx, tenantID, link.ID, current.AuthzRevision, now); err != nil {
+				if s.dependencyUnavailable(err) {
+					return nil, ErrAuthorizationUnavailable
+				}
 				s.revokeAuthorization(ctx, tenantID, session.PlatformUserID, now, "IDENTITY_LINK_INVALID")
 				return nil, ErrInvalidLoginState
 			}
@@ -652,6 +661,9 @@ func (s *Service) AuthenticateSession(ctx context.Context, tenantID, rawToken st
 		session.AuthorizationCheckedAt = now
 	}
 	if err = s.repo.TouchSession(ctx, tenantID, sessionHash, now, checkedAt); err != nil {
+		if s.dependencyUnavailable(err) {
+			return nil, ErrAuthorizationUnavailable
+		}
 		return nil, ErrInvalidLoginState
 	}
 	session.LastSeenAt = now
