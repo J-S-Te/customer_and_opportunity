@@ -22,6 +22,7 @@ import (
 	sharedauthorization "github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/authorizationcontext"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/loginip"
 	requestctx "github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/request"
+	central "github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/sessiongovernance"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/clientcredentials"
 )
@@ -31,6 +32,7 @@ const maxAdapterResponseBytes = 64 << 10
 // OIDC 适配器遵循平台发布的 Discovery/JWKS 契约；只有签名、issuer、audience、过期时间、
 // nonce 以及平台扩展声明全部通过后，才向账号服务返回 Claims。
 type OIDCAdapter struct {
+	central         central.Client
 	config          oauth2.Config
 	verifier        *oidc.IDTokenVerifier
 	provider        *oidc.Provider
@@ -41,6 +43,12 @@ type OIDCAdapter struct {
 	expectedContext sharedauthorization.Expectation
 }
 
+// NewOIDCAdapter 装配门户OIDC验证及中央桥接客户端。
+// 参数：ctx为调用上下文与取消边界。
+//
+//	config为当前应用运行配置。
+//
+// 返回值：装配后的应用或认证实例；配置与依赖装配失败时返回错误。
 func NewOIDCAdapter(ctx context.Context, config Config) (*OIDCAdapter, error) {
 	httpClient := &http.Client{Timeout: 10 * time.Second}
 	if config.OIDCBackchannelURL != "" {
@@ -57,11 +65,20 @@ func NewOIDCAdapter(ctx context.Context, config Config) (*OIDCAdapter, error) {
 		httpClient.Transport = &issuerTransport{base: http.DefaultTransport, public: publicURL, backchannel: backchannelURL}
 	}
 	oidcContext := oidc.ClientContext(ctx, httpClient)
+	var centralClient central.Client
+	if config.CentralSessionEnabled {
+		client, err := central.NewHTTPClient(config.PlatformBaseURL, config.CentralSessionPublicBaseURL, config.OIDCClientID, config.OIDCRedirectURI)
+		if err != nil {
+			return nil, err
+		}
+		centralClient = client
+	}
 	provider, err := oidc.NewProvider(oidcContext, strings.TrimRight(config.OIDCIssuer, "/"))
 	if err != nil {
 		return nil, fmt.Errorf("load OIDC discovery: %w", err)
 	}
 	return &OIDCAdapter{
+		central:  centralClient,
 		config:   oauth2.Config{ClientID: config.OIDCClientID, ClientSecret: config.OIDCClientSecret, Endpoint: provider.Endpoint(), RedirectURL: config.OIDCRedirectURI, Scopes: config.OIDCScopes},
 		verifier: provider.Verifier(&oidc.Config{ClientID: config.OIDCClientID}), provider: provider, httpClient: httpClient,
 		platformBaseURL: strings.TrimRight(config.PlatformBaseURL, "/"), roleConfigHash: config.RoleConfigHash,
@@ -70,6 +87,14 @@ func NewOIDCAdapter(ctx context.Context, config Config) (*OIDCAdapter, error) {
 	}, nil
 }
 
+// AuthorizationURL 保留原登录事务构造提供方授权地址。
+// 参数：state为原始登录事务随机状态。
+//
+//	nonce为原OIDC登录随机校验材料。
+//	codeChallenge为原PKCE挑战摘要。
+//	_为未使用的兼容接口参数。
+//
+// 返回值：绑定原登录事务的授权地址；构造失败按原错误模型返回。
 func (a *OIDCAdapter) AuthorizationURL(state, nonce, codeChallenge, _ string) (string, error) {
 	if state == "" || nonce == "" || codeChallenge == "" {
 		return "", errors.New("OIDC login parameters are incomplete")
@@ -79,13 +104,38 @@ func (a *OIDCAdapter) AuthorizationURL(state, nonce, codeChallenge, _ string) (s
 		oauth2.SetAuthURLParam("code_challenge", codeChallenge),
 		oauth2.SetAuthURLParam("code_challenge_method", "S256"),
 	}
+	if a.central != nil {
+		options = append(options, oauth2.SetAuthURLParam("claims", `{"id_token":{"auth_time":{"essential":true}}}`))
+	}
 	if a.idpHint != "" {
 		options = append(options, oauth2.SetAuthURLParam("kc_idp_hint", a.idpHint))
 	}
 	return a.config.AuthCodeURL(state, options...), nil
 }
 
+// ExchangeAndValidate 交换授权码并核验签名、nonce及授权身份。
+// 参数：ctx为调用上下文与取消边界。
+//
+//	code为一次性OIDC授权码。
+//	verifier为原PKCE秘密。
+//	nonce为原OIDC登录随机校验材料。
+//
+// 返回值：已经校验的身份或轮换材料；协议、签名或依赖失败返回错误。
 func (a *OIDCAdapter) ExchangeAndValidate(ctx context.Context, code, verifier, nonce string) (account.Claims, error) {
+	return a.exchange(ctx, code, verifier, nonce, "")
+}
+
+// ExchangeWithCentral 在原门户签名校验链上追加一次性中央绑定，不改变客户授权范围。
+// 参数：ctx为请求，code/verifier/nonce为原OIDC材料，ticket为同浏览器平台票据。
+// 返回值：门户专属授权及服务器材料；任何可信校验失败时拒绝创建会话。
+func (a *OIDCAdapter) ExchangeWithCentral(ctx context.Context, code, verifier, nonce, ticket string) (account.Claims, error) {
+	return a.exchange(ctx, code, verifier, nonce, ticket)
+}
+
+// exchange 统一完成标准OIDC及中央模式换码，绑定完成后才解析应用权限。
+// 参数：ctx为请求，code/verifier/nonce为原事务材料，ticket为中央票据或旧模式空值。
+// 返回值：已验证的门户声明；依赖不可用与确定拒绝保持不同类型。
+func (a *OIDCAdapter) exchange(ctx context.Context, code, verifier, nonce, ticket string) (account.Claims, error) {
 	// 授权码必须与一次性 PKCE verifier 和 nonce 同时消费；缺少任一绑定都拒绝交换。
 	if strings.TrimSpace(code) == "" || verifier == "" || nonce == "" {
 		return account.Claims{}, errors.New("OIDC callback parameters are incomplete")
@@ -113,6 +163,22 @@ func (a *OIDCAdapter) ExchangeAndValidate(ctx context.Context, code, verifier, n
 		return account.Claims{}, errors.New("OIDC identity claims are invalid")
 	}
 	claims := compactPortalClaims(raw, a.roleConfigHash, earliestExpiry(idToken.Expiry, token.Expiry), token.AccessToken)
+	var binding central.Binding
+	if a.central != nil {
+		if ticket == "" || token.RefreshToken == "" {
+			return account.Claims{}, account.ErrInvalidLoginState
+		}
+		binding, err = a.central.Complete(ctx, ticket, token.AccessToken, rawIDToken)
+		if errors.Is(err, central.ErrUnavailable) {
+			return account.Claims{}, sharedauthorization.ErrUnavailable
+		}
+		if err != nil {
+			return account.Claims{}, account.ErrInvalidLoginState
+		}
+		if binding.Context.SubjectID != claims.IdentityID || binding.Context.TenantID != claims.TenantID {
+			return account.Claims{}, account.ErrInvalidClaims
+		}
+	}
 
 	if strings.TrimSpace(claims.Username) == "" {
 		info, profileErr := a.provider.UserInfo(oidcContext, oauth2.StaticTokenSource(token))
@@ -141,6 +207,9 @@ func (a *OIDCAdapter) ExchangeAndValidate(ctx context.Context, code, verifier, n
 		contextClaims.Username = claims.Username
 		contextClaims.ExpiresAt = earliestExpiry(claims.ExpiresAt, effectiveToken.Expiry)
 		contextClaims.AccessToken = effectiveToken.AccessToken
+		contextClaims.RefreshToken = effectiveToken.RefreshToken
+		contextClaims.AccessTokenExpiresAt = effectiveToken.Expiry.UTC()
+		contextClaims.CentralBinding = binding
 		return contextClaims, nil
 	}
 	return account.Claims{}, fmt.Errorf("load portal authorization context: %w", contextErr)
@@ -187,18 +256,21 @@ func validCompactPortalIdentity(raw compactOIDCClaims, nonce, accessToken string
 		strings.TrimSpace(accessToken) != ""
 }
 
+// authorizationContext 读取门户当前授权和客户边界，中央模式下保留依赖故障语义。
+// 参数：ctx为原请求上下文，accessToken为服务器持有的访问材料。
+// 返回值：已核验门户声明；明确失效、权限拒绝和暂时依赖失败分别返回。
 func (a *OIDCAdapter) authorizationContext(ctx context.Context, accessToken string) (account.Claims, error) {
 	if a.platformBaseURL == "" {
 		return account.Claims{}, errors.New("portal platform authorization context endpoint is not configured")
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, a.platformBaseURL+"/oauth2/authorization-context", nil)
 	if err != nil {
-		return account.Claims{}, fmt.Errorf("create portal authorization context request: %w", err)
+		return account.Claims{}, a.dependencyError("create portal authorization context request", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	resp, err := a.httpClient.Do(req)
 	if err != nil {
-		return account.Claims{}, fmt.Errorf("request portal authorization context: %w", err)
+		return account.Claims{}, a.dependencyError("request portal authorization context", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -212,12 +284,12 @@ func (a *OIDCAdapter) authorizationContext(ctx context.Context, accessToken stri
 			if resp.StatusCode >= http.StatusInternalServerError {
 				return account.Claims{}, fmt.Errorf("portal authorization context returned HTTP %d: %w", resp.StatusCode, sharedauthorization.ErrUnavailable)
 			}
-			return account.Claims{}, fmt.Errorf("portal authorization context returned unexpected HTTP %d", resp.StatusCode)
+			return account.Claims{}, a.dependencyError("portal authorization context", fmt.Errorf("unexpected HTTP %d", resp.StatusCode))
 		}
 	}
 	var raw sharedauthorization.Response
 	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
-		return account.Claims{}, fmt.Errorf("decode portal authorization context: %w", err)
+		return account.Claims{}, a.dependencyError("decode portal authorization context", err)
 	}
 	scopes, _, err := sharedauthorization.Validate(raw, a.expectedContext)
 	if err != nil {
@@ -422,4 +494,14 @@ func hashText(key []byte, value string) string {
 	mac := hmac.New(sha256.New, key)
 	_, _ = mac.Write([]byte(value))
 	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+}
+
+// dependencyError 在中央模式下保留授权网络故障语义，不以旧权限快照掩盖本次失败。
+// 参数：stage为失败步骤，cause为原始网络、取消或响应解析错误。
+// 返回值：含依赖分类的错误；关闭中央管理时保留原有错误类别。
+func (a *OIDCAdapter) dependencyError(stage string, cause error) error {
+	if a.central != nil {
+		cause = errors.Join(sharedauthorization.ErrUnavailable, cause)
+	}
+	return fmt.Errorf("%s: %w", stage, cause)
 }

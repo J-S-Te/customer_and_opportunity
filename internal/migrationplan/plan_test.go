@@ -7,6 +7,9 @@ import (
 	"testing"
 )
 
+// TestRepositoryMigrationsAreAssignedExactlyOnce 验证CRM与门户迁移互斥且均被登记。
+// 参数：t为测试上下文。
+// 返回值：无；新增版本未归属或迁移重复时失败。
 func TestRepositoryMigrationsAreAssignedExactlyOnce(t *testing.T) {
 	directory := filepath.Join("..", "..", "migrations")
 	crm, err := Build(directory, CRM)
@@ -17,7 +20,7 @@ func TestRepositoryMigrationsAreAssignedExactlyOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(crm.Entries) != 76 || len(portal.Entries) != 40 {
+	if len(crm.Entries) != 77 || len(portal.Entries) != 41 {
 		t.Fatalf("unexpected plan lengths: crm=%d portal=%d", len(crm.Entries), len(portal.Entries))
 	}
 	for _, plan := range []Plan{crm, portal} {

@@ -37,6 +37,29 @@ paths:
     post: {$ref: '#/components/x-operations/crmBackchannelLogout'}
   /auth/local-logout:
     post: {$ref: '#/components/x-operations/crmLocalLogout'}
+  /auth/session:
+    get:
+      operationId: crmCentralSessionState
+      tags: [Authentication]
+      description: Read the current platform managed lifecycle without recording activity. No access, refresh or binding tokens are exposed.
+      security: [{crmSession: []}]
+      responses:
+        '200': {$ref: '#/components/responses/OK'}
+        '401': {$ref: '#/components/responses/Error'}
+        '503': {$ref: '#/components/responses/Error'}
+  /auth/activity:
+    post:
+      operationId: crmCentralSessionActivity
+      tags: [Authentication]
+      description: Record an explicit browser interaction through the authenticated RP. Requires the exact configured Origin and X-CSRF-Token header. Does not reset the original eight hour expiry.
+      security: [{crmSession: []}]
+      parameters:
+        - {name: X-CSRF-Token, in: header, required: true, schema: {type: string, const: '1'}}
+      responses:
+        '200': {$ref: '#/components/responses/OK'}
+        '401': {$ref: '#/components/responses/Error'}
+        '403': {$ref: '#/components/responses/Error'}
+        '503': {$ref: '#/components/responses/Error'}
   /api/v1/auth/me:
     get: {$ref: '#/components/x-operations/crmMe'}
   /api/v1/capabilities:

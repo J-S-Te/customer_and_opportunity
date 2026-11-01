@@ -27,8 +27,17 @@ func Start(ctx context.Context, application string) (Check, error) {
 	return g.Check, nil
 }
 
+// Operation 按技术入口和业务操作分类既有许可检查。
+// 参数：kind为当前账号或身份的业务类别。
+//
+//	method为原始HTTP操作方法。
+//	path为原始技术或业务路由。
+//
+// 返回值：与当前路由匹配的许可操作类别。
 func Operation(kind, method, path string) core.Operation {
 	switch path {
+	case "/auth/session", "/auth/activity":
+		return core.ESSENTIAL_SERVICE
 	case "/livez", "/readyz", "/healthz", "/auth/login", "/auth/callback", "/auth/logout", "/auth/local-logout", "/auth/backchannel-logout", "/api/v1/auth/me", "/api/v1/capabilities", "/api/v1/audit-outbox/status", "/api/v1/account/security", "/api/v1/account/sessions":
 		return core.ESSENTIAL_SERVICE
 	}

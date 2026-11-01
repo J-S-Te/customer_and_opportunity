@@ -12,6 +12,7 @@ import (
 	sharedauth "github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/auth"
 	sharedauthorization "github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/authorizationcontext"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/loginip"
+	central "github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/sessiongovernance"
 	"golang.org/x/oauth2"
 )
 
@@ -35,6 +36,8 @@ func loginFailure(stage string, cause error) error {
 }
 
 type Options struct {
+	CentralClient                             central.Client
+	CentralExpectation                        central.Expectation
 	TenantID, RoleConfigHash, EnvironmentCode string
 	SessionTTL                                time.Duration
 	MaxRoles                                  int
@@ -49,6 +52,15 @@ type Service struct {
 	now     func() time.Time
 }
 
+// NewService 装配会话服务与可选中央权威依赖。
+// 参数：repo为本应用持久化边界。
+//
+//	oidc为受信任的OIDC协议客户端。
+//	encryptionKey为服务器端令牌材料加密密钥。
+//	options为本应用认证及运行选项。
+//	brokers为可选的既有身份代理校验器。
+//
+// 返回值：装配后的应用或认证实例；配置与依赖装配失败时返回错误。
 func NewService(repo repository, oidc oidcClient, encryptionKey []byte, options Options, brokers ...brokerVerifier) (*Service, error) {
 	codec, err := newSecretCodec(encryptionKey)
 	if err != nil {
@@ -58,11 +70,32 @@ func NewService(repo repository, oidc oidcClient, encryptionKey []byte, options 
 	if len(brokers) > 0 {
 		broker = brokers[0]
 	}
+	if options.CentralClient != nil {
+		if _, ok := repo.(governanceRepository); !ok {
+			return nil, errors.New("central sessions require transactional storage")
+		}
+		if _, ok := oidc.(centralExchanger); !ok {
+			return nil, errors.New("central sessions require bound OIDC exchange")
+		}
+		if _, ok := oidc.(tokenRefresher); !ok {
+			return nil, errors.New("central sessions require token refresh")
+		}
+	}
 	return &Service{repo: repo, oidc: oidc, broker: broker, codec: codec, options: options, now: time.Now}, nil
 }
 
-type LoginStart struct{ AuthorizationURL string }
+type LoginStart struct {
+	AuthorizationURL string
+	State            string
+}
 
+// BeginLogin 建立一次性登录事务并生成可信认证入口。
+// 参数：ctx为调用上下文与取消边界。
+//
+//	returnPath为经过同源限制的登录返回路径。
+//	forceLogin为是否要求重新认证。
+//
+// 返回值：受原始期限约束的登录结果；身份、绑定或依赖失败返回错误。
 func (s *Service) BeginLogin(ctx context.Context, returnPath string, forceLogin ...bool) (LoginStart, error) {
 	// return_to 最终会进入重定向响应，只允许站内绝对路径，阻断开放重定向和响应头注入。
 	if !safeReturnPath(returnPath) {
@@ -87,8 +120,12 @@ func (s *Service) BeginLogin(ctx context.Context, returnPath string, forceLogin 
 	}
 	now := s.now().UTC()
 	// state 原文仅返回浏览器；服务端保存摘要并加密其余秘密，回调消费后立即删除。
-	if err := s.repo.SaveLogin(ctx, &LoginTransaction{StateHash: tokenHash(state), TenantID: s.options.TenantID, NonceCipher: nonceCipher, CodeVerifierCipher: verifierCipher, ReturnPath: returnPath, ExpiresAt: now.Add(loginTTL), CreatedAt: now}); err != nil {
+	forcedLogin := len(forceLogin) > 0 && forceLogin[0]
+	if err := s.repo.SaveLogin(ctx, &LoginTransaction{StateHash: tokenHash(state), TenantID: s.options.TenantID, NonceCipher: nonceCipher, CodeVerifierCipher: verifierCipher, ReturnPath: returnPath, ExpiresAt: now.Add(loginTTL), CreatedAt: now, ForceLogin: forcedLogin}); err != nil {
 		return LoginStart{}, err
+	}
+	if s.options.CentralClient != nil {
+		return LoginStart{AuthorizationURL: s.options.CentralClient.BeginURL(state, nonce), State: state}, nil
 	}
 	if forced, ok := s.oidc.(forcedLoginOIDCClient); ok && len(forceLogin) > 0 && forceLogin[0] {
 		return LoginStart{AuthorizationURL: forced.AuthorizationURLWithPrompt(state, nonce, verifier, true)}, nil
@@ -101,6 +138,14 @@ type LoginResult struct {
 	ExpiresAt                time.Time
 }
 
+// CompleteLogin 消费原登录事务并在核验身份后建立本地会话。
+// 参数：ctx为调用上下文与取消边界。
+//
+//	state为原始登录事务随机状态。
+//	code为一次性OIDC授权码。
+//	callbackLoginIP为回调请求经过规范化的来源地址。
+//
+// 返回值：受原始期限约束的登录结果；身份、绑定或依赖失败返回错误。
 func (s *Service) CompleteLogin(ctx context.Context, state, code string, callbackLoginIP ...string) (LoginResult, error) {
 	if strings.TrimSpace(state) == "" || strings.TrimSpace(code) == "" {
 		return LoginResult{}, loginFailure("callback_parameters", errors.New("state or code is missing"))
@@ -119,7 +164,16 @@ func (s *Service) CompleteLogin(ctx context.Context, state, code string, callbac
 	if err != nil {
 		return LoginResult{}, loginFailure("pkce_verifier_unwrap", err)
 	}
-	claims, err := s.oidc.Exchange(ctx, code, verifier, nonce)
+	var claims verifiedClaims
+	if s.options.CentralClient != nil {
+		ticket, ticketErr := s.codec.decrypt(transaction.CentralTicketCipher)
+		if ticketErr != nil || ticket == "" {
+			return LoginResult{}, loginFailure("central_ticket", ErrUnauthenticated)
+		}
+		claims, err = s.oidc.(centralExchanger).ExchangeWithCentral(ctx, code, verifier, nonce, ticket)
+	} else {
+		claims, err = s.oidc.Exchange(ctx, code, verifier, nonce)
+	}
 	if err != nil {
 		return LoginResult{}, loginFailure("authorization_code_exchange", err)
 	}
@@ -151,6 +205,12 @@ func (s *Service) CompleteLogin(ctx context.Context, state, code string, callbac
 	}
 	// 本地会话绝不能比上游 ID/访问令牌 或本地策略 TTL 活得更久。
 	expiresAt := earliestExpiry(claims.ExpiresAt, now.Add(s.options.SessionTTL))
+	if s.options.CentralClient != nil {
+		if central.Validate(claims.CentralBinding.Context, s.options.CentralExpectation, claims.IdentityID) != nil || claims.CentralBinding.Token == "" || claims.RefreshToken == "" {
+			return LoginResult{}, loginFailure("central_binding", ErrUnauthenticated)
+		}
+		expiresAt = claims.CentralBinding.Context.AbsoluteExpiresAt
+	}
 	if !expiresAt.After(now) {
 		return LoginResult{}, loginFailure("session_expiry", errors.New("session expiry is not in the future"))
 	}
@@ -179,20 +239,50 @@ func (s *Service) CompleteLogin(ctx context.Context, state, code string, callbac
 		return LoginResult{}, err
 	}
 	session := &Session{SessionIDHash: tokenHash(rawSession), TenantID: claims.TenantID, PlatformUserID: claims.IdentityID, OIDCSessionID: claims.OIDCSessionID, PersonID: claims.PersonID, DisplayName: claims.DisplayName, Username: claims.Username, LoginIP: claims.LoginIP, PrimaryOrgID: claims.PrimaryOrgID, OrganizationIDsJSON: organizationIDsJSON, RolesJSON: rolesJSON, PermissionsJSON: permissionsJSON, DataScopesJSON: dataScopesJSON, RoleConfigHash: claims.RoleConfigHash, AuthzRevision: claims.AuthzRevision, AccessTokenCipher: accessTokenCipher, ExpiresAt: expiresAt, AuthorizationCheckedAt: now, CreatedAt: now, LastSeenAt: now}
+	if s.options.CentralClient != nil {
+		session.CentralBindingCipher, err = s.codec.encrypt(claims.CentralBinding.Token)
+		if err != nil {
+			return LoginResult{}, err
+		}
+		session.RefreshTokenCipher, err = s.codec.encrypt(claims.RefreshToken)
+		if err != nil {
+			return LoginResult{}, err
+		}
+		session.AccessTokenExpiresAt = claims.AccessTokenExpiresAt.UTC()
+		session.CentralSessionID = claims.CentralBinding.Context.SessionID
+	}
 	if err := s.repo.CreateSession(ctx, session); err != nil {
 		return LoginResult{}, err
 	}
 	return LoginResult{SessionToken: rawSession, ReturnPath: transaction.ReturnPath, ExpiresAt: expiresAt}, nil
 }
 
+// Authenticate 校验当前浏览器会话、中央期限与业务授权。
+// 参数：ctx为调用上下文与取消边界。
+//
+//	rawSession为浏览器Cookie中的随机会话材料。
+//
+// 返回值：经过核验的主体或会话；明确失效与暂时依赖错误分别返回。
 func (s *Service) Authenticate(ctx context.Context, rawSession string) (sharedauth.Principal, error) {
 	if strings.TrimSpace(rawSession) == "" {
 		return sharedauth.Principal{}, ErrUnauthenticated
 	}
 	now := s.now().UTC()
 	session, err := s.repo.FindSession(ctx, tokenHash(rawSession), now)
-	if err != nil || session.TenantID != s.options.TenantID {
+	if err != nil {
+		return unavailablePrincipal(err)
+	}
+	if session.TenantID != s.options.TenantID {
 		return sharedauth.Principal{}, ErrUnauthenticated
+	}
+	if s.options.CentralClient != nil {
+		if _, err = s.centralState(ctx, session, false); err != nil {
+			return sharedauth.Principal{}, err
+		}
+		session, err = s.refreshSessionAccess(ctx, session)
+		if err != nil {
+			return sharedauth.Principal{}, err
+		}
 	}
 	stored, err := claimsFromSession(session)
 	if err != nil {
@@ -209,11 +299,11 @@ func (s *Service) Authenticate(ctx context.Context, rawSession string) (sharedau
 		}
 		current, currentErr := s.oidc.UserInfo(ctx, accessToken)
 		if errors.Is(currentErr, sharedauthorization.ErrUnavailable) {
-			if now.Sub(session.AuthorizationCheckedAt) > authorizationMaxStale {
+			if s.options.CentralClient != nil || now.Sub(session.AuthorizationCheckedAt) > authorizationMaxStale {
 				return sharedauth.Principal{}, ErrAuthorizationUnavailable
 			}
 			if err := s.repo.TouchSession(ctx, session.SessionIDHash, now, time.Time{}); err != nil {
-				return sharedauth.Principal{}, ErrUnauthenticated
+				return unavailablePrincipal(err)
 			}
 			return principalFromClaims(stored), nil
 		}
@@ -229,7 +319,7 @@ func (s *Service) Authenticate(ctx context.Context, rawSession string) (sharedau
 		checkedAt = now
 	}
 	if err := s.repo.TouchSession(ctx, session.SessionIDHash, now, checkedAt); err != nil {
-		return sharedauth.Principal{}, ErrUnauthenticated
+		return unavailablePrincipal(err)
 	}
 	return principalFromClaims(stored), nil
 }

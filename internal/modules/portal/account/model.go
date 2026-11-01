@@ -35,6 +35,10 @@ type IdentityLink struct {
 func (IdentityLink) TableName() string { return "portal_identity_links" }
 
 type Session struct {
+	RefreshTokenCipher   []byte
+	AccessTokenExpiresAt time.Time
+	CentralBindingCipher []byte
+	CentralSessionID     string
 	database.Model
 	PublicID               string      `gorm:"size:64;not null;uniqueIndex"`
 	SessionIDHash          string      `gorm:"size:64;not null;uniqueIndex"`
@@ -74,6 +78,7 @@ type BackchannelLogoutReplay struct {
 func (BackchannelLogoutReplay) TableName() string { return "portal_oidc_backchannel_logout_replays" }
 
 type ActivationContext struct {
+	CentralTicketCipher []byte
 	database.Model
 	ContextIDHash          string     `gorm:"size:64;not null;uniqueIndex"`
 	InviteTokenHash        string     `gorm:"size:64;not null;index"`

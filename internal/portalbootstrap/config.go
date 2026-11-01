@@ -18,24 +18,26 @@ import (
 const maxSessionTTL = 15 * time.Minute
 
 type Config struct {
-	Address                  string
-	MySQLDSN                 string
-	PathPrefix               string
-	PublicOrigin             string
-	TenantID                 string
-	RoleConfigHash           string
-	OIDCIssuer               string
-	OIDCBackchannelURL       string
-	OIDCClientID             string
-	OIDCClientSecret         string
-	OIDCRedirectURI          string
-	OIDCScopes               []string
-	OIDCIdentityProviderHint string
-	SessionCookieName        string
-	SessionCookieSecure      bool
-	SessionTTL               time.Duration
-	BackchannelLogoutTTL     time.Duration
-	AccountSecurityCenterURL string
+	CentralSessionEnabled       bool
+	CentralSessionPublicBaseURL string
+	Address                     string
+	MySQLDSN                    string
+	PathPrefix                  string
+	PublicOrigin                string
+	TenantID                    string
+	RoleConfigHash              string
+	OIDCIssuer                  string
+	OIDCBackchannelURL          string
+	OIDCClientID                string
+	OIDCClientSecret            string
+	OIDCRedirectURI             string
+	OIDCScopes                  []string
+	OIDCIdentityProviderHint    string
+	SessionCookieName           string
+	SessionCookieSecure         bool
+	SessionTTL                  time.Duration
+	BackchannelLogoutTTL        time.Duration
+	AccountSecurityCenterURL    string
 	// AllowInsecureHTTPSession 仅用于无 HTTPS 的测试服务器：显式开启后允许非回环 HTTP
 	// 源使用非 Secure 会话 Cookie 和非 HTTPS 安全中心链接。默认关闭，生产必须保持 false。
 	AllowInsecureHTTPSession  bool
@@ -86,6 +88,9 @@ type Config struct {
 	ReportIdentityClientSecret string
 }
 
+// LoadConfig 读取并校验应用运行配置及中央接入开关。
+// 参数：无。
+// 返回值：校验后的运行配置及解析或约束错误。
 func LoadConfig() (Config, error) {
 	// 所有安全相关配置在启动时冻结；解析或校验失败即退出，运行时不从环境变量做隐式降级。
 	secure, err := strconv.ParseBool(valueOrDefault("PORTAL_SESSION_COOKIE_SECURE", "true"))
@@ -95,6 +100,10 @@ func LoadConfig() (Config, error) {
 	allowInsecureHTTPSession, err := strconv.ParseBool(valueOrDefault("PORTAL_ALLOW_INSECURE_HTTP_SESSION", "false"))
 	if err != nil {
 		return Config{}, fmt.Errorf("PORTAL_ALLOW_INSECURE_HTTP_SESSION: %w", err)
+	}
+	centralEnabled, err := strconv.ParseBool(valueOrDefault("CENTRAL_SESSION_ENABLED", "false"))
+	if err != nil {
+		return Config{}, fmt.Errorf("CENTRAL_SESSION_ENABLED: %w", err)
 	}
 	ttl, err := time.ParseDuration(valueOrDefault("PORTAL_SESSION_TTL", "15m"))
 	if err != nil {
@@ -149,7 +158,9 @@ func LoadConfig() (Config, error) {
 		return Config{}, fmt.Errorf("APP_TRUSTED_PROXIES: %w", err)
 	}
 	config := Config{
-		Address: valueOrDefault("PORTAL_HTTP_ADDRESS", ":8091"), MySQLDSN: os.Getenv("PORTAL_MYSQL_DSN"),
+		CentralSessionEnabled:       centralEnabled,
+		CentralSessionPublicBaseURL: valueOrDefault("CENTRAL_SESSION_PUBLIC_BASE_URL", os.Getenv("PORTAL_PUBLIC_ORIGIN")),
+		Address:                     valueOrDefault("PORTAL_HTTP_ADDRESS", ":8091"), MySQLDSN: os.Getenv("PORTAL_MYSQL_DSN"),
 		PathPrefix: valueOrDefault("PORTAL_PATH_PREFIX", "/customer-portal"), PublicOrigin: os.Getenv("PORTAL_PUBLIC_ORIGIN"),
 		TenantID: os.Getenv("PORTAL_OIDC_TENANT_ID"), RoleConfigHash: os.Getenv("PORTAL_ROLE_CONFIG_HASH"),
 		OIDCIssuer: os.Getenv("PORTAL_OIDC_ISSUER"), OIDCBackchannelURL: os.Getenv("PORTAL_OIDC_BACKCHANNEL_BASE_URL"),
@@ -203,6 +214,9 @@ func portalOIDCIdentityProviderHint() string {
 	return valueOrDefault("PORTAL_OIDC_IDP_HINT", "basic-platform-customer")
 }
 
+// validate 核验运行配置及中央会话接入前置条件。
+// 参数：无。
+// 返回值：无；参数、校验、存储或依赖失败时返回错误。
 func (c Config) validate() error {
 	if err := validateReportDownloadConfig(c); err != nil {
 		return fmt.Errorf("Portal report download configuration: %w", err)
@@ -295,7 +309,11 @@ func (c Config) validate() error {
 			}
 		}
 	}
-	if c.SessionTTL <= 0 || c.SessionTTL > maxSessionTTL {
+	maximumTTL := maxSessionTTL
+	if c.CentralSessionEnabled {
+		maximumTTL = 8 * time.Hour
+	}
+	if c.SessionTTL <= 0 || c.SessionTTL > maximumTTL {
 		return fmt.Errorf("PORTAL_SESSION_TTL must be positive and at most %s", maxSessionTTL)
 	}
 	if c.BackchannelLogoutTTL != 0 && (c.BackchannelLogoutTTL < 30*time.Second || c.BackchannelLogoutTTL > 15*time.Minute) {
