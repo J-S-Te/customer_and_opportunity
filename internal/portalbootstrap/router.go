@@ -389,6 +389,9 @@ func configureOpaquePathRouting(router *gin.Engine) {
 	router.UnescapePathValues = true
 }
 
+// beginLogin 启动普通或邀请登录，并为中央桥接建立同浏览器state绑定。
+// 参数：deps为当前门户配置与已装配账号服务。
+// 返回值：登录跳转处理器；事务创建失败不发Cookie或跳转。
 func beginLogin(deps RouterDependencies) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		returnPath := c.Query("return_to")
@@ -403,6 +406,12 @@ func beginLogin(deps RouterDependencies) gin.HandlerFunc {
 		if err != nil {
 			response.Error(c, err)
 			return
+		}
+		if deps.Config.CentralSessionEnabled {
+			cookie := sessionCookie(deps.Config, result.State, time.Now().UTC().Add(10*time.Minute))
+			cookie.Name = deps.Config.SessionCookieName + "_oidc_state"
+			cookie.MaxAge = 600
+			http.SetCookie(c.Writer, cookie)
 		}
 		c.Redirect(http.StatusFound, result.AuthorizationURL)
 	}
