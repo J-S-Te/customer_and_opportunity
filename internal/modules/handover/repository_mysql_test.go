@@ -43,7 +43,7 @@ type testOpportunityRow struct {
 
 func (testOpportunityRow) TableName() string { return "crm_opportunities" }
 
-// testGateRow 复刻 migrations/000125_crm_handover_gate.up.sql 的形状，
+// testGateRow 复刻 migrations/000127_crm_handover_gate.up.sql 的形状，
 // 一次性 MySQL schema 由测试自建，仍走真实行锁语义。
 type testGateRow struct {
 	TenantID  string    `gorm:"column:tenant_id;size:64;primaryKey"`

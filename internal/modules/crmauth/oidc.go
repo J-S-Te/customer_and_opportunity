@@ -17,10 +17,12 @@ import (
 	sharedauth "github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/auth"
 	sharedauthorization "github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/authorizationcontext"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/loginip"
+	central "github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/sessiongovernance"
 	"golang.org/x/oauth2"
 )
 
 type OIDCOptions struct {
+	CentralClient                                                                    central.Client
 	Issuer, BackchannelBaseURL, PlatformBaseURL, ClientID, ClientSecret, RedirectURI string
 	ApplicationCode, EnvironmentCode                                                 string
 	IdentityProviderHint                                                             string
@@ -33,6 +35,8 @@ type OIDCOptions struct {
 var errOIDCRefreshRejected = errors.New("CRM OIDC refresh token was rejected")
 
 type verifiedClaims struct {
+	AccessTokenExpiresAt                                                           time.Time
+	CentralBinding                                                                 central.Binding
 	Subject, IdentityID, TenantID, PersonID, DisplayName, RoleConfigHash, Username string
 	OIDCSessionID                                                                  string
 	PrimaryOrgID                                                                   string
@@ -77,6 +81,7 @@ type platformClaims struct {
 }
 
 type platformOIDCClient struct {
+	central              central.Client
 	config               oauth2.Config
 	verifier             *oidc.IDTokenVerifier
 	provider             *oidc.Provider
@@ -87,6 +92,12 @@ type platformOIDCClient struct {
 	expectedContext      sharedauthorization.Expectation
 }
 
+// NewPlatformOIDCClient 装配受登记发行者约束的OIDC客户端。
+// 参数：ctx为调用上下文与取消边界。
+//
+//	options为本应用认证及运行选项。
+//
+// 返回值：装配后的应用或认证实例；配置与依赖装配失败时返回错误。
 func NewPlatformOIDCClient(ctx context.Context, options OIDCOptions) (*platformOIDCClient, error) {
 	httpClient := &http.Client{Timeout: 10 * time.Second}
 	if options.BackchannelBaseURL != "" {
@@ -112,6 +123,7 @@ func NewPlatformOIDCClient(ctx context.Context, options OIDCOptions) (*platformO
 		return nil, err
 	}
 	return &platformOIDCClient{
+		central:    options.CentralClient,
 		httpClient: httpClient, provider: provider,
 		platformBaseURL:      strings.TrimRight(options.PlatformBaseURL, "/"),
 		identityProviderHint: strings.TrimSpace(options.IdentityProviderHint),
@@ -156,10 +168,24 @@ func (c *platformOIDCClient) AuthorizationURL(state, nonce, verifier string) str
 	return c.AuthorizationURLWithPrompt(state, nonce, verifier, false)
 }
 
+// AuthorizationURLWithPrompt 保留原state、nonce和PKCE构造指定认证提示的地址。
+// 参数：state为原始登录事务随机状态。
+//
+//	nonce为原OIDC登录随机校验材料。
+//	verifier为原PKCE秘密。
+//	forceLogin为是否要求重新认证。
+//
+// 返回值：绑定原登录事务的授权地址；构造失败按原错误模型返回。
 func (c *platformOIDCClient) AuthorizationURLWithPrompt(state, nonce, verifier string, forceLogin bool) string {
 	options := []oauth2.AuthCodeOption{oidc.Nonce(nonce), oauth2.S256ChallengeOption(verifier)}
+	if c.central != nil {
+		options = append(options, oauth2.SetAuthURLParam("claims", `{"id_token":{"auth_time":{"essential":true}}}`))
+	}
 	if forceLogin {
 		options = append(options, oauth2.SetAuthURLParam("prompt", "login"))
+		if c.central != nil {
+			options = append(options, oauth2.SetAuthURLParam("max_age", "0"))
+		}
 	}
 	if c.identityProviderHint != "" {
 		// Keycloak 的 kc_idp_hint 会直接把认证请求交给基础平台 Broker。
@@ -169,7 +195,29 @@ func (c *platformOIDCClient) AuthorizationURLWithPrompt(state, nonce, verifier s
 	return c.config.AuthCodeURL(state, options...)
 }
 
+// Exchange 交换授权码并独立验证身份与授权声明。
+// 参数：ctx为调用上下文与取消边界。
+//
+//	code为一次性OIDC授权码。
+//	verifier为原PKCE秘密。
+//	nonce为原OIDC登录随机校验材料。
+//
+// 返回值：已经校验的身份或轮换材料；协议、签名或依赖失败返回错误。
 func (c *platformOIDCClient) Exchange(ctx context.Context, code, verifier, nonce string) (verifiedClaims, error) {
+	return c.exchange(ctx, code, verifier, nonce, "")
+}
+
+// ExchangeWithCentral 以完整OIDC验证结果完成中央绑定，再读取业务授权快照。
+// 参数：ctx为请求，code为授权码，verifier/nonce为原事务秘密，ticket为一次性桥接票据。
+// 返回值：保持原始中央截止的授权声明；任一可信链路失败均不创建本地会话。
+func (c *platformOIDCClient) ExchangeWithCentral(ctx context.Context, code, verifier, nonce, ticket string) (verifiedClaims, error) {
+	return c.exchange(ctx, code, verifier, nonce, ticket)
+}
+
+// exchange 兑换授权码并验证身份、授权和可选中央绑定。
+// 参数：ctx为请求，code为授权码，verifier为PKCE材料，nonce为原随机量，ticket为中央票据。
+// 返回值：已核验声明与令牌材料；协议、身份、授权或中央依赖失败返回错误。
+func (c *platformOIDCClient) exchange(ctx context.Context, code, verifier, nonce, ticket string) (verifiedClaims, error) {
 	if strings.TrimSpace(code) == "" || verifier == "" || nonce == "" {
 		return verifiedClaims{}, errors.New("CRM OIDC callback parameters are incomplete")
 	}
@@ -196,6 +244,22 @@ func (c *platformOIDCClient) Exchange(ctx context.Context, code, verifier, nonce
 	// ID 令牌 的 sub 是平台规范中的 规范身份；若令牌同时返回别名，
 	// 两者必须一致，避免 CRM 在不同令牌载荷间产生两个主体。
 	claims := claimsFromPlatform(raw)
+	var binding central.Binding
+	if c.central != nil {
+		if ticket == "" {
+			return verifiedClaims{}, ErrUnauthenticated
+		}
+		binding, err = c.central.Complete(ctx, ticket, token.AccessToken, rawIDToken)
+		if errors.Is(err, central.ErrUnavailable) {
+			return verifiedClaims{}, sharedauthorization.ErrUnavailable
+		}
+		if err != nil {
+			return verifiedClaims{}, ErrUnauthenticated
+		}
+		if binding.Context.SubjectID != claims.IdentityID || binding.Context.TenantID != claims.TenantID {
+			return verifiedClaims{}, ErrUnauthenticated
+		}
+	}
 
 	if strings.TrimSpace(claims.Username) == "" {
 		info, profileErr := c.provider.UserInfo(oidcContext, oauth2.StaticTokenSource(token))
@@ -230,9 +294,14 @@ func (c *platformOIDCClient) Exchange(ctx context.Context, code, verifier, nonce
 	contextClaims.ExpiresAt = earliestExpiry(claims.ExpiresAt, effectiveToken.Expiry)
 	contextClaims.AccessToken = effectiveToken.AccessToken
 	contextClaims.RefreshToken = effectiveToken.RefreshToken
+	contextClaims.AccessTokenExpiresAt = effectiveToken.Expiry.UTC()
+	contextClaims.CentralBinding = binding
 	return contextClaims, nil
 }
 
+// UserInfo 核验当前授权并读取提供方资料，中央模式下依赖故障不能冒充身份失效。
+// 参数：ctx为原请求上下文，accessToken为服务器持有的当前访问材料。
+// 返回值：已核验声明；明确拒绝与暂时依赖失败保留不同错误类别。
 func (c *platformOIDCClient) UserInfo(ctx context.Context, accessToken string) (verifiedClaims, error) {
 	if strings.TrimSpace(accessToken) == "" {
 		return verifiedClaims{}, errors.New("CRM OIDC access token is missing")
@@ -244,7 +313,7 @@ func (c *platformOIDCClient) UserInfo(ctx context.Context, accessToken string) (
 	oidcContext := oidc.ClientContext(ctx, c.httpClient)
 	info, userInfoErr := c.provider.UserInfo(oidcContext, oauth2.StaticTokenSource(&oauth2.Token{AccessToken: accessToken, TokenType: "Bearer"}))
 	if userInfoErr != nil {
-		return verifiedClaims{}, fmt.Errorf("load CRM OIDC UserInfo: %w", userInfoErr)
+		return verifiedClaims{}, c.dependencyError("load CRM OIDC UserInfo", userInfoErr)
 	}
 	var raw struct {
 		Subject           string `json:"sub"`
@@ -263,18 +332,21 @@ func (c *platformOIDCClient) UserInfo(ctx context.Context, accessToken string) (
 	return claims, nil
 }
 
+// AuthorizationContext 读取并验证预期应用及环境的完整授权快照。
+// 参数：ctx为原请求上下文，accessToken为服务器持有的当前访问材料。
+// 返回值：可信权限声明；令牌拒绝、权限拒绝与暂时依赖故障分别返回。
 func (c *platformOIDCClient) AuthorizationContext(ctx context.Context, accessToken string) (verifiedClaims, error) {
 	if c.platformBaseURL == "" {
-		return verifiedClaims{}, errors.New("CRM platform authorization context endpoint is not configured")
+		return verifiedClaims{}, c.dependencyError("CRM platform authorization context", errors.New("endpoint is not configured"))
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.platformBaseURL+"/oauth2/authorization-context", nil)
 	if err != nil {
-		return verifiedClaims{}, fmt.Errorf("create CRM authorization context request: %w", err)
+		return verifiedClaims{}, c.dependencyError("create CRM authorization context request", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return verifiedClaims{}, fmt.Errorf("request CRM authorization context: %w", err)
+		return verifiedClaims{}, c.dependencyError("request CRM authorization context", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -288,12 +360,12 @@ func (c *platformOIDCClient) AuthorizationContext(ctx context.Context, accessTok
 			if resp.StatusCode >= http.StatusInternalServerError {
 				return verifiedClaims{}, fmt.Errorf("CRM authorization context returned HTTP %d: %w", resp.StatusCode, sharedauthorization.ErrUnavailable)
 			}
-			return verifiedClaims{}, fmt.Errorf("CRM authorization context returned unexpected HTTP %d", resp.StatusCode)
+			return verifiedClaims{}, c.dependencyError("CRM authorization context", fmt.Errorf("unexpected HTTP %d", resp.StatusCode))
 		}
 	}
 	var raw sharedauthorization.Response
 	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
-		return verifiedClaims{}, fmt.Errorf("decode CRM authorization context: %w", err)
+		return verifiedClaims{}, c.dependencyError("decode CRM authorization context", err)
 	}
 	scopes, decision, err := sharedauthorization.Validate(raw, c.expectedContext)
 	if err != nil {
@@ -306,9 +378,9 @@ func (c *platformOIDCClient) AuthorizationContext(ctx context.Context, accessTok
 	return verifiedClaims{Subject: raw.Subject, IdentityID: raw.IdentityID, TenantID: raw.TenantID, PersonID: raw.PersonID, PrimaryOrgID: primaryOrgID, Roles: raw.Roles, Permissions: raw.Permissions, OrganizationIDs: decision.OrganizationIDs, DataScopes: scopes, AuthzRevision: raw.AuthorizationRevision, LoginIP: loginip.Normalize(raw.UserLoginIP)}, nil
 }
 
-// RefreshToken 使用回调阶段签发的 refresh token 换取新的访问令牌。平台对 refresh token
-// 采用一次性轮换，因此调用方必须在会话行锁内串行调用（见 GORMRepository.RefreshSessionTokens），
-// 不能由并行请求各自刷新。提供方明确拒绝时返回 errOIDCRefreshRejected，临时错误保持原样。
+// RefreshToken 在调用方持有会话行锁时轮换服务器端访问和刷新材料。
+// 参数：ctx为有界请求，refreshToken为服务器解密的原始刷新令牌。
+// 返回值：新材料；明确令牌失效返回拒绝标识，依赖故障保持错误供中央模式503处理。
 func (c *platformOIDCClient) RefreshToken(ctx context.Context, refreshToken string) (refreshedTokens, error) {
 	if strings.TrimSpace(refreshToken) == "" {
 		return refreshedTokens{}, fmt.Errorf("%w: refresh token is missing", errOIDCRefreshRejected)
@@ -316,7 +388,7 @@ func (c *platformOIDCClient) RefreshToken(ctx context.Context, refreshToken stri
 	seed := &oauth2.Token{RefreshToken: refreshToken, Expiry: time.Now().Add(-time.Minute)}
 	refreshed, err := c.config.TokenSource(oidc.ClientContext(ctx, c.httpClient), seed).Token()
 	if err != nil {
-		if oidcRefreshRejected(err) {
+		if c.refreshRejected(err) {
 			return refreshedTokens{}, fmt.Errorf("%w: %v", errOIDCRefreshRejected, err)
 		}
 		return refreshedTokens{}, fmt.Errorf("refresh CRM OIDC token: %w", err)
@@ -325,6 +397,18 @@ func (c *platformOIDCClient) RefreshToken(ctx context.Context, refreshToken stri
 		return refreshedTokens{}, errors.New("CRM OIDC token refresh returned no access token")
 	}
 	return refreshedTokens{AccessToken: refreshed.AccessToken, RefreshToken: firstNonEmpty(refreshed.RefreshToken, refreshToken), ExpiresAt: refreshed.Expiry.UTC()}, nil
+}
+
+// refreshRejected 按模式保留明确失效语义，避免中央客户端配置故障误注销。
+// 参数：err为提供方返回的刷新协议或传输错误。
+// 返回值：中央仅明确无效令牌为真；旧模式沿用原有4xx拒绝分类。
+func (c *platformOIDCClient) refreshRejected(err error) bool {
+	if c.central == nil {
+		return oidcRefreshRejected(err)
+	}
+	var protocol *oauth2.RetrieveError
+	return errors.As(err, &protocol) &&
+		(protocol.ErrorCode == "invalid_grant" || protocol.ErrorCode == "invalid_token")
 }
 
 // oidcRefreshRejected 区分提供方明确拒绝与临时不可用。oauth2 以 RetrieveError 报告协议错误，
@@ -599,4 +683,14 @@ func (t *backchannelTransport) RoundTrip(request *http.Request) (*http.Response,
 	clone := request.Clone(request.Context())
 	clone.URL.Scheme, clone.URL.Host = t.backchannel.Scheme, t.backchannel.Host
 	return t.base.RoundTrip(clone)
+}
+
+// dependencyError 在中央模式下保留资料与授权网络故障的503语义，不触发确定退出。
+// 参数：stage为失败步骤，cause为原始网络、取消或响应解析错误。
+// 返回值：含依赖分类的错误；关闭中央管理时保留原有错误类别。
+func (c *platformOIDCClient) dependencyError(stage string, cause error) error {
+	if c.central != nil {
+		cause = errors.Join(sharedauthorization.ErrUnavailable, cause)
+	}
+	return fmt.Errorf("%s: %w", stage, cause)
 }

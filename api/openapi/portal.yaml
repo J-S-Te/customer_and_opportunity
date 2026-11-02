@@ -18,6 +18,29 @@ tags:
   - {name: Filing}
   - {name: Machine integration}
 paths:
+  /auth/session:
+    get:
+      operationId: portalCentralSessionState
+      security: [{portalSession: []}]
+      tags: [Authentication]
+      description: Read the platform managed lifecycle for this authenticated Portal cookie without extending activity or changing customer bindings.
+      responses:
+        '200': {description: Common envelope containing the central session context and no token secrets}
+        '401': {description: Session expired or not bound}
+        '503': {description: Session authority temporarily unavailable}
+  /auth/activity:
+    post:
+      operationId: portalCentralSessionActivity
+      security: [{portalSession: []}]
+      tags: [Authentication]
+      description: Proxy explicit browser activity after Portal authentication, exact Origin and CSRF validation. Keeps the original absolute expiry.
+      parameters:
+        - {name: X-CSRF-Token, in: header, required: true, schema: {type: string, const: '1'}}
+      responses:
+        '200': {description: Common envelope containing the authoritative central session context}
+        '401': {description: Session expired or not bound}
+        '403': {description: Customer access or origin validation rejected}
+        '503': {description: Session authority temporarily unavailable}
   /livez:
     get: {$ref: '#/components/x-operations/portalLive'}
   /readyz:

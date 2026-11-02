@@ -29,6 +29,9 @@ func TestCanUpdatePendingLinkAccountNoOnlyBeforeActivation(t *testing.T) {
 	}
 }
 
+// TestActiveSessionRecheckUsesEveryValidityPredicate 核验旧模式保留所有会话有效性约束。
+// 参数：t为测试上下文。
+// 返回值：无；租户、撤销、空闲、绝对截止或行锁约束丢失时失败。
 func TestActiveSessionRecheckUsesEveryValidityPredicate(t *testing.T) {
 	db, err := gorm.Open(mysql.New(mysql.Config{
 		DSN:                       "portal:test@tcp(127.0.0.1:9910)/portal?parseTime=true&loc=UTC",
@@ -59,14 +62,14 @@ func TestActiveSessionRecheckUsesEveryValidityPredicate(t *testing.T) {
 			t.Fatalf("active session recheck SQL missing %q: %s", expected, sql)
 		}
 	}
-	if len(statement.Vars) < 5 || statement.Vars[0] != "tenant-a" || statement.Vars[1] != "session-hash" {
+	if len(statement.Vars) < 6 || statement.Vars[0] != "tenant-a" || statement.Vars[1] != "session-hash" || statement.Vars[2] != false {
 		t.Fatalf("active session recheck variables = %#v", statement.Vars)
 	}
-	idleCutoff, ok := statement.Vars[2].(time.Time)
+	idleCutoff, ok := statement.Vars[3].(time.Time)
 	if !ok || !idleCutoff.Equal(now.Add(-portalSessionIdleTimeout)) {
-		t.Fatalf("active session idle cutoff = %#v, want %s", statement.Vars[2], now.Add(-portalSessionIdleTimeout))
+		t.Fatalf("active session idle cutoff = %#v, want %s", statement.Vars[3], now.Add(-portalSessionIdleTimeout))
 	}
-	for _, value := range statement.Vars[3:5] {
+	for _, value := range statement.Vars[4:6] {
 		got, ok := value.(time.Time)
 		if !ok || !got.Equal(now) {
 			t.Fatalf("active session recheck time variable = %#v, want %s", value, now)

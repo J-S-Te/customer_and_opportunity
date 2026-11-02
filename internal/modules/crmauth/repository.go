@@ -38,6 +38,16 @@ type repository interface {
 // last_interactive_at 为 NULL 时以 created_at 作为最后交互时间，升级不会立刻锁死在线会话。
 const activeSessionPredicate = "session_id_hash = ? AND revoked_at IS NULL AND expires_at > ? AND COALESCE(last_interactive_at, created_at) > ?"
 
+// activeSessionQuery 按模式限制本地会话；中央模式只查本地撤销和绝对期限。
+// 参数：db为查询句柄，hash为Cookie摘要，now为时钟，idleTTL为旧模式空闲窗口。
+// 返回值：带有效性条件的查询；idleTTL为零时由调用方继续检查中央权威。
+func activeSessionQuery(db *gorm.DB, hash string, now time.Time, idleTTL time.Duration) *gorm.DB {
+	if idleTTL <= 0 {
+		return db.Where("session_id_hash = ? AND revoked_at IS NULL AND expires_at > ?", hash, now)
+	}
+	return db.Where(activeSessionPredicate, hash, now, now.Add(-idleTTL))
+}
+
 type GORMRepository struct{ db *gorm.DB }
 
 func NewGORMRepository(db *gorm.DB) *GORMRepository { return &GORMRepository{db: db} }
@@ -73,24 +83,28 @@ func (r *GORMRepository) CreateSession(ctx context.Context, value *Session) erro
 	return r.db.WithContext(ctx).Create(value).Error
 }
 
+// FindSession 读取未撤销且在当前模式本地期限内的会话。
+// 参数：ctx为请求，hash为Cookie摘要，now为时钟，idleTTL为旧模式窗口或中央模式零值。
+// 返回值：会话；失效返回未找到，数据库故障保留原始错误。
 func (r *GORMRepository) FindSession(ctx context.Context, hash string, now time.Time, idleTTL time.Duration) (*Session, error) {
 	var value Session
-	err := r.db.WithContext(ctx).
-		Where(activeSessionPredicate, hash, now, now.Add(-idleTTL)).Take(&value).Error
+	err := activeSessionQuery(r.db.WithContext(ctx), hash, now, idleTTL).Take(&value).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, errNotFound
 	}
 	return &value, err
 }
 
+// TouchSession 更新普通请求和授权核验时间，不推进真实交互窗口。
+// 参数：ctx为请求，hash为Cookie摘要，now为访问时间，checkedAt为重验时间，idleTTL为本地窗口。
+// 返回值：成功为空；失效返回未找到，数据库失败返回错误。
 func (r *GORMRepository) TouchSession(ctx context.Context, hash string, now, checkedAt time.Time, idleTTL time.Duration) error {
 	updates := map[string]any{"last_seen_at": now}
 	if !checkedAt.IsZero() {
 		updates["authorization_checked_at"] = checkedAt
 	}
-	args := []any{hash, now, now.Add(-idleTTL)}
-	result := r.db.WithContext(ctx).Model(&Session{}).
-		Where(activeSessionPredicate, args...).Updates(updates)
+	result := activeSessionQuery(r.db.WithContext(ctx).Model(&Session{}), hash, now, idleTTL).
+		Updates(updates)
 	if result.Error != nil {
 		return result.Error
 	}
@@ -103,10 +117,8 @@ func (r *GORMRepository) TouchSession(ctx context.Context, hash string, now, che
 	var active struct {
 		SessionIDHash string `gorm:"column:session_id_hash"`
 	}
-	err := r.db.WithContext(ctx).Table((Session{}).TableName()).
-		Select("session_id_hash").
-		Where(activeSessionPredicate, args...).
-		Take(&active).Error
+	err := activeSessionQuery(r.db.WithContext(ctx).Table((Session{}).TableName()), hash, now, idleTTL).
+		Select("session_id_hash").Take(&active).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return errNotFound
 	}

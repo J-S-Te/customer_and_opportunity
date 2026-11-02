@@ -5,23 +5,27 @@ import (
 	"time"
 
 	sharedauth "github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/auth"
+	central "github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/sessiongovernance"
 )
 
 type Claims struct {
-	Username       string
-	Subject        string
-	OIDCSessionID  string
-	IdentityID     string
-	PersonID       string
-	TenantID       string
-	Roles          []string
-	Permissions    []string
-	DataScopes     []DataScope
-	RoleConfigHash string
-	AuthzRevision  uint64
-	ExpiresAt      time.Time
-	AccessToken    string
-	LoginIP        string
+	RefreshToken         string
+	AccessTokenExpiresAt time.Time
+	CentralBinding       central.Binding
+	Username             string
+	Subject              string
+	OIDCSessionID        string
+	IdentityID           string
+	PersonID             string
+	TenantID             string
+	Roles                []string
+	Permissions          []string
+	DataScopes           []DataScope
+	RoleConfigHash       string
+	AuthzRevision        uint64
+	ExpiresAt            time.Time
+	AccessToken          string
+	LoginIP              string
 	// CustomerRef 是平台 authorization-context 下发的客户绑定声明（Phase 4 开关
 	// PORTAL_USE_PLATFORM_BINDING 打开后生效）；为空表示平台未下发或尚未开启。
 	CustomerRef string
@@ -43,6 +47,18 @@ type OIDCClient interface {
 	AuthorizationURL(state, nonce, codeChallenge, returnPath string) (string, error)
 	ExchangeAndValidate(context.Context, string, string, string) (Claims, error)
 	UserInfo(context.Context, string) (Claims, error)
+}
+
+// RefreshedTokens 仅在Portal服务器端保存，不能进入门户响应或客户数据范围。
+type RefreshedTokens struct {
+	AccessToken, RefreshToken string
+	ExpiresAt                 time.Time
+}
+
+// CentralOIDCClient 在原OIDC校验链上追加中央桥接及服务器刷新能力。
+type CentralOIDCClient interface {
+	ExchangeWithCentral(context.Context, string, string, string, string) (Claims, error)
+	RefreshToken(context.Context, string) (RefreshedTokens, error)
 }
 
 type VerifiedInvite struct {

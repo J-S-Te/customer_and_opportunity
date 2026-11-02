@@ -46,8 +46,11 @@ func effectiveInteractiveAt(value *Session) time.Time {
 	return value.CreatedAt
 }
 
+// sessionActive 在测试存储中复现本地撤销、绝对期限及可选旧模式空闲检查。
+// 参数：value为会话，now为时钟，idleTTL为旧模式窗口或中央模式零值。
+// 返回值：会话满足本地检查时为真；中央有效性由服务继续核验。
 func (r *memoryRepo) sessionActive(value *Session, now time.Time, idleTTL time.Duration) bool {
-	return value != nil && value.RevokedAt == nil && value.ExpiresAt.After(now) && effectiveInteractiveAt(value).After(now.Add(-idleTTL))
+	return value != nil && value.RevokedAt == nil && value.ExpiresAt.After(now) && (idleTTL <= 0 || effectiveInteractiveAt(value).After(now.Add(-idleTTL)))
 }
 
 func (r *memoryRepo) FindSession(_ context.Context, hash string, now time.Time, idleTTL time.Duration) (*Session, error) {

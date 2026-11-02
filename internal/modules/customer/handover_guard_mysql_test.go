@@ -15,7 +15,7 @@ import (
 	"gorm.io/gorm"
 )
 
-// handoverGateTableDDL 与 migrations/000125_crm_handover_gate.up.sql 保持一致，
+// handoverGateTableDDL 与 migrations/000127_crm_handover_gate.up.sql 保持一致，
 // 让隔离 MySQL 用例在没有预跑迁移时也能验证门闩行为。
 const handoverGateTableDDL = `CREATE TABLE IF NOT EXISTS crm_handover_gate (
   tenant_id VARCHAR(64) NOT NULL,

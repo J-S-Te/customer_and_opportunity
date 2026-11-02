@@ -473,3 +473,20 @@ func TestLoadConfigQBStatusAndLaunchAreOptionalAndFailClosed(t *testing.T) {
 		t.Fatalf("config=%#v err=%v", config, err)
 	}
 }
+
+// TestCentralSessionConfigDoesNotApplyLegacyIdlePolicy 验证中央模式不被旧本地期限截断。
+// 参数：t为配置测试上下文。
+// 返回值：无；合法中央配置被旧期限拒绝，或中央来源校验被放宽时失败。
+func TestCentralSessionConfigDoesNotApplyLegacyIdlePolicy(t *testing.T) {
+	setBaseConfig(t)
+	t.Setenv("CENTRAL_SESSION_ENABLED", "true")
+	t.Setenv("CENTRAL_SESSION_PUBLIC_BASE_URL", "https://identity.example.com")
+	t.Setenv("OIDC_SESSION_TTL", "15m")
+	if _, err := LoadConfig(); err != nil {
+		t.Fatalf("central authority must supersede legacy durations: %v", err)
+	}
+	t.Setenv("CENTRAL_SESSION_PUBLIC_BASE_URL", "https://identity.example.com/untrusted-path")
+	if _, err := LoadConfig(); err == nil {
+		t.Fatal("central public origin validation was bypassed")
+	}
+}

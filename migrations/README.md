@@ -88,8 +88,11 @@
 74. `000120_customer_import_source_lifecycle.up.sql`（先持久化导入源任务，再由API内后台上传；完成/过期精确解绑确认后清除临时密文，不删除历史业务作业；需同时发布支持绑定release墓碑的网关）
 75. `000121_presale_notification_identity.up.sql`（新增指派/事件/通知身份命名空间，新执行人统一平台 `USER`；不猜测回填历史身份。必须先迁移，再同步发布 CRM API 和两个通知 worker；本轮仅 native 校验，实际隔离 MySQL 由集成任务验证。）
 76. `000122_crm_session_username.up.sql`（会话显示用户名；仅展示用途，存量会话不因此撤销。）
-77. `000124_crm_oidc_session_idle.up.sql`（CRM 会话空闲模型：新增 `last_interactive_at` 并以 `created_at` 回填存量行；新增加密 refresh token 与访问令牌到期时间列，供服务端在 15 分钟访问令牌到期前刷新。不改其他表、不撤销存量会话；旧行保持 NULL 并按原有重验行为自然到期。上线前须先执行本迁移再发布新镜像。）
-78. `000125_crm_handover_gate.up.sql`（人员离职交接门闩行：新增 `(tenant_id, user_id)` 主键的 `crm_handover_gate`，把"冻结落库"与责任写入对同一用户串行化。纯新增、幂等可重复执行，行由 `INSERT ... ON DUPLICATE KEY UPDATE` 自愈，无需回填历史数据；上线顺序为「先执行本迁移 → 再发布 CRM 镜像」，旧镜像不读该表、可安全共库灰度。）
+77. `000124_central_session_governance.up.sql`（已发布的中央会话绑定、刷新材料和登录票据结构，文件及内容保持不变。）
+78. `000126_crm_oidc_session_idle.up.sql`（在中央迁移之后新增 `last_interactive_at`，以 `created_at` 回填；刷新材料与访问令牌到期列沿用 000124，不重复创建。中央模式使用平台权威窗口，旧模式使用本地空闲窗口。）
+79. `000127_crm_handover_gate.up.sql`（人员离职交接门闩行：新增 `(tenant_id, user_id)` 主键的 `crm_handover_gate`，把冻结落库与责任写入串行化；先迁移再发布镜像。）
+
+本次集成保留 main 已发布的 000124/000125；上传分支尚未发布 main 的旧 000124 空闲模型、000125 交接门闩分别重编号为 000126/000127。若独立本地库曾执行上传分支旧编号，须单独核对结构和迁移账本再制定升级映射，不能直接复用本清单、改账本或忽略 duplicate column。
 
 ## customer_portal schema
 
@@ -134,6 +137,8 @@
 37. `000109_portal_report_revision_ledger.up.sql`
 38. `000118_portal_project_permission_modes.up.sql`
 39. `000119_add_ip_provenance_to_portal_request_audit_outbox.up.sql`
+40. `000123_portal_session_username.up.sql`
+41. `000125_portal_central_session_governance.up.sql`（已发布，文件及内容保持不变。）
 
 ## 规则
 

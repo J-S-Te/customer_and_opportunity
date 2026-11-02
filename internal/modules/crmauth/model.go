@@ -5,20 +5,23 @@ import "time"
 // LoginTransaction 持久化一次性 OIDC 登录事务。浏览器只持有 state 原文，数据库只保存其摘要；
 // nonce 与 PKCE verifier 使用随机 nonce 的 AES-GCM 密文保存，既支持多实例回调，又避免数据库泄露后被直接复用。
 type LoginTransaction struct {
-	StateHash          string `gorm:"primaryKey;size:64"`
-	TenantID           string `gorm:"size:64;not null;index"`
-	NonceCipher        []byte `gorm:"type:varbinary(512);not null"`
-	CodeVerifierCipher []byte `gorm:"type:varbinary(512);not null"`
-	ReturnPath         string `gorm:"size:500;not null"`
-	ExpiresAt          time.Time
-	CreatedAt          time.Time
+	CentralTicketCipher []byte
+	ForceLogin          bool
+	StateHash           string `gorm:"primaryKey;size:64"`
+	TenantID            string `gorm:"size:64;not null;index"`
+	NonceCipher         []byte `gorm:"type:varbinary(512);not null"`
+	CodeVerifierCipher  []byte `gorm:"type:varbinary(512);not null"`
+	ReturnPath          string `gorm:"size:500;not null"`
+	ExpiresAt           time.Time
+	CreatedAt           time.Time
 }
 
 func (LoginTransaction) TableName() string { return "crm_oidc_login_transactions" }
 
 // Session 是 CRM 浏览器登录态的权威记录。Cookie 原文不落库，只保存摘要；访问令牌因需要定期调用
 // 平台 UserInfo 重验授权而加密保存，角色与权限快照不能脱离 AuthzRevision 单独信任。
-// 会话有效性由"未撤销 + 绝对到期 + 空闲期限"共同决定：普通请求只推进 LastSeenAt，只有显式
+// 旧模式由"未撤销 + 绝对到期 + 空闲期限"决定有效性；中央模式另查中央权威窗口。
+// 普通请求只推进 LastSeenAt，只有旧模式显式
 // 浏览器活动才推进 LastInteractiveAt。RefreshTokenCipher 与 AccessTokenExpiresAt 用于在短命
 // 访问令牌到期前刷新，避免 8 小时会话被 15 分钟令牌截短；升级前的存量行两列为 NULL，按旧行为
 // 自然到期，LastInteractiveAt 为 NULL 时以 CreatedAt 作为最后交互时间。
@@ -42,6 +45,8 @@ type Session struct {
 	// RefreshTokenCipher 与 AccessTokenExpiresAt 对迁移前创建的会话为 NULL（无法刷新，按旧行为到期）。
 	RefreshTokenCipher     []byte `gorm:"type:blob"`
 	AccessTokenExpiresAt   *time.Time
+	CentralBindingCipher   []byte
+	CentralSessionID       string
 	ExpiresAt              time.Time
 	AuthorizationCheckedAt time.Time
 	CreatedAt              time.Time

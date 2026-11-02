@@ -14,7 +14,10 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-type GORMRepository struct{ db *gorm.DB }
+type GORMRepository struct {
+	db      *gorm.DB
+	central bool
+}
 
 func NewGORMRepository(db *gorm.DB) *GORMRepository       { return &GORMRepository{db: db} }
 func (r *GORMRepository) tx(ctx context.Context) *gorm.DB { return database.FromContext(ctx, r.db) }
@@ -232,11 +235,18 @@ func (r *GORMRepository) CreateActivation(ctx context.Context, value *Activation
 	return r.tx(ctx).Create(value).Error
 }
 
+// ConsumeActivation 原子消费未过期的门户登录或激活上下文。
+// 参数：ctx为调用上下文与取消边界。
+//
+//	stateHash为原始登录状态的不可逆摘要。
+//	now为本次服务端校验时间。
+//
+// 返回值：匹配的有效持久记录；不存在、失效或存储失败返回错误。
 func (r *GORMRepository) ConsumeActivation(ctx context.Context, stateHash string, now time.Time) (*ActivationContext, error) {
 	// 行锁与 consumed_at 条件使 OAuth state 只能消费一次，并阻止并发回调同时通过。
 	var value ActivationContext
 	err := r.tx(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Where("state_hash = ? AND consumed_at IS NULL AND expires_at > ?", stateHash, now).Take(&value).Error; err != nil {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("state_hash = ? AND consumed_at IS NULL AND expires_at > ?", stateHash, now).Take(&value).Error; err != nil {
 			return err
 		}
 		result := tx.Model(&ActivationContext{}).Where("id = ? AND consumed_at IS NULL", value.ID).Update("consumed_at", now)
@@ -257,27 +267,55 @@ func (r *GORMRepository) ConsumeActivation(ctx context.Context, stateHash string
 func (r *GORMRepository) CreateSession(ctx context.Context, value *Session) error {
 	return r.tx(ctx).Create(value).Error
 }
+
+// FindSession 按可信租户与Cookie摘要查找有效会话。
+// 参数：ctx为调用上下文与取消边界。
+//
+//	tenantID为可信租户标识。
+//	sessionHash为随机Cookie材料摘要。
+//	now为本次服务端校验时间。
+//
+// 返回值：匹配的有效持久记录；不存在、失效或存储失败返回错误。
 func (r *GORMRepository) FindSession(ctx context.Context, tenantID, sessionHash string, now time.Time) (*Session, error) {
 	// 查询直接限定租户、未撤销、空闲超时及双重到期时间，调用方不会拿到待二次判断的过期会话。
 	var value Session
-	err := r.tx(ctx).Where("tenant_id = ? AND session_id_hash = ? AND revoked_at IS NULL AND last_seen_at > ? AND expires_at > ? AND absolute_expiry > ?", tenantID, sessionHash, sessionIdleCutoff(now), now, now).Take(&value).Error
+	err := r.tx(ctx).Where("tenant_id = ? AND session_id_hash = ? AND revoked_at IS NULL AND (? OR last_seen_at > ?) AND expires_at > ? AND absolute_expiry > ?", tenantID, sessionHash, r.central, sessionIdleCutoff(now), now, now).Take(&value).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, ErrInvalidLoginState
 	}
 	return &value, err
 }
+
+// ListSessions 列出当前主体可管理的有效会话。
+// 参数：ctx为调用上下文与取消边界。
+//
+//	tenantID为可信租户标识。
+//	subject为经过验证的身份主体。
+//	now为本次服务端校验时间。
+//
+// 返回值：当前主体的有效会话列表及查询错误。
 func (r *GORMRepository) ListSessions(ctx context.Context, tenantID, subject string, now time.Time) ([]Session, error) {
 	var values []Session
 	err := r.tx(ctx).
-		Where("tenant_id = ? AND platform_user_id = ? AND revoked_at IS NULL AND last_seen_at > ? AND expires_at > ? AND absolute_expiry > ?", tenantID, subject, sessionIdleCutoff(now), now, now).
+		Where("tenant_id = ? AND platform_user_id = ? AND revoked_at IS NULL AND (? OR last_seen_at > ?) AND expires_at > ? AND absolute_expiry > ?", tenantID, subject, r.central, sessionIdleCutoff(now), now, now).
 		Order("last_seen_at DESC, id DESC").
 		Find(&values).Error
 	return values, err
 }
+
+// FindOwnedSession 查找属于当前主体的指定有效会话。
+// 参数：ctx为调用上下文与取消边界。
+//
+//	tenantID为可信租户标识。
+//	subject为经过验证的身份主体。
+//	publicID为当前主体可管理的会话公开标识。
+//	now为本次服务端校验时间。
+//
+// 返回值：匹配的有效持久记录；不存在、失效或存储失败返回错误。
 func (r *GORMRepository) FindOwnedSession(ctx context.Context, tenantID, subject, publicID string, now time.Time) (*Session, error) {
 	var value Session
 	err := r.tx(ctx).
-		Where("tenant_id = ? AND platform_user_id = ? AND public_id = ? AND revoked_at IS NULL AND last_seen_at > ? AND expires_at > ? AND absolute_expiry > ?", tenantID, subject, publicID, sessionIdleCutoff(now), now, now).
+		Where("tenant_id = ? AND platform_user_id = ? AND public_id = ? AND revoked_at IS NULL AND (? OR last_seen_at > ?) AND expires_at > ? AND absolute_expiry > ?", tenantID, subject, publicID, r.central, sessionIdleCutoff(now), now, now).
 		Take(&value).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, ErrSessionNotFound
@@ -322,13 +360,23 @@ func (r *GORMRepository) ApplyBackchannelLogout(ctx context.Context, jti, issuer
 	})
 	return replayed, err
 }
+
+// TouchSession 更新本地观测和已核验权限时间，不覆盖轮换材料。
+// 参数：ctx为调用上下文与取消边界。
+//
+//	tenantID为可信租户标识。
+//	sessionHash为随机Cookie材料摘要。
+//	seenAt为当前请求的观测时间。
+//	checkedAt为最近一次成功权限核验时间。
+//
+// 返回值：无；参数、校验、存储或依赖失败时返回错误。
 func (r *GORMRepository) TouchSession(ctx context.Context, tenantID, sessionHash string, seenAt, checkedAt time.Time) error {
 	updates := map[string]any{"last_seen_at": seenAt, "updated_at": seenAt}
 	if !checkedAt.IsZero() {
 		updates["authorization_checked_at"] = checkedAt
 	}
 	result := r.tx(ctx).Model(&Session{}).
-		Where("tenant_id = ? AND session_id_hash = ? AND revoked_at IS NULL AND last_seen_at > ? AND expires_at > ? AND absolute_expiry > ?", tenantID, sessionHash, sessionIdleCutoff(seenAt), seenAt, seenAt).
+		Where("tenant_id = ? AND session_id_hash = ? AND revoked_at IS NULL AND (? OR last_seen_at > ?) AND expires_at > ? AND absolute_expiry > ?", tenantID, sessionHash, r.central, sessionIdleCutoff(seenAt), seenAt, seenAt).
 		Updates(updates)
 	if result.Error != nil {
 		return result.Error
@@ -345,18 +393,27 @@ func (r *GORMRepository) TouchSession(ctx context.Context, tenantID, sessionHash
 	var active struct {
 		SessionIDHash string `gorm:"column:session_id_hash"`
 	}
-	err := activeSessionQuery(r.tx(ctx), tenantID, sessionHash, seenAt).Take(&active).Error
+	err := activeSessionQuery(r.tx(ctx), tenantID, sessionHash, seenAt, r.central).Take(&active).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return ErrInvalidLoginState
 	}
 	return err
 }
 
-func activeSessionQuery(db *gorm.DB, tenantID, sessionHash string, now time.Time) *gorm.DB {
+// activeSessionQuery 按部署模式构造有效会话过滤条件。
+// 参数：db为本应用数据库连接。
+//
+//	tenantID为可信租户标识。
+//	sessionHash为随机Cookie材料摘要。
+//	now为本次服务端校验时间。
+//	central为平台统一会话策略开关。
+//
+// 返回值：包含当前部署模式有效性条件的数据库查询。
+func activeSessionQuery(db *gorm.DB, tenantID, sessionHash string, now time.Time, central ...bool) *gorm.DB {
 	return db.Table((Session{}).TableName()).
 		Clauses(clause.Locking{Strength: "UPDATE"}).
 		Select("session_id_hash").
-		Where("tenant_id = ? AND session_id_hash = ? AND revoked_at IS NULL AND last_seen_at > ? AND expires_at > ? AND absolute_expiry > ? AND deleted_at IS NULL", tenantID, sessionHash, sessionIdleCutoff(now), now, now)
+		Where("tenant_id = ? AND session_id_hash = ? AND revoked_at IS NULL AND (? OR last_seen_at > ?) AND expires_at > ? AND absolute_expiry > ? AND deleted_at IS NULL", tenantID, sessionHash, len(central) > 0 && central[0], sessionIdleCutoff(now), now, now)
 }
 
 func sessionIdleCutoff(now time.Time) time.Time {

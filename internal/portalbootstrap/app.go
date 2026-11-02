@@ -27,6 +27,7 @@ import (
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/audit"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/request"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/requestaudit"
+	central "github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/sessiongovernance"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
 )
@@ -41,6 +42,12 @@ type App struct {
 	reportProviders *reportDownloadProviders
 }
 
+// New 装配当前应用的配置、存储、认证及服务入口。
+// 参数：ctx为调用上下文与取消边界。
+//
+//	config为当前应用运行配置。
+//
+// 返回值：装配后的应用或认证实例；配置与依赖装配失败时返回错误。
 func New(ctx context.Context, config Config) (*App, error) {
 	licenseCtx, licenseCancel := context.WithCancel(ctx)
 	started := false
@@ -110,6 +117,11 @@ func New(ctx context.Context, config Config) (*App, error) {
 		accountServiceOptions = append(accountServiceOptions, account.WithPlatformBinding())
 	}
 	accountRepository := account.NewGORMRepository(db)
+	if config.CentralSessionEnabled {
+		accountRepository.EnableCentralSessions()
+		accountServiceOptions = append(accountServiceOptions, account.WithCentralSessions(oidcAdapter.central, central.Expectation{
+			TenantID: config.TenantID, ClientID: config.OIDCClientID, ApplicationCode: config.PlatformApplicationCode, EnvironmentCode: config.PlatformEnvironmentCode}))
+	}
 	accountService := account.NewServiceWithOptions(accountRepository, oidcAdapter, inviteClient, protector, account.SystemClock{}, account.CryptoRandom{}, config.RoleConfigHash, config.SessionTTL, config.PlatformEnvironmentCode, accountServiceOptions...)
 	// 登录事务、访问令牌和会话均保存在数据库并加密；账号服务通过 UserInfo 周期性重验当前
 	// 权限，避免仅依赖首次登录时的 ID 令牌 快照。
