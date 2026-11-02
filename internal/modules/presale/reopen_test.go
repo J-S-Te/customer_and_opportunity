@@ -65,7 +65,7 @@ func TestReopenRequestPersistsEditedFieldsAndKeepsIdentity(t *testing.T) {
 		request:  &PresaleRequest{BaseModel: BaseModel{ID: 9, TenantID: actor.TenantID, Version: 3}, RequestNo: "TS202608080001", OpportunityID: 7, ApplicantID: actor.UserID, Status: StatusRejected},
 		approval: &ApprovalInstance{BaseModel: BaseModel{ID: 21, TenantID: actor.TenantID, Version: 2}, RequestID: 9, Status: "REJECTED"},
 	}
-	service := NewService(repo, &accessibleOpportunityReader{values: map[uint64]OpportunitySnapshot{7: {ID: 7, OpportunityNo: "OP7"}}}, testPhoneProtector{}, fixedClock{at: time.Date(2026, 8, 8, 1, 0, 0, 0, time.UTC)}, fixedIDs{})
+	service := NewService(repo, &accessibleOpportunityReader{values: map[uint64]OpportunitySnapshot{7: {ID: 7, OpportunityNo: "OP7"}}}, testPhoneProtector{}, fixedClock{at: time.Date(2026, 8, 8, 1, 0, 0, 0, time.UTC)}, fixedIDs{}).UseAuditWriter(&requestAuditRecorder{})
 	result, err := service.ReopenRequest(context.Background(), actor, 9, 3, validReopenInput())
 	if err != nil {
 		t.Fatal(err)

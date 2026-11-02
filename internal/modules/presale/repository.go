@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/businessclock"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/database"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/pagination"
 	"gorm.io/gorm"
@@ -91,8 +92,14 @@ func (r *GORMRepository) WithTransaction(ctx context.Context, fn func(context.Co
 	return database.WithTransaction(ctx, r.db, fn)
 }
 
+// sequenceDate 只把服务层时钟给出的时刻换算成单号日期段（北京日历日）。
+// 该转换不影响调用方落库的 CreatedAt/UpdatedAt 等 UTC 存储时间戳。
+func sequenceDate(at time.Time) string {
+	return businessclock.DateString(at)
+}
+
 func (r *GORMRepository) nextNumber(ctx context.Context, tenant string, at time.Time, prefix string) (string, error) {
-	date := at.UTC().Format("20060102")
+	date := sequenceDate(at)
 	var seq NumberSequence
 	// 序列表按“租户 + 类型 + 日期”加行锁，确保并发创建时编号单调且不重复；
 	// 首次插入与后续递增都必须运行在调用方事务中。

@@ -79,26 +79,37 @@ func (repository *GORMRepository) ActorPrincipal(ctx context.Context, tenantID, 
 
 func (repository *GORMRepository) ActiveCustomer(ctx context.Context, principal auth.Principal, id uint64) (CustomerReference, error) {
 	var result CustomerReference
-	query := repository.db.WithContext(ctx).Model(&customer.Customer{}).
-		Select("id", "name", "status").
-		Where("tenant_id = ? AND id = ? AND deleted_at IS NULL AND status = ? AND merged_into_id IS NULL", principal.TenantID, id, customer.StatusActive)
-	if salesOnly(principal) {
-		query = query.Where("created_by = ?", principal.UserID)
-	} else {
-		query = applyScope(query, principal, "owner_user_id", "owner_org_id")
-	}
-	err := query.Take(&result).Error
+	err := activeCustomerQuery(repository.db.WithContext(ctx), principal, id).Take(&result).Error
 	return result, err
+}
+
+// activeCustomerQuery 构造“当前主体可见且仍可引用的客户”查询。
+// 客户可见性必须与客户模块同口径：范围谓词直接复用 customer.ApplyDataScope（客户数据范围的
+// 唯一权威实现），不在合同引用内复制。销售只看“当前负责人”owner_user_id；交接后原创建人
+// 立即失去引用权限，created_by 仅作创建历史，不能作为访问依据。
+// 参数：db 为未绑定的 GORM 连接；principal 为认证边界输出的主体；id 为待引用的客户ID。
+// 返回值：已带范围、租户、状态与合并标记约束的查询。
+func activeCustomerQuery(db *gorm.DB, principal auth.Principal, id uint64) *gorm.DB {
+	return customer.ApplyDataScope(db.Model(&customer.Customer{}), principal).
+		Select("id", "name", "status").
+		Where("crm_customers.id = ? AND crm_customers.status = ? AND crm_customers.merged_into_id IS NULL", id, customer.StatusActive)
 }
 
 func (repository *GORMRepository) UsableOpportunity(ctx context.Context, principal auth.Principal, customerID, id uint64) (OpportunityReference, error) {
 	var result OpportunityReference
-	query := repository.db.WithContext(ctx).Model(&opportunity.Opportunity{}).
-		Select("id", "name", "customer_id", "opp_status AS status").
-		Where("tenant_id = ? AND customer_id = ? AND id = ? AND deleted_at IS NULL AND opp_status <> ?", principal.TenantID, customerID, id, opportunity.StatusVoid)
-	query = applyScope(query, principal, "owner_user_id", "owner_org_id")
-	err := query.Take(&result).Error
+	err := usableOpportunityQuery(repository.db.WithContext(ctx), principal, customerID, id).Take(&result).Error
 	return result, err
+}
+
+// usableOpportunityQuery 构造“当前主体可见且未作废、属于指定客户”的商机查询。
+// 商机范围与 opportunity 模块的数据范围谓词（repository.go scoped）逐字同口径：
+// ALL 按租户、ORG 按 owner_org_id（组织集合为空即拒绝）、其余按当前负责人 owner_user_id。
+// 商机模块没有“纯销售强制自管”的特例，这里也不额外收紧或放宽。
+func usableOpportunityQuery(db *gorm.DB, principal auth.Principal, customerID, id uint64) *gorm.DB {
+	query := db.Model(&opportunity.Opportunity{}).
+		Select("id", "name", "customer_id", "opp_status AS status").
+		Where("crm_opportunities.tenant_id = ? AND crm_opportunities.customer_id = ? AND crm_opportunities.id = ? AND crm_opportunities.deleted_at IS NULL AND crm_opportunities.opp_status <> ?", principal.TenantID, customerID, id, opportunity.StatusVoid)
+	return applyScope(query, principal, "crm_opportunities.owner_user_id", "crm_opportunities.owner_org_id")
 }
 
 type Service struct{ repository Repository }
@@ -166,20 +177,8 @@ func scopeMode(scopes []auth.DataScope) auth.ScopeMode {
 	return auth.ScopeSelf
 }
 
-func salesOnly(principal auth.Principal) bool {
-	hasSales := false
-	for _, role := range principal.Roles {
-		if role == "sales" {
-			hasSales = true
-		}
-		switch role {
-		case "sales_director", "customer_admin", "crm_super_admin", "auditor", "admin":
-			return false
-		}
-	}
-	return hasSales
-}
-
+// applyScope 只用于商机侧，逐字对应 opportunity 模块的数据范围谓词（scoped），
+// 客户侧不再使用本函数：客户范围必须复用 customer.ApplyDataScope。
 func applyScope(query *gorm.DB, principal auth.Principal, ownerUserColumn, ownerOrgColumn string) *gorm.DB {
 	switch principal.ScopeMode {
 	case auth.ScopeAll:

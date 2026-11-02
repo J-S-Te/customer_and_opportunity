@@ -36,17 +36,34 @@ func (r *memoryRepo) CreateSession(_ context.Context, value *Session) error {
 	r.sessions[value.SessionIDHash] = &copy
 	return nil
 }
-func (r *memoryRepo) FindSession(_ context.Context, hash string, now time.Time) (*Session, error) {
+
+// effectiveInteractiveAt 复刻数据库谓词 COALESCE(last_interactive_at, created_at)：
+// 迁移前的存量行没有显式活动时间时以创建时间作为最后交互。
+func effectiveInteractiveAt(value *Session) time.Time {
+	if value.LastInteractiveAt != nil {
+		return *value.LastInteractiveAt
+	}
+	return value.CreatedAt
+}
+
+// sessionActive 在测试存储中复现本地撤销、绝对期限及可选旧模式空闲检查。
+// 参数：value为会话，now为时钟，idleTTL为旧模式窗口或中央模式零值。
+// 返回值：会话满足本地检查时为真；中央有效性由服务继续核验。
+func (r *memoryRepo) sessionActive(value *Session, now time.Time, idleTTL time.Duration) bool {
+	return value != nil && value.RevokedAt == nil && value.ExpiresAt.After(now) && (idleTTL <= 0 || effectiveInteractiveAt(value).After(now.Add(-idleTTL)))
+}
+
+func (r *memoryRepo) FindSession(_ context.Context, hash string, now time.Time, idleTTL time.Duration) (*Session, error) {
 	value := r.sessions[hash]
-	if value == nil || value.RevokedAt != nil || !value.ExpiresAt.After(now) {
+	if !r.sessionActive(value, now, idleTTL) {
 		return nil, errNotFound
 	}
 	copy := *value
 	return &copy, nil
 }
-func (r *memoryRepo) TouchSession(_ context.Context, hash string, now, checkedAt time.Time) error {
+func (r *memoryRepo) TouchSession(_ context.Context, hash string, now, checkedAt time.Time, idleTTL time.Duration) error {
 	value := r.sessions[hash]
-	if value == nil {
+	if !r.sessionActive(value, now, idleTTL) {
 		return errNotFound
 	}
 	value.LastSeenAt = now
@@ -54,6 +71,32 @@ func (r *memoryRepo) TouchSession(_ context.Context, hash string, now, checkedAt
 		value.AuthorizationCheckedAt = checkedAt
 	}
 	return nil
+}
+func (r *memoryRepo) RecordActivity(_ context.Context, hash string, now time.Time, idleTTL time.Duration) (time.Time, error) {
+	value := r.sessions[hash]
+	if !r.sessionActive(value, now, idleTTL) {
+		return time.Time{}, errNotFound
+	}
+	interactiveAt := now
+	value.LastSeenAt, value.LastInteractiveAt = now, &interactiveAt
+	return sessionIdleDeadlineAt(now, idleTTL, value.ExpiresAt), nil
+}
+func (r *memoryRepo) RefreshSessionTokens(_ context.Context, hash string, now time.Time, idleTTL time.Duration, refresh sessionRefreshFunc) (*Session, error) {
+	value := r.sessions[hash]
+	if !r.sessionActive(value, now, idleTTL) {
+		return nil, errNotFound
+	}
+	snapshot := *value
+	tokens, changed, err := refresh(&snapshot)
+	if err != nil {
+		return nil, err
+	}
+	if changed {
+		expiresAt := tokens.AccessTokenExpiresAt
+		snapshot.AccessTokenCipher, snapshot.RefreshTokenCipher, snapshot.AccessTokenExpiresAt = tokens.AccessTokenCipher, tokens.RefreshTokenCipher, &expiresAt
+		*value = snapshot
+	}
+	return &snapshot, nil
 }
 func (r *memoryRepo) RevokeSession(_ context.Context, hash string, now time.Time) error {
 	if value := r.sessions[hash]; value != nil {
@@ -74,6 +117,10 @@ type fakeOIDC struct {
 	exchanged, current       verifiedClaims
 	exchangeErr, userInfoErr error
 	lastVerifier, lastNonce  string
+	refreshResult            refreshedTokens
+	refreshErr               error
+	refreshCalls             int
+	lastRefreshToken         string
 }
 
 type recordingBrokerVerifier struct {
@@ -98,6 +145,14 @@ func (f *fakeOIDC) Exchange(_ context.Context, _, verifier, nonce string) (verif
 func (f *fakeOIDC) UserInfo(_ context.Context, _ string) (verifiedClaims, error) {
 	return f.current, f.userInfoErr
 }
+func (f *fakeOIDC) RefreshToken(_ context.Context, refreshToken string) (refreshedTokens, error) {
+	f.refreshCalls++
+	f.lastRefreshToken = refreshToken
+	if f.refreshErr != nil {
+		return refreshedTokens{}, f.refreshErr
+	}
+	return f.refreshResult, nil
+}
 
 func validClaims(now time.Time) verifiedClaims {
 	return verifiedClaims{Subject: "user-1", IdentityID: "user-1", TenantID: "tenant-1", DisplayName: "User One", Roles: []string{"sales"}, Permissions: catalogRolePermissions("sales"), DataScopes: []sharedauth.DataScope{{RoleCode: "sales", ScopeType: "APPLICATION"}}, RoleConfigHash: "hash-1", AuthzRevision: 8, ExpiresAt: now.Add(10 * time.Minute), AccessToken: "access-token"}
@@ -114,7 +169,7 @@ func catalogRolePermissions(roleCode string) []string {
 
 func newTestService(t *testing.T, repo repository, oidc oidcClient, now time.Time, brokers ...brokerVerifier) *Service {
 	t.Helper()
-	service, err := NewService(repo, oidc, []byte(strings.Repeat("k", 32)), Options{TenantID: "tenant-1", RoleConfigHash: "hash-1", EnvironmentCode: "dev", SessionTTL: 15 * time.Minute, MaxRoles: 3}, brokers...)
+	service, err := NewService(repo, oidc, []byte(strings.Repeat("k", 32)), Options{TenantID: "tenant-1", RoleConfigHash: "hash-1", EnvironmentCode: "dev", SessionIdleTTL: 30 * time.Minute, SessionAbsoluteTTL: 8 * time.Hour, MaxRoles: 3}, brokers...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -428,5 +483,313 @@ func TestCRMSessionRestoresLoginUsernameSeparatelyFromDisplayName(t *testing.T) 
 	principal, err := service.Authenticate(context.Background(), result.SessionToken)
 	if err != nil || principal.Username != "alice" || principal.DisplayName != "User One" {
 		t.Fatalf("principal=%#v err=%v", principal, err)
+	}
+}
+
+// loginSession 完成一次 OIDC 登录并返回浏览器 Cookie 原文，供会话期限测试复用。
+func loginSession(t *testing.T, service *Service) string {
+	t.Helper()
+	start, err := service.BeginLogin(context.Background(), "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := service.CompleteLogin(context.Background(), strings.Split(start.AuthorizationURL, "state=")[1], "code")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return result.SessionToken
+}
+
+// 统一会话策略：绝对期限来自本地配置，不能再被 15 分钟访问令牌截短；refresh token 与
+// 访问令牌到期时间必须随会话加密保存，供服务端提前刷新。
+func TestSessionAbsoluteExpiryIsNotCappedByAccessTokenExpiry(t *testing.T) {
+	now := time.Date(2026, 10, 30, 2, 0, 0, 0, time.UTC)
+	repo := newMemoryRepo()
+	claims := validClaims(now)
+	claims.ExpiresAt = now.Add(15 * time.Minute)
+	claims.RefreshToken = "refresh-token"
+	service := newTestService(t, repo, &fakeOIDC{exchanged: claims, current: claims}, now)
+
+	session := repo.sessions[tokenHash(loginSession(t, service))]
+	if session == nil {
+		t.Fatal("login did not create a session")
+	}
+	if want := now.Add(8 * time.Hour); !session.ExpiresAt.Equal(want) {
+		t.Fatalf("session absolute expiry = %s, want %s", session.ExpiresAt, want)
+	}
+	if session.LastInteractiveAt == nil || !session.LastInteractiveAt.Equal(now) {
+		t.Fatalf("last_interactive_at = %v, want login time", session.LastInteractiveAt)
+	}
+	if session.AccessTokenExpiresAt == nil || !session.AccessTokenExpiresAt.Equal(claims.ExpiresAt) {
+		t.Fatalf("access token expiry = %v, want %s", session.AccessTokenExpiresAt, claims.ExpiresAt)
+	}
+	if refreshToken, err := service.codec.decrypt(session.RefreshTokenCipher); err != nil || refreshToken != "refresh-token" {
+		t.Fatalf("stored refresh token = %q, err = %v", refreshToken, err)
+	}
+}
+
+// 提供方未签发 refresh token 时不能生成无法在线重验的长会话；回退到旧语义（令牌到期封顶）。
+func TestLoginWithoutRefreshTokenKeepsAccessTokenCap(t *testing.T) {
+	now := time.Date(2026, 10, 30, 2, 0, 0, 0, time.UTC)
+	repo := newMemoryRepo()
+	claims := validClaims(now)
+	claims.ExpiresAt = now.Add(15 * time.Minute)
+	claims.RefreshToken = ""
+	service := newTestService(t, repo, &fakeOIDC{exchanged: claims, current: claims}, now)
+
+	session := repo.sessions[tokenHash(loginSession(t, service))]
+	if session == nil || !session.ExpiresAt.Equal(claims.ExpiresAt) {
+		t.Fatalf("session = %#v, want expiry capped at %s", session, claims.ExpiresAt)
+	}
+	if len(session.RefreshTokenCipher) != 0 {
+		t.Fatal("session without refresh token must not persist refresh ciphertext")
+	}
+}
+
+// 显式活动推进空闲窗口；普通已认证请求只更新 last_seen_at，不能为空闲会话续期。
+func TestActivitySlidesIdleWindowWhileOrdinaryRequestsDoNot(t *testing.T) {
+	now := time.Date(2026, 10, 30, 2, 0, 0, 0, time.UTC)
+	repo := newMemoryRepo()
+	claims := validClaims(now)
+	claims.ExpiresAt = now.Add(24 * time.Hour) // 覆盖整个会话，避免刷新干扰本用例
+	claims.RefreshToken = "refresh-token"
+	service := newTestService(t, repo, &fakeOIDC{exchanged: claims, current: claims}, now)
+	token := loginSession(t, service)
+
+	// 登录后 29 分钟的普通请求仍有效，但不得推进 last_interactive_at。
+	service.now = func() time.Time { return now.Add(29 * time.Minute) }
+	if _, err := service.Authenticate(context.Background(), token); err != nil {
+		t.Fatalf("ordinary request before idle deadline failed: %v", err)
+	}
+	if interactive := repo.sessions[tokenHash(token)].LastInteractiveAt; interactive == nil || !interactive.Equal(now) {
+		t.Fatalf("ordinary request moved last_interactive_at to %v", interactive)
+	}
+
+	// 显式活动把空闲窗口从当前时间重新滑动 30 分钟。
+	activity, err := service.RecordActivity(context.Background(), token)
+	if err != nil || activity.IdleTimeout != 30*time.Minute || activity.Remaining != 30*time.Minute {
+		t.Fatalf("RecordActivity() = %+v, %v", activity, err)
+	}
+
+	// 登录后 40 分钟（活动后 11 分钟）仍有效；若活动没有续期，30 分钟空闲期限早已过期。
+	service.now = func() time.Time { return now.Add(40 * time.Minute) }
+	if _, err := service.Authenticate(context.Background(), token); err != nil {
+		t.Fatalf("session with explicit activity at 40m was rejected: %v", err)
+	}
+}
+
+// 绝对期限不随活动滑动：跨过 8 小时后即使活动上报也不能复活会话。
+func TestAbsoluteExpiryIsNotExtendedByActivity(t *testing.T) {
+	now := time.Date(2026, 10, 30, 2, 0, 0, 0, time.UTC)
+	repo := newMemoryRepo()
+	claims := validClaims(now)
+	claims.ExpiresAt = now.Add(24 * time.Hour)
+	claims.RefreshToken = "refresh-token"
+	service := newTestService(t, repo, &fakeOIDC{exchanged: claims, current: claims}, now)
+	token := loginSession(t, service)
+
+	service.now = func() time.Time { return now.Add(8*time.Hour + time.Second) }
+	if _, err := service.RecordActivity(context.Background(), token); !errors.Is(err, ErrUnauthenticated) {
+		t.Fatalf("absolute-expired session activity error = %v", err)
+	}
+	if _, err := service.Authenticate(context.Background(), token); !errors.Is(err, ErrUnauthenticated) {
+		t.Fatalf("absolute-expired session error = %v", err)
+	}
+}
+
+// 空闲到期返回 401 且不写全账号撤销/不广播，也不能被活动接口复活。
+func TestIdleExpiryRejectsSessionWithoutRevocationOrRevival(t *testing.T) {
+	now := time.Date(2026, 10, 30, 2, 0, 0, 0, time.UTC)
+	repo := newMemoryRepo()
+	claims := validClaims(now)
+	claims.ExpiresAt = now.Add(24 * time.Hour)
+	claims.RefreshToken = "refresh-token"
+	service := newTestService(t, repo, &fakeOIDC{exchanged: claims, current: claims}, now)
+	token := loginSession(t, service)
+
+	service.now = func() time.Time { return now.Add(31 * time.Minute) }
+	if _, err := service.Authenticate(context.Background(), token); !errors.Is(err, ErrUnauthenticated) {
+		t.Fatalf("idle-expired Authenticate error = %v", err)
+	}
+	if _, err := service.RecordActivity(context.Background(), token); !errors.Is(err, ErrUnauthenticated) {
+		t.Fatalf("idle-expired RecordActivity error = %v", err)
+	}
+	if session := repo.sessions[tokenHash(token)]; session.RevokedAt != nil {
+		t.Fatalf("idle expiry must not write a global revocation, got %v", session.RevokedAt)
+	}
+	service.now = func() time.Time { return now.Add(32 * time.Minute) }
+	if _, err := service.Authenticate(context.Background(), token); !errors.Is(err, ErrUnauthenticated) {
+		t.Fatalf("revived session error = %v", err)
+	}
+}
+
+// 访问令牌到期前用保存的 refresh token 刷新；并发/重复鉴权不重复消费一次性 refresh token。
+func TestAccessTokenRefreshesBeforeExpiryUsingStoredRefreshToken(t *testing.T) {
+	now := time.Date(2026, 10, 30, 2, 0, 0, 0, time.UTC)
+	repo := newMemoryRepo()
+	claims := validClaims(now)
+	claims.ExpiresAt = now.Add(15 * time.Minute)
+	claims.RefreshToken = "refresh-1"
+	oidc := &fakeOIDC{exchanged: claims, current: claims, refreshResult: refreshedTokens{AccessToken: "access-2", RefreshToken: "refresh-2", ExpiresAt: now.Add(35 * time.Minute)}}
+	service := newTestService(t, repo, oidc, now)
+	token := loginSession(t, service)
+
+	service.now = func() time.Time { return now.Add(15 * time.Minute) }
+	if _, err := service.Authenticate(context.Background(), token); err != nil {
+		t.Fatalf("Authenticate() after access token expiry = %v", err)
+	}
+	if oidc.refreshCalls != 1 || oidc.lastRefreshToken != "refresh-1" {
+		t.Fatalf("refresh calls = %d, token = %q", oidc.refreshCalls, oidc.lastRefreshToken)
+	}
+	session := repo.sessions[tokenHash(token)]
+	if session.AccessTokenExpiresAt == nil || !session.AccessTokenExpiresAt.Equal(now.Add(35*time.Minute)) {
+		t.Fatalf("refreshed access token expiry = %v", session.AccessTokenExpiresAt)
+	}
+	if refreshToken, err := service.codec.decrypt(session.RefreshTokenCipher); err != nil || refreshToken != "refresh-2" {
+		t.Fatalf("rotated refresh token = %q, err = %v", refreshToken, err)
+	}
+	if _, err := service.Authenticate(context.Background(), token); err != nil {
+		t.Fatalf("second Authenticate() = %v", err)
+	}
+	if oidc.refreshCalls != 1 {
+		t.Fatalf("a second request consumed another refresh token: calls=%d", oidc.refreshCalls)
+	}
+}
+
+// 在线重验被提供方拒绝时，仅在持久化令牌仍是那枚被拒令牌时受控刷新一次。
+func TestRejectedAccessTokenRefreshesOnlyWhenStillStale(t *testing.T) {
+	now := time.Date(2026, 10, 30, 2, 0, 0, 0, time.UTC)
+	repo := newMemoryRepo()
+	claims := validClaims(now)
+	claims.ExpiresAt = now.Add(15 * time.Minute)
+	claims.RefreshToken = "refresh-1"
+	oidc := &fakeOIDC{exchanged: claims, current: claims, refreshResult: refreshedTokens{AccessToken: "access-2", RefreshToken: "refresh-2", ExpiresAt: now.Add(35 * time.Minute)}}
+	service := newTestService(t, repo, oidc, now)
+	token := loginSession(t, service)
+	staleAccessToken, err := service.codec.decrypt(repo.sessions[tokenHash(token)].AccessTokenCipher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.now = func() time.Time { return now.Add(16 * time.Minute) }
+	if _, err := service.refreshSessionTokens(context.Background(), tokenHash(token), now.Add(16*time.Minute), staleAccessToken); err != nil {
+		t.Fatalf("refresh stale token = %v", err)
+	}
+	if oidc.refreshCalls != 1 {
+		t.Fatalf("refresh calls = %d", oidc.refreshCalls)
+	}
+	// 另一个并发请求仍持有旧令牌：数据库令牌已更新，不能再消费新的 refresh token。
+	if _, err := service.refreshSessionTokens(context.Background(), tokenHash(token), now.Add(16*time.Minute), staleAccessToken); err != nil {
+		t.Fatalf("repeat refresh with stale token = %v", err)
+	}
+	if oidc.refreshCalls != 1 {
+		t.Fatalf("stale concurrent refresh consumed another token: calls=%d", oidc.refreshCalls)
+	}
+}
+
+// 提供方明确拒绝 refresh token（过期/撤销/重放）时撤销本地会话；临时不可用只返回 503 并保留会话。
+func TestRefreshFailureClassification(t *testing.T) {
+	tests := []struct {
+		name       string
+		refreshErr error
+		wantErr    error
+		wantStatus bool
+	}{
+		{name: "provider rejected", refreshErr: errOIDCRefreshRejected, wantErr: ErrUnauthenticated, wantStatus: false},
+		{name: "temporary unavailable", refreshErr: errors.New("platform unavailable"), wantErr: ErrAuthorizationUnavailable, wantStatus: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			now := time.Date(2026, 10, 30, 2, 0, 0, 0, time.UTC)
+			repo := newMemoryRepo()
+			claims := validClaims(now)
+			claims.ExpiresAt = now.Add(15 * time.Minute)
+			claims.RefreshToken = "refresh-1"
+			oidc := &fakeOIDC{exchanged: claims, current: claims, refreshErr: test.refreshErr}
+			service := newTestService(t, repo, oidc, now)
+			token := loginSession(t, service)
+			service.now = func() time.Time { return now.Add(16 * time.Minute) }
+			_, err := service.Authenticate(context.Background(), token)
+			if !errors.Is(err, test.wantErr) {
+				t.Fatalf("Authenticate() error = %v, want %v", err, test.wantErr)
+			}
+			session := repo.sessions[tokenHash(token)]
+			if test.wantStatus && session.RevokedAt != nil {
+				t.Fatal("temporary platform failure must not revoke the local session")
+			}
+			if !test.wantStatus && session.RevokedAt == nil {
+				t.Fatal("rejected refresh token must revoke the local session")
+			}
+			if test.wantStatus {
+				// 平台恢复后同一会话应能继续刷新成功，不需要用户重新登录。
+				oidc.refreshErr = nil
+				oidc.refreshResult = refreshedTokens{AccessToken: "access-2", RefreshToken: "refresh-2", ExpiresAt: now.Add(35 * time.Minute)}
+				if _, err := service.Authenticate(context.Background(), token); err != nil {
+					t.Fatalf("Authenticate() after platform recovery = %v", err)
+				}
+			}
+		})
+	}
+}
+
+// 认证主体携带权威空闲策略与期限，供 /auth/me 的 idle_timeout_seconds / idle_remaining_ms 使用；
+// 显式活动后期限从活动时刻重新计算。
+func TestAuthenticatePrincipalCarriesBoundedIdleDeadline(t *testing.T) {
+	now := time.Date(2026, 10, 30, 2, 0, 0, 0, time.UTC)
+	claims := validClaims(now)
+	claims.ExpiresAt = now.Add(24 * time.Hour)
+	claims.RefreshToken = "refresh-token"
+	service := newTestService(t, newMemoryRepo(), &fakeOIDC{exchanged: claims, current: claims}, now)
+	token := loginSession(t, service)
+
+	service.now = func() time.Time { return now.Add(10 * time.Minute) }
+	principal, err := service.Authenticate(context.Background(), token)
+	if err != nil {
+		t.Fatalf("Authenticate() = %v", err)
+	}
+	if principal.SessionIdleTimeout != 30*time.Minute || !principal.SessionIdleDeadline.Equal(now.Add(30*time.Minute)) {
+		t.Fatalf("principal idle = timeout %s deadline %s", principal.SessionIdleTimeout, principal.SessionIdleDeadline)
+	}
+	if _, err := service.RecordActivity(context.Background(), token); err != nil {
+		t.Fatalf("RecordActivity() = %v", err)
+	}
+	principal, err = service.Authenticate(context.Background(), token)
+	if err != nil || !principal.SessionIdleDeadline.Equal(now.Add(40*time.Minute)) {
+		t.Fatalf("principal after activity = %+v, %v", principal, err)
+	}
+}
+
+// 升级前存量行 last_interactive_at 为 NULL：必须按 created_at 计算空闲窗口，而不是立刻锁死在线会话。
+func TestLegacySessionWithoutInteractiveTimestampUsesCreatedAt(t *testing.T) {
+	now := time.Date(2026, 10, 30, 2, 0, 0, 0, time.UTC)
+	repo := newMemoryRepo()
+	claims := validClaims(now)
+	claims.ExpiresAt = now.Add(24 * time.Hour)
+	claims.RefreshToken = "refresh-token"
+	service := newTestService(t, repo, &fakeOIDC{exchanged: claims, current: claims}, now)
+	token := loginSession(t, service)
+	// 模拟迁移前的存量行：活动时间为 NULL，且没有 refresh token / 令牌到期时间。
+	legacy := repo.sessions[tokenHash(token)]
+	legacy.LastInteractiveAt = nil
+	legacy.RefreshTokenCipher = nil
+	legacy.AccessTokenExpiresAt = nil
+
+	service.now = func() time.Time { return now.Add(29 * time.Minute) }
+	if _, err := service.Authenticate(context.Background(), token); err != nil {
+		t.Fatalf("legacy session within idle window was rejected: %v", err)
+	}
+	service.now = func() time.Time { return now.Add(31 * time.Minute) }
+	if _, err := service.Authenticate(context.Background(), token); !errors.Is(err, ErrUnauthenticated) {
+		t.Fatalf("legacy session past idle window error = %v", err)
+	}
+}
+
+// 剩余空闲时间取 min(最后活动+空闲, 绝对到期)，且不为负。
+func TestSessionIdleDeadlineIsBoundedByAbsoluteExpiry(t *testing.T) {
+	now := time.Date(2026, 10, 30, 2, 0, 0, 0, time.UTC)
+	if got, want := sessionIdleDeadlineAt(now, 30*time.Minute, now.Add(8*time.Hour)), now.Add(30*time.Minute); !got.Equal(want) {
+		t.Fatalf("idle-bounded deadline = %s, want %s", got, want)
+	}
+	if got, want := sessionIdleDeadlineAt(now, 30*time.Minute, now.Add(10*time.Minute)), now.Add(10*time.Minute); !got.Equal(want) {
+		t.Fatalf("absolute-bounded deadline = %s, want %s", got, want)
 	}
 }

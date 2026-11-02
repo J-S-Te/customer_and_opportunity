@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	core "github.com/J-S-Te/license-core"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/businessclock"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/workerlicense"
 	"path"
 	"strconv"
@@ -143,7 +144,7 @@ func (r *PDFCPURenderer) Render(ctx context.Context, detail project.Detail, gene
 		"项目经理：" + emptyDash(detail.Snapshot.ManagerName),
 		"受控联系方式：" + emptyDash(detail.Snapshot.ManagerContactMasked),
 		"数据更新时间：" + detail.Snapshot.SourceUpdatedAt.UTC().Format(time.RFC3339),
-		"PDF 生成时间：" + generatedAt.UTC().Format(time.RFC3339),
+		"PDF 生成时间（北京时间）：" + generatedAt.In(businessclock.Location()).Format(time.RFC3339),
 		"",
 		"里程碑：",
 	}

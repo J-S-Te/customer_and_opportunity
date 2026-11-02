@@ -90,7 +90,7 @@ func createTestInput() CreateRequest {
 
 func createTestService(repo Repository, writer audit.Writer) *Service {
 	return &Service{
-		repo: repo, audit: writer,
+		repo: repo, audit: writer, freeze: allowAllFreezeChecker{},
 		now:               func() time.Time { return time.Date(2026, 8, 1, 8, 0, 0, 0, time.UTC) },
 		createTransaction: func(ctx context.Context, fn func(context.Context) error) error { return fn(ctx) },
 	}

@@ -91,7 +91,7 @@ func (r *centralTestRepository) AttachSessionLink(ctx context.Context, hash stri
 // 参数：请求、Cookie摘要、时钟与持锁操作。
 // 返回值：最新投影；确定失效仅撤销当前行。
 func (r *centralTestRepository) WithSessionLock(ctx context.Context, hash string, now time.Time, update sessionLockFunc) (*Session, error) {
-	session, err := r.FindSession(ctx, hash, now)
+	session, err := r.FindSession(ctx, hash, now, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -155,6 +155,22 @@ func TestShortAccessTokenDoesNotTruncateBrowserSession(t *testing.T) {
 	}
 	if value, err := service.codec.decrypt(row.RefreshTokenCipher); err != nil || value != "rotated-refresh" {
 		t.Fatal("rotated refresh token was not persisted")
+	}
+	// 中央交互可能发生在其他RP；本地交互时间不能截断仍有效的中央周期。
+	now = now.Add(31 * time.Minute)
+	oidc.refreshedExpiry = now.Add(5 * time.Minute)
+	oidc.current = validClaims(now)
+	principal, err := service.Authenticate(context.Background(), result.SessionToken)
+	if err != nil || principal.SessionIdleTimeout != 0 {
+		t.Fatalf("central window overridden by local idle policy: %v", err)
+	}
+	activity, err := service.RecordActivity(context.Background(), result.SessionToken)
+	if err != nil || client.activities != 1 || activity.Remaining != 30*time.Minute {
+		t.Fatalf("compatibility activity did not use central authority: %v", err)
+	}
+	row = repo.sessions[tokenHash(result.SessionToken)]
+	if !row.LastInteractiveAt.Equal(row.CreatedAt) || !row.ExpiresAt.Equal(original) {
+		t.Fatal("central activity changed local idle origin or absolute deadline")
 	}
 	client.err = central.ErrUnavailable
 	if _, err = service.Authenticate(context.Background(), result.SessionToken); !errors.Is(err, ErrAuthorizationUnavailable) || row.RevokedAt != nil {

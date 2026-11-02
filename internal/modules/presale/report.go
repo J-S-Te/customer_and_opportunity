@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/businessclock"
 )
 
 const maxReportPeriod = 366 * 24 * time.Hour
@@ -105,10 +107,13 @@ func (s *ReportService) Trend(ctx context.Context, actor Actor, query ReportQuer
 	for _, value := range values {
 		byDate[value.Date] = value
 	}
-	result := make([]ReportTrendPoint, 0, int(query.To.Sub(query.From)/(24*time.Hour))+1)
+	first, endExclusive := trendDayRange(query.From, query.To)
+	result := make([]ReportTrendPoint, 0, int(query.To.Sub(query.From)/(24*time.Hour))+2)
 	// 数据库只返回有事实的日期；服务层补齐半开区间内的空日期，
 	// 保证图表横轴连续且不会把“无数据”误解为接口漏行。
-	for day := utcDay(query.From); day.Before(query.To); day = day.AddDate(0, 0, 1) {
+	// 补零范围与 SQL 的 CONVERT_TZ 分组同口径（北京日历日）：只要 [From,To) 与某个北京日
+	// 有交集，该日就必须出现在结果里，否则 UTC 与北京日期错位时会漏日。
+	for day := first; day.Before(endExclusive); day = day.AddDate(0, 0, 1) {
 		key := day.Format(time.DateOnly)
 		value, ok := byDate[key]
 		if !ok {
@@ -204,7 +209,7 @@ func (s *ReportService) exportCSV(ctx context.Context, actor Actor, query Report
 		{"统计区间", query.From.Format(time.RFC3339), query.To.Format(time.RFC3339), dimension},
 		{"汇总", "工时", "参与人数", "有效工时记录", "已结束任务", "覆盖商机", "有效商机", "商机覆盖率（%）", "工时成功记录", "工时总记录", "工时成功率（%）"},
 		{"合计", summary.WorkHours, strconv.FormatInt(summary.ParticipantCount, 10), strconv.FormatInt(summary.ValidWorklogCount, 10), strconv.FormatInt(summary.AutoCompletedTaskCount, 10), strconv.FormatInt(summary.CoveredOpportunityCount, 10), strconv.FormatInt(summary.ActiveOpportunityCount, 10), summary.OpportunityCoverageRate, strconv.FormatInt(summary.PMSSuccessCount, 10), strconv.FormatInt(summary.PMSOutboxWorklogCount, 10), summary.PMSSuccessRate},
-		{}, {"趋势日期（UTC）", "工时", "参与人数", "记录数"},
+		{}, {"趋势日期（北京时间）", "工时", "参与人数", "记录数"},
 	}
 	for _, point := range trend {
 		records = append(records, []string{point.Date, point.WorkHours, strconv.FormatInt(point.ParticipantCount, 10), strconv.FormatInt(point.WorklogCount, 10)})
@@ -309,7 +314,19 @@ func ratio(numerator, denominator int64) string {
 	return percentage.FloatString(2)
 }
 
-func utcDay(value time.Time) time.Time {
-	value = value.UTC()
-	return time.Date(value.Year(), value.Month(), value.Day(), 0, 0, 0, 0, time.UTC)
+// trendDayRange 返回趋势补零要覆盖的北京日历日半开区间 [first, endExclusive)。
+//
+// from/to 是 UTC 时刻（validateReportAccess 已归一），但趋势按北京日历日分组，
+// 因此标签取北京日历日：只要 [from,to) 与某个北京日有交集，该日就必须出现在横轴上。
+func trendDayRange(from, to time.Time) (time.Time, time.Time) {
+	first := beijingDay(from)
+	last := beijingDay(to.Add(-time.Nanosecond))
+	return first, last.AddDate(0, 0, 1)
+}
+
+// beijingDay 返回 value 所在北京日历日的纯日期（以 UTC 午夜表达，仅用于 YYYY-MM-DD 格式化）。
+// 它只决定报表的日期标签，不改变任何落库时间戳的语义。
+func beijingDay(value time.Time) time.Time {
+	year, month, day := value.In(businessclock.Location()).Date()
+	return time.Date(year, month, day, 0, 0, 0, 0, time.UTC)
 }

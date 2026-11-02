@@ -24,10 +24,10 @@ func writeSessionFailure(c *gin.Context, err error) {
 // 返回值：无；返回不含令牌秘密的权威窗口。
 func (h *Handler) SessionState(c *gin.Context) { h.lifecycle(c, false) }
 
-// Activity 代理通过Origin和CSRF校验的显式真实交互。
+// CentralActivity 代理通过Origin和CSRF校验的显式真实交互。
 // 参数：c为已认证且通过同源写保护的请求。
 // 返回值：无；中央到期不会被此接口复活。
-func (h *Handler) Activity(c *gin.Context) { h.lifecycle(c, true) }
+func (h *Handler) CentralActivity(c *gin.Context) { h.lifecycle(c, true) }
 
 // lifecycle 统一状态及活动响应，临时故障保留浏览器登录态。
 // 参数：c为当前请求，interact为真实交互标识。

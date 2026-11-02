@@ -10,10 +10,7 @@ import (
 )
 
 // tokenRefreshResult 是访问及刷新令牌的服务器端轮换结果，不能进入浏览器响应。
-type tokenRefreshResult struct {
-	AccessToken, RefreshToken string
-	ExpiresAt                 time.Time
-}
+type tokenRefreshResult = refreshedTokens
 
 // tokenRefresher 是仅在中央有效且持有数据库会话锁时可使用的刷新能力。
 type tokenRefresher interface {
@@ -106,7 +103,7 @@ func (s *Service) Lifecycle(ctx context.Context, rawSession string, interact boo
 	if rawSession == "" {
 		return central.Context{}, ErrUnauthenticated
 	}
-	session, err := s.repo.FindSession(ctx, tokenHash(rawSession), s.now().UTC())
+	session, err := s.repo.FindSession(ctx, tokenHash(rawSession), s.now().UTC(), s.localIdleTTL())
 	if errors.Is(err, errNotFound) {
 		return central.Context{}, ErrUnauthenticated
 	}
@@ -124,7 +121,7 @@ func (s *Service) Lifecycle(ctx context.Context, rawSession string, interact boo
 // 返回值：最新持久会话；明确拒绝要求重登，网络或存储故障保留会话。
 func (s *Service) refreshSessionAccess(ctx context.Context, session *Session) (*Session, error) {
 	now := s.now().UTC()
-	if session.AccessTokenExpiresAt.After(now.Add(time.Minute)) {
+	if session.AccessTokenExpiresAt != nil && session.AccessTokenExpiresAt.After(now.Add(time.Minute)) {
 		return session, nil
 	}
 	repo, ok := s.repo.(governanceRepository)
@@ -139,7 +136,7 @@ func (s *Service) refreshSessionAccess(ctx context.Context, session *Session) (*
 	defer cancel()
 	ctx = rotationCtx
 	updated, err := repo.WithSessionLock(ctx, session.SessionIDHash, now, func(current *Session) (bool, error) {
-		if current.AccessTokenExpiresAt.After(s.now().UTC().Add(time.Minute)) {
+		if current.AccessTokenExpiresAt != nil && current.AccessTokenExpiresAt.After(s.now().UTC().Add(time.Minute)) {
 			return false, nil
 		}
 		// 锁内再次读权威状态，等待期间到期的中央周期不得刷新。
@@ -176,7 +173,8 @@ func (s *Service) refreshSessionAccess(ctx context.Context, session *Session) (*
 		if decryptErr != nil {
 			return false, decryptErr
 		}
-		current.AccessTokenExpiresAt = tokens.ExpiresAt.UTC()
+		tokenExpiry := tokens.ExpiresAt.UTC()
+		current.AccessTokenExpiresAt = &tokenExpiry
 		// 先提交轮换材料，再由原业务请求重新核验权限；故障时不得沿用旧缓存。
 		current.AuthorizationCheckedAt = time.Unix(1, 0).UTC()
 		return true, nil

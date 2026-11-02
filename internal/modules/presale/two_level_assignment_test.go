@@ -314,7 +314,7 @@ func ts011Request(t *testing.T, nodes []byte) (*PresaleRequest, *ApprovalInstanc
 }
 
 func newTS011Service(repo *ts011Repository, directory ownerdirectory.Catalog) *Service {
-	return NewService(repo, nil, nil, fixedClock{at: time.Date(2026, 10, 18, 9, 0, 0, 0, time.UTC)}, fixedIDs{}).UseOwnerDirectory(directory)
+	return NewService(repo, nil, nil, fixedClock{at: time.Date(2026, 10, 18, 9, 0, 0, 0, time.UTC)}, fixedIDs{}).UseOwnerDirectory(directory).UseFreezeChecker(allowAllFreezeChecker{})
 }
 
 func ts011CurrentAssignments(repo *ts011Repository, kind string) []Assignment {

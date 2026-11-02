@@ -621,6 +621,57 @@ func (s *Service) MarkIngestDeadLetter(ctx context.Context, job IngestJob) error
 	})
 }
 
+// MarkDeliveryDeadLetter 在投递退避耗尽时把申请收敛到终止失败态 SUBMISSION_FAILED：
+// 只允许 SUBMITTED → SUBMISSION_FAILED，并写一条系统状态事件和一条客户可见站内通知。
+// 调用方必须在同一事务内先调用本方法再落投递死信，因此“死信一定伴随申请终态”；
+// 租约丢失、事件身份不符或申请已被其他路径推进时返回错误，由调用方整体回滚。
+// 死信期精确重放安全：申请已处于 SUBMISSION_FAILED 时直接成功且不重复追加事件或通知。
+func (s *Service) MarkDeliveryDeadLetter(ctx context.Context, outbox Outbox) error {
+	tenantID := strings.TrimSpace(outbox.TenantID)
+	eventID := strings.TrimSpace(outbox.EventID)
+	if outbox.ID == 0 || outbox.AggregateID == 0 || !validBoundedText(eventID, 64) || !validBoundedText(tenantID, maxTenantIDBytes) {
+		return ErrInvalidCallback
+	}
+	lease, ok := s.repo.(deliveryLeaseRepository)
+	if !ok {
+		return errors.New("report outbox lease repository is unavailable")
+	}
+	now := s.clock.Now().UTC()
+	return s.repo.WithTransaction(ctx, func(tx context.Context) error {
+		current, err := lease.FindOutboxForUpdate(tx, outbox.ID)
+		if err != nil {
+			return err
+		}
+		if current.EventID != eventID || current.TenantID != tenantID || current.AggregateID != outbox.AggregateID || current.EventType != OutboxEventSubmitted {
+			return ErrCallbackConflict
+		}
+		// 行锁下复核租约：只有当前持有者可以写终态；DEAD_LETTER 说明死信已提交，允许精确重放。
+		if current.Status != OutboxDeadLetter && (current.Status != OutboxProcessing || current.LockedBy != outbox.LockedBy) {
+			return errors.New("report delivery lease was lost")
+		}
+		value, err := s.repo.FindForUpdate(tx, tenantID, outbox.AggregateID)
+		if err != nil {
+			return err
+		}
+		if value.TenantID != tenantID {
+			return ErrNotFound
+		}
+		if value.Status == StatusSubmissionFailed {
+			return nil
+		}
+		if value.Status != StatusSubmitted {
+			return ErrInvalidTransition
+		}
+		if err = s.repo.Update(tx, value, value.Version, map[string]any{"status": StatusSubmissionFailed, "updated_by": "portal-report-worker", "updated_at": now}); err != nil {
+			return err
+		}
+		if err = s.repo.CreateStatusEvent(tx, statusEvent(value, "SUBMISSION_FAILED", value.Version+1, StatusSubmitted, StatusSubmissionFailed, "SYSTEM", "portal-report-worker", "DELIVERY_DEAD_LETTER", eventID, "", requestctx.ID(tx), now)); err != nil {
+			return err
+		}
+		return s.repo.CreateNotification(tx, &Notification{TenantID: value.TenantID, CustomerID: value.CustomerID, RequestID: value.ID, AccountID: value.AccountID, Kind: NotificationKindSubmissionFailed, Status: NotificationUnread, CreatedAt: now})
+	})
+}
+
 func statusEvent(value *Request, eventType string, sequence uint64, from, to Status, actorType, actorID, sourceType, sourceKey, payloadHash, traceID string, occurredAt time.Time) *StatusEvent {
 	return &StatusEvent{
 		TenantID: value.TenantID, CustomerID: value.CustomerID, RequestID: value.ID,

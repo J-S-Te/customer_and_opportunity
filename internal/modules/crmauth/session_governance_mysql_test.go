@@ -63,13 +63,14 @@ func TestCentralSessionRotationCheckpointMySQL(t *testing.T) {
 	client := &centralTestClient{state: central.Context{SessionID: "canonical-login", TenantID: "tenant-1", SubjectID: "user-1", ClientID: "crm-web", ApplicationCode: expectation.ApplicationCode, EnvironmentCode: "dev", PolicyVersion: 1, IdleTimeoutSeconds: 1800, IdleRemainingMS: 1800000, AbsoluteExpiresAt: now.Add(8 * time.Hour), AbsoluteRemainingMS: (8 * time.Hour).Milliseconds()}}
 	oidc := &mysqlRotationOIDC{refresher: &platformOIDCClient{config: oauth2.Config{ClientID: "crm-web", Endpoint: oauth2.Endpoint{TokenURL: server.URL, AuthStyle: oauth2.AuthStyleInParams}}, httpClient: server.Client()}}
 	repo := NewGORMRepository(db)
-	service, err := NewService(repo, oidc, []byte(strings.Repeat("k", 32)), Options{TenantID: "tenant-1", RoleConfigHash: "hash-1", EnvironmentCode: "dev", SessionTTL: 8 * time.Hour, MaxRoles: 3, CentralClient: client, CentralExpectation: expectation})
+	service, err := NewService(repo, oidc, []byte(strings.Repeat("k", 32)), Options{TenantID: "tenant-1", RoleConfigHash: "hash-1", EnvironmentCode: "dev", SessionIdleTTL: 30 * time.Minute, SessionAbsoluteTTL: 8 * time.Hour, MaxRoles: 3, CentralClient: client, CentralExpectation: expectation})
 	if err != nil {
 		t.Fatal(err)
 	}
 	service.now = func() time.Time { return now }
 	claims := validClaims(now)
-	session := Session{SessionIDHash: tokenHash("qa-opaque"), TenantID: "tenant-1", PlatformUserID: "user-1", OIDCSessionID: "qa-sid", RoleConfigHash: claims.RoleConfigHash, AuthzRevision: claims.AuthzRevision, ExpiresAt: now.Add(8 * time.Hour), AuthorizationCheckedAt: now, CreatedAt: now, LastSeenAt: now, AccessTokenExpiresAt: now.Add(10 * time.Second), CentralSessionID: "canonical-login"}
+	tokenExpiry := now.Add(10 * time.Second)
+	session := Session{SessionIDHash: tokenHash("qa-opaque"), TenantID: "tenant-1", PlatformUserID: "user-1", OIDCSessionID: "qa-sid", RoleConfigHash: claims.RoleConfigHash, AuthzRevision: claims.AuthzRevision, ExpiresAt: now.Add(8 * time.Hour), AuthorizationCheckedAt: now, CreatedAt: now, LastSeenAt: now, AccessTokenExpiresAt: &tokenExpiry, CentralSessionID: "canonical-login"}
 	for value, target := range map[string]*[]byte{"initial-refresh": &session.RefreshTokenCipher, "old-access": &session.AccessTokenCipher, "server-binding": &session.CentralBindingCipher} {
 		*target, err = service.codec.encrypt(value)
 		if err != nil {

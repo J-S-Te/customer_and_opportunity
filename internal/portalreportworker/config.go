@@ -15,14 +15,17 @@ import (
 
 // 报告 Worker 使用独立来源读取凭据；完整投递模式另需外部报告服务 report.request.write 凭据。
 type Config struct {
-	MySQLDSN                                                                          string
-	WorkerID                                                                          string
-	PollInterval                                                                      time.Duration
-	LeaseDuration                                                                     time.Duration
-	BatchSize                                                                         int
-	IngestDescriptorKey                                                               []byte
-	Project                                                                           ProjectServiceConfig
-	IngestOnly                                                                        bool
+	MySQLDSN            string
+	WorkerID            string
+	PollInterval        time.Duration
+	LeaseDuration       time.Duration
+	BatchSize           int
+	IngestDescriptorKey []byte
+	Project             ProjectServiceConfig
+	IngestOnly          bool
+	// ProjectPreflight 控制完整投递模式启动时是否先做一次下游连通性自检；默认关闭，
+	// 关闭时行为与既有版本一致（只凭配置与心跳准入）。
+	ProjectPreflight                                                                  bool
 	TenantID                                                                          string
 	ReportStoreRoot                                                                   string
 	ReportContentKey                                                                  []byte
@@ -55,6 +58,10 @@ func LoadConfig() (Config, error) {
 			return Config{}, fmt.Errorf("PORTAL_REPORT_PROJECT_TLS_REQUIRE_MTLS: %w", err)
 		}
 	}
+	projectPreflight, err := strconv.ParseBool(env("PORTAL_REPORT_PROJECT_PREFLIGHT", "false"))
+	if err != nil {
+		return Config{}, fmt.Errorf("invalid Portal report project preflight flag")
+	}
 	reportKey, err := base64.StdEncoding.DecodeString(os.Getenv("PORTAL_REPORT_CONTENT_KEY_BASE64"))
 	if err != nil {
 		return Config{}, fmt.Errorf("invalid Portal report content key")
@@ -67,6 +74,7 @@ func LoadConfig() (Config, error) {
 		BatchSize:           intEnv("PORTAL_REPORT_WORKER_BATCH_SIZE", 20),
 		IngestDescriptorKey: ingestDescriptorKey,
 		IngestOnly:          ingestOnly,
+		ProjectPreflight:    projectPreflight && !ingestOnly,
 		TenantID:            os.Getenv("PORTAL_OIDC_TENANT_ID"), ReportStoreRoot: os.Getenv("PORTAL_REPORT_STORE_ROOT"), ReportContentKey: reportKey,
 		FileGatewayURL: os.Getenv("PORTAL_REPORT_SOURCE_BASE_URL"), FileGatewayTokenURL: os.Getenv("PORTAL_REPORT_SOURCE_TOKEN_URL"), FileGatewayClientID: os.Getenv("PORTAL_REPORT_SOURCE_CLIENT_ID"), FileGatewayClientSecret: os.Getenv("PORTAL_REPORT_SOURCE_CLIENT_SECRET"),
 		Project: ProjectServiceConfig{

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	core "github.com/J-S-Te/license-core"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/businessclock"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/workerlicense"
 	"log"
 	"strings"
@@ -80,14 +81,14 @@ func (a *App) runOnce(ctx context.Context) error {
 		return nil
 	}
 	now := a.now().UTC()
-	from, to := aggregateWindow(now, a.lookbackDays)
+	window := aggregateWindow(now, a.lookbackDays)
 	acquired, leaseUntil, err := a.acquireLease(ctx, now)
 	if err != nil || !acquired {
 		return err
 	}
 	tenants := append([]string(nil), a.tenantIDs...)
 	if len(tenants) == 0 {
-		tenants, err = a.discoverTenants(ctx, from, to)
+		tenants, err = a.discoverTenants(ctx, window)
 		if err != nil {
 			return err
 		}
@@ -109,7 +110,7 @@ func (a *App) runOnce(ctx context.Context) error {
 			return errLeaseLost
 		}
 		tenantCtx, cancel := context.WithDeadline(ctx, deadline)
-		err = a.aggregateTenant(tenantCtx, tenantID, from, to)
+		err = a.aggregateTenant(tenantCtx, tenantID, window)
 		cancel()
 		if err != nil {
 			return err
@@ -118,9 +119,37 @@ func (a *App) runOnce(ctx context.Context) error {
 	return nil
 }
 
-func aggregateWindow(now time.Time, lookbackDays int) (time.Time, time.Time) {
-	day := time.Date(now.UTC().Year(), now.UTC().Month(), now.UTC().Day(), 0, 0, 0, 0, time.UTC)
-	return day.AddDate(0, 0, -(lookbackDays - 1)), day.AddDate(0, 0, 1)
+// dailyAggregateWindow 是一个北京日历日半开区间 [FromDate,ToDate)。
+//
+// 同一份日历边界派生出两种查询参数：
+//   - FromInstant/ToInstant：区间端点对应的 UTC 时刻，用于 work_start 这样的 UTC 时间戳列；
+//   - FromDate/ToDate：区间端点的纯日期，用于 metric_date 以及运行记录的 DATE 列窗口。
+//
+// 二者必须由同一次日历换算得到，否则窗口与分组口径不一致时会漏日或重日。
+type dailyAggregateWindow struct {
+	FromDate    time.Time
+	ToDate      time.Time
+	FromInstant time.Time
+	ToInstant   time.Time
+}
+
+// aggregateWindow 按北京日历日计算回看窗口。
+// 旧实现用 now.UTC() 拼 UTC 午夜，而 metric_date 分组是 DATE(work_start)（UTC 日），
+// 于是北京时间 00:00–08:00 的工作会被记到 UTC 前一天；改成北京日历日后，
+// 窗口端点落在北京午夜，与 dailyMetricInsertSQL 的 CONVERT_TZ 分组同源。
+func aggregateWindow(now time.Time, lookbackDays int) dailyAggregateWindow {
+	local := now.In(businessclock.Location())
+	first := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, businessclock.Location())
+	first = first.AddDate(0, 0, -(lookbackDays - 1))
+	end := first.AddDate(0, 0, lookbackDays)
+	return dailyAggregateWindow{
+		// DATE(?) 只取年月日，因此这里必须用同一天的 UTC 午夜表达，
+		// 否则驱动按 UTC 落格式会把北京午夜退回到前一天。
+		FromDate:    time.Date(first.Year(), first.Month(), first.Day(), 0, 0, 0, 0, time.UTC),
+		ToDate:      time.Date(end.Year(), end.Month(), end.Day(), 0, 0, 0, 0, time.UTC),
+		FromInstant: first.UTC(),
+		ToInstant:   end.UTC(),
+	}
 }
 
 func validateTenantID(value string) error {
@@ -130,7 +159,7 @@ func validateTenantID(value string) error {
 	return nil
 }
 
-func (a *App) discoverTenants(ctx context.Context, from, to time.Time) ([]string, error) {
+func (a *App) discoverTenants(ctx context.Context, window dailyAggregateWindow) ([]string, error) {
 	var tenants []string
 	err := a.db.WithContext(ctx).Raw(`SELECT tenant_id FROM (
 		SELECT DISTINCT tenant_id FROM crm_presale_worklogs
@@ -138,7 +167,8 @@ func (a *App) discoverTenants(ctx context.Context, from, to time.Time) ([]string
 		UNION
 		SELECT DISTINCT tenant_id FROM crm_presale_daily_metrics
 		 WHERE metric_date>=DATE(?) AND metric_date<DATE(?)
-	) candidates ORDER BY tenant_id`, from, to, from, to).Scan(&tenants).Error
+	) candidates ORDER BY tenant_id`,
+		window.FromInstant, window.ToInstant, window.FromDate, window.ToDate).Scan(&tenants).Error
 	return tenants, err
 }
 
@@ -189,13 +219,15 @@ func leaseRenewSQL() string {
 		WHERE job_name=? AND owner_id=? AND lease_until>=?`
 }
 
-func (a *App) aggregateTenant(ctx context.Context, tenantID string, from, to time.Time) error {
+func (a *App) aggregateTenant(ctx context.Context, tenantID string, window dailyAggregateWindow) error {
 	if !workerlicense.Allowed(ctx, core.MUTATE_BUSINESS) {
 		return nil
 	}
 	startedAt := a.now().UTC()
+	// window_start/window_end_exclusive 在库里是 DATE 列，记录的是北京日历日区间；
+	// 若写 UTC 时刻，MySQL 会把它截断成 UTC 日期，运行记录就会与 metric_date 差一天。
 	run := dailyMetricRun{
-		TenantID: tenantID, WindowStart: from, WindowEndExclusive: to,
+		TenantID: tenantID, WindowStart: window.FromDate, WindowEndExclusive: window.ToDate,
 		Status: "RUNNING", WorkerID: a.workerID, StartedAt: startedAt,
 	}
 	if err := a.db.WithContext(ctx).Table("crm_presale_daily_metric_runs").Create(&run).Error; err != nil {
@@ -205,17 +237,19 @@ func (a *App) aggregateTenant(ctx context.Context, tenantID string, from, to tim
 	var sourceMax *time.Time
 	err := a.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		// 先删窗口再重算，但二者位于同一事务；失败时旧指标仍保留，不会暴露半空报表。
+		// metric_date 是北京日历日，因此删除范围只能用窗口的日期边界，不能复用 work_start 的 UTC 时刻边界。
 		if err := tx.Exec(`DELETE FROM crm_presale_daily_metrics
-			WHERE tenant_id=? AND metric_date>=DATE(?) AND metric_date<DATE(?)`, tenantID, from, to).Error; err != nil {
+			WHERE tenant_id=? AND metric_date>=DATE(?) AND metric_date<DATE(?)`,
+			tenantID, window.FromDate, window.ToDate).Error; err != nil {
 			return err
 		}
-		result := tx.Exec(dailyMetricInsertSQL(), startedAt, tenantID, from, to)
+		result := tx.Exec(dailyMetricInsertSQL(), startedAt, tenantID, window.FromInstant, window.ToInstant)
 		if result.Error != nil {
 			return result.Error
 		}
 		rowCount = result.RowsAffected
 		if err := tx.Table("crm_presale_daily_metrics").Select("MAX(source_max_updated_at)").
-			Where("tenant_id=? AND metric_date>=DATE(?) AND metric_date<DATE(?)", tenantID, from, to).
+			Where("tenant_id=? AND metric_date>=DATE(?) AND metric_date<DATE(?)", tenantID, window.FromDate, window.ToDate).
 			Scan(&sourceMax).Error; err != nil {
 			return err
 		}
@@ -260,6 +294,12 @@ type dailyMetricRun struct {
 	ErrorSummary       string
 }
 
+// beijingMetricDateExpr 把以 UTC 存储的 work_start 折算成北京日历日。
+// 固定使用数字偏移而不是时区名，避免依赖 MySQL 是否已加载时区表。
+// 表达式必须与 aggregateWindow 的北京日历日窗口同源：窗口负责“取哪些行”，
+// 本表达式负责“落哪个 metric_date”，两者口径不同就会漏日或重日。
+const beijingMetricDateExpr = `DATE(CONVERT_TZ(w.work_start,'+00:00','+08:00'))`
+
 func dailyMetricInsertSQL() string {
 	return `INSERT INTO crm_presale_daily_metrics
 		(tenant_id,metric_date,organization_id,person_id,person_name_snapshot,department_snapshot,
@@ -271,7 +311,7 @@ func dailyMetricInsertSQL() string {
 	       aggregate_rows.worklog_count,aggregate_rows.pms_outbox_worklog_count,
 		       aggregate_rows.pms_success_count,aggregate_rows.source_max_updated_at,?
 	FROM (
-		SELECT w.tenant_id,DATE(w.work_start) AS metric_date,o.owner_org_id AS organization_id,
+		SELECT w.tenant_id,` + beijingMetricDateExpr + ` AS metric_date,o.owner_org_id AS organization_id,
 		       w.person_id,o.id AS opportunity_id,MAX(w.id) AS snapshot_worklog_id,
 		       SUM(w.work_hours) AS work_hours,COUNT(DISTINCT w.request_id) AS request_count,
 		       COUNT(DISTINCT w.id) AS worklog_count,
@@ -291,7 +331,7 @@ func dailyMetricInsertSQL() string {
 		JOIN crm_opportunities o ON o.tenant_id=r.tenant_id AND o.id=r.opportunity_id
 		WHERE w.tenant_id=? AND w.deleted_at IS NULL AND w.voided_at IS NULL
 		  AND w.work_start>=? AND w.work_start<?
-		GROUP BY w.tenant_id,DATE(w.work_start),o.owner_org_id,w.person_id,o.id
+		GROUP BY w.tenant_id,` + beijingMetricDateExpr + `,o.owner_org_id,w.person_id,o.id
 	) aggregate_rows
 	JOIN crm_presale_worklogs snapshot
 	  ON snapshot.tenant_id=aggregate_rows.tenant_id AND snapshot.id=aggregate_rows.snapshot_worklog_id`

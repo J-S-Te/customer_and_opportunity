@@ -89,7 +89,7 @@ func TestReplaceAssignmentsWritesEvidenceAndOutboxForAddedAndRemoved(t *testing.
 	actor := Actor{TenantID: "tenant-a", UserID: "lead", RequestID: "request-trace", Roles: map[string]bool{"team_lead": true}, Permissions: map[string]bool{"presale.assign": true}}
 	base := &mutationRepository{request: &PresaleRequest{BaseModel: BaseModel{ID: 9, TenantID: actor.TenantID, Version: 3}, RequestNo: "TS9", Status: StatusExecuting}, assignments: []Assignment{{BaseModel: BaseModel{ID: 20, TenantID: actor.TenantID, Version: 1}, RequestID: 9, AssigneeID: "old", AssigneeNameSnapshot: "旧人员", AssigneeRole: "implementation_engineer", AssignedAt: now.Add(-time.Hour), IsCurrent: true}}, engineers: []Engineer{{PersonID: "new", PersonName: "新人员", Role: "project_manager", ValidFlag: true}}, replays: map[string]*MutationReplay{}}
 	repo := &assignmentNotificationRepository{mutationRepository: base}
-	service := NewService(repo, nil, nil, fixedClock{at: now}, fixedIDs{}).UseOwnerDirectory(assignmentOwnerCatalog{
+	service := NewService(repo, nil, nil, fixedClock{at: now}, fixedIDs{}).UseFreezeChecker(allowAllFreezeChecker{}).UseOwnerDirectory(assignmentOwnerCatalog{
 		users: map[string]ownerdirectory.User{
 			"new": {ID: "new", DisplayName: "权威姓名", Organizations: []ownerdirectory.Organization{{ID: "org-1", Name: "技术中心", IsPrimary: true}}},
 		},
@@ -141,7 +141,7 @@ func TestExactAssignmentReplayDoesNotDuplicateNotifications(t *testing.T) {
 	actor := Actor{TenantID: "tenant-a", UserID: "lead", Roles: map[string]bool{"team_lead": true}, Permissions: map[string]bool{"presale.assign": true}}
 	base := &mutationRepository{request: &PresaleRequest{BaseModel: BaseModel{ID: 9, TenantID: actor.TenantID, Version: 3}, Status: StatusApprovedPendingAssignment}, engineers: []Engineer{{PersonID: "new", PersonName: "新人员", Role: "project_manager", ValidFlag: true}}, replays: map[string]*MutationReplay{}}
 	repo := &assignmentNotificationRepository{mutationRepository: base}
-	service := NewService(repo, nil, nil, fixedClock{at: now}, fixedIDs{}).UseOwnerDirectory(assignmentOwnerCatalog{
+	service := NewService(repo, nil, nil, fixedClock{at: now}, fixedIDs{}).UseFreezeChecker(allowAllFreezeChecker{}).UseOwnerDirectory(assignmentOwnerCatalog{
 		users: map[string]ownerdirectory.User{
 			"new": {ID: "new", DisplayName: "新人员", Organizations: []ownerdirectory.Organization{{ID: "org-1", Name: "技术中心", IsPrimary: true}}},
 		},

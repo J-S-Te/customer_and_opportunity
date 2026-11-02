@@ -82,7 +82,8 @@ func (s *Service) ReplaceAssignments(ctx context.Context, actor Actor, id uint64
 			if _, exists := current[target.PersonID]; exists {
 				continue
 			}
-			if e = s.ensureUserNotFrozen(tx, actor.TenantID, target.PersonID); e != nil {
+			// 事务内最终防线：门闩行锁与交接侧 CreateFreeze 串行化。
+			if e = s.guardUserWrite(tx, actor.TenantID, target.PersonID); e != nil {
 				return e
 			}
 			newAssignees = append(newAssignees, target)

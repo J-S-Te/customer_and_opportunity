@@ -40,3 +40,14 @@ var (
 	ErrAttachmentNotReady    = apperror.New(http.StatusConflict, "CRM_OPPORTUNITY_ATTACHMENT_NOT_READY", "opportunity attachment is not available for this operation")
 	ErrAttachmentRejected    = apperror.New(http.StatusUnprocessableEntity, "CRM_OPPORTUNITY_ATTACHMENT_REJECTED", "opportunity attachment was rejected by security scanning")
 )
+
+// 终态与重复转合同的业务闸门错误，单独成块以避免改动既有错误定义。
+var (
+	// ErrContractTransferAlreadyLinked 覆盖“版本推进后 event_id 变化”的重复转合同路径：
+	// 一个商机只能成功受理一次转合同，后续变更必须走合同系统或 Outbox 重试。
+	ErrContractTransferAlreadyLinked = apperror.New(http.StatusConflict, "CRM_OPPORTUNITY_CONTRACT_TRANSFER_ALREADY_LINKED", "opportunity has already been transferred to a contract")
+	// 终态商机只能通过受控更正/重开流程推进阶段；本轮不提供重开命令。
+	ErrTerminalStageLocked      = apperror.New(http.StatusConflict, "CRM_OPPORTUNITY_TERMINAL_STAGE_LOCKED", "closed opportunity stage can only be corrected through a controlled reopen or correction process")
+	ErrTerminalMasterDataFrozen = apperror.New(http.StatusConflict, "CRM_OPPORTUNITY_TERMINAL_AMOUNT_FROZEN", "expected amount and expected sign date are frozen after the opportunity is closed")
+	ErrExternalStatusTerminal   = apperror.New(http.StatusConflict, "CRM_OPPORTUNITY_EXTERNAL_STATUS_TERMINAL", "closed opportunity does not accept external stage callbacks")
+)

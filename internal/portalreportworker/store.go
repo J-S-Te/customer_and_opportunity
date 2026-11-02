@@ -2,15 +2,31 @@ package portalreportworker
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/portal/report"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/database"
 	"gorm.io/gorm"
 )
 
-type outboxStore struct{ db *gorm.DB }
+// deadLetterProjection 在同一事务内把申请收敛到 SUBMISSION_FAILED。
+// 只声明写终态所需的最小能力，Worker 仍以 Outbox 事件身份作为幂等依据。
+type deadLetterProjection interface {
+	MarkDeliveryDeadLetter(context.Context, report.Outbox) error
+}
 
-func newOutboxStore(db *gorm.DB) *outboxStore { return &outboxStore{db: db} }
+type outboxStore struct {
+	db          *gorm.DB
+	deadLetters deadLetterProjection
+	// transaction 与 updateOutbox 只在测试中替换；生产装配始终使用同一 GORM 事务与同一条更新语句。
+	transaction  func(context.Context, func(context.Context) error) error
+	updateOutbox func(context.Context, report.Outbox, string, map[string]any) error
+}
+
+func newOutboxStore(db *gorm.DB, deadLetters deadLetterProjection) *outboxStore {
+	return &outboxStore{db: db, deadLetters: deadLetters}
+}
 
 // 领取事务只负责建立有限租约，提交后才调用项目系统；数据库行锁不会跨越外部 HTTP。
 func (s *outboxStore) claim(ctx context.Context, workerID string, now time.Time, lease time.Duration, limit int) ([]report.Outbox, error) {
@@ -33,7 +49,7 @@ ORDER BY created_at,id LIMIT ? FOR UPDATE SKIP LOCKED`, now, now, limit).Scan(&e
 		}
 		lockedUntil := now.Add(lease)
 		result := tx.Model(&report.Outbox{}).Where("id IN ?", ids).Updates(map[string]any{
-			"status": "PROCESSING", "locked_by": workerID, "locked_until": lockedUntil,
+			"status": report.OutboxProcessing, "locked_by": workerID, "locked_until": lockedUntil,
 		})
 		if result.Error != nil {
 			return result.Error
@@ -42,7 +58,7 @@ ORDER BY created_at,id LIMIT ? FOR UPDATE SKIP LOCKED`, now, now, limit).Scan(&e
 			return errLeaseLost
 		}
 		for i := range events {
-			events[i].Status, events[i].LockedBy, events[i].LockedUntil = "PROCESSING", workerID, &lockedUntil
+			events[i].Status, events[i].LockedBy, events[i].LockedUntil = report.OutboxProcessing, workerID, &lockedUntil
 		}
 		claimed = events
 		return nil
@@ -52,8 +68,8 @@ ORDER BY created_at,id LIMIT ? FOR UPDATE SKIP LOCKED`, now, now, limit).Scan(&e
 
 func (s *outboxStore) sent(ctx context.Context, event report.Outbox, workerID string, now time.Time) error {
 	result := s.db.WithContext(ctx).Model(&report.Outbox{}).
-		Where("id=? AND status='PROCESSING' AND locked_by=?", event.ID, workerID).
-		Updates(map[string]any{"status": "SENT", "sent_at": now, "locked_by": "", "locked_until": nil, "next_retry_at": nil, "last_error_summary": ""})
+		Where("id=? AND status=? AND locked_by=?", event.ID, report.OutboxProcessing, workerID).
+		Updates(map[string]any{"status": report.OutboxSent, "sent_at": now, "locked_by": "", "locked_until": nil, "next_retry_at": nil, "last_error_summary": ""})
 	if result.Error != nil {
 		return result.Error
 	}
@@ -67,12 +83,47 @@ func (s *outboxStore) failed(ctx context.Context, event report.Outbox, workerID 
 	// 有限退避耗尽后转死信；错误摘要先清洗，避免上游响应或凭据污染持久化诊断字段。
 	attempt := event.RetryCount + 1
 	status, next := outboxFailurePlan(now, attempt)
-	result := s.db.WithContext(ctx).Model(&report.Outbox{}).
-		Where("id=? AND status='PROCESSING' AND locked_by=?", event.ID, workerID).
-		Updates(map[string]any{
-			"status": status, "retry_count": attempt, "next_retry_at": next,
-			"locked_by": "", "locked_until": nil, "last_error_summary": sanitize(summary),
-		})
+	fields := map[string]any{
+		"status": status, "retry_count": attempt, "next_retry_at": next,
+		"locked_by": "", "locked_until": nil, "last_error_summary": sanitize(summary),
+	}
+	if status == report.OutboxDeadLetter {
+		return s.commitDeadLetter(ctx, event, workerID, fields)
+	}
+	return s.writeFailure(ctx, event, workerID, fields)
+}
+
+// commitDeadLetter 保证“死信一定伴随申请终态”：同一事务内先写申请 SUBMISSION_FAILED，再落 Outbox 死信。
+// 申请已被其他路径推进或租约丢失时整体回滚，不留下没有终态的孤立死信。
+func (s *outboxStore) commitDeadLetter(ctx context.Context, event report.Outbox, workerID string, fields map[string]any) error {
+	if event.AggregateID == 0 {
+		// 结构无效的 Outbox 没有可绑定的申请，只能落死信交由运维清理，避免租约过期后无限重投。
+		return s.writeFailure(ctx, event, workerID, fields)
+	}
+	if s.deadLetters == nil {
+		return errors.New("Portal report dead-letter projection is not configured")
+	}
+	run := s.transaction
+	if run == nil {
+		run = func(ctx context.Context, fn func(context.Context) error) error {
+			return database.WithTransaction(ctx, s.db, fn)
+		}
+	}
+	return run(ctx, func(txCtx context.Context) error {
+		if err := s.deadLetters.MarkDeliveryDeadLetter(txCtx, event); err != nil {
+			return err
+		}
+		return s.writeFailure(txCtx, event, workerID, fields)
+	})
+}
+
+func (s *outboxStore) writeFailure(ctx context.Context, event report.Outbox, workerID string, fields map[string]any) error {
+	if s.updateOutbox != nil {
+		return s.updateOutbox(ctx, event, workerID, fields)
+	}
+	result := database.FromContext(ctx, s.db).Model(&report.Outbox{}).
+		Where("id=? AND status=? AND locked_by=?", event.ID, report.OutboxProcessing, workerID).
+		Updates(fields)
 	if result.Error != nil {
 		return result.Error
 	}
@@ -87,7 +138,7 @@ var retryDelays = [...]time.Duration{time.Minute, 5 * time.Minute, 15 * time.Min
 func outboxFailurePlan(now time.Time, attempt uint8) (string, *time.Time) {
 	if attempt > 0 && int(attempt) <= len(retryDelays) {
 		next := now.Add(retryDelays[attempt-1])
-		return "RETRY_WAIT", &next
+		return report.OutboxRetryWait, &next
 	}
-	return "DEAD_LETTER", nil
+	return report.OutboxDeadLetter, nil
 }

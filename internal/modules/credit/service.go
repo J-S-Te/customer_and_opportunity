@@ -2,17 +2,22 @@ package credit
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/go-sql-driver/mysql"
 	"github.com/shopspring/decimal"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/customer"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/ownerdirectory"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/apperror"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/auth"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/businessclock"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/database"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/pagination"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/request"
@@ -47,8 +52,8 @@ func (s *Service) GetLevel(ctx context.Context, customerID uint64) (LevelRespons
 		UpdatedAt           *time.Time
 	}
 	err := scopedCreditCustomers(database.FromContext(ctx, s.db), p).
-		Select("customer.id,customer.credit_level,customer.credit_change_source,customer.credit_updated_at AS updated_at,customer.consecutive_ontime_count AS on_time,customer.consecutive_late_count AS late").
-		Where("customer.id=?", customerID).
+		Select("crm_customers.id,crm_customers.credit_level,crm_customers.credit_change_source,crm_customers.credit_updated_at AS updated_at,crm_customers.consecutive_ontime_count AS on_time,crm_customers.consecutive_late_count AS late").
+		Where("crm_customers.id=?", customerID).
 		Take(&row).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return LevelResponse{}, apperror.New(404, "CRM_CUSTOMER_NOT_FOUND", "customer not found")
@@ -79,32 +84,19 @@ func (s *Service) Statistics(ctx context.Context) (Statistics, error) {
 	}
 	var result Statistics
 	err := scopedCreditCustomers(database.FromContext(ctx, s.db), p).
-		Select("COALESCE(SUM(customer.credit_level='C'),0) AS level_c,COALESCE(SUM(customer.credit_level='D'),0) AS level_d,COALESCE(SUM(customer.credit_level IN ('C','D')),0) AS attention_customers").
-		Where("customer.status='ACTIVE' AND customer.merged_into_id IS NULL").
+		Select("COALESCE(SUM(crm_customers.credit_level='C'),0) AS level_c,COALESCE(SUM(crm_customers.credit_level='D'),0) AS level_d,COALESCE(SUM(crm_customers.credit_level IN ('C','D')),0) AS attention_customers").
+		Where("crm_customers.status='ACTIVE' AND crm_customers.merged_into_id IS NULL").
 		Scan(&result).Error
 	return result, err
 }
 
-// scopedCreditCustomers 将信用子模块收口到与客户主数据一致的数据范围。
-// 销售角色即使获得平台 application/tenant 范围，也只能读取本人创建的客户；
-// 管理角色继续遵循平台下发的 ALL/ORG 范围，未知或个人范围按负责人本人失败收窄。
+// scopedCreditCustomers 把信用子模块收口到客户主数据的数据范围，直接复用
+// customer.ApplyDataScope，不再在信用模块里重复维护一份范围谓词。
+// 销售角色的可见客户是本人“当前负责”的客户（owner_user_id）：交接后旧负责人
+// 立即失去访问，created_by 只是创建历史，不能作为访问依据。管理角色继续遵循
+// 平台下发的 ALL/ORG 范围，未知或个人范围按负责人本人失败收窄。
 func scopedCreditCustomers(db *gorm.DB, principal auth.Principal) *gorm.DB {
-	db = db.Table("crm_customers AS customer").
-		Where("customer.tenant_id=? AND customer.deleted_at IS NULL", principal.TenantID)
-	if creditSalesOnlyPrincipal(principal) {
-		return db.Where("customer.created_by=?", principal.UserID)
-	}
-	switch principal.ScopeMode {
-	case auth.ScopeAll:
-		return db
-	case auth.ScopeOrg:
-		if len(principal.OrganizationIDs) == 0 {
-			return db.Where("1=0")
-		}
-		return db.Where("customer.owner_org_id IN ?", principal.OrganizationIDs)
-	default:
-		return db.Where("customer.owner_user_id=?", principal.UserID)
-	}
+	return customer.ApplyDataScope(db.Table("crm_customers"), principal)
 }
 
 func creditSalesOnlyPrincipal(principal auth.Principal) bool {
@@ -130,8 +122,8 @@ func creditSalesOnlyPrincipal(principal auth.Principal) bool {
 func ensureCreditCustomerVisible(db *gorm.DB, principal auth.Principal, customerID uint64) error {
 	var row struct{ ID uint64 }
 	err := scopedCreditCustomers(db, principal).
-		Select("customer.id").
-		Where("customer.id=?", customerID).
+		Select("crm_customers.id").
+		Where("crm_customers.id=?", customerID).
 		Take(&row).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return apperror.New(404, "CRM_CUSTOMER_NOT_FOUND", "customer not found")
@@ -375,12 +367,7 @@ func (s *Service) ProcessPayment(ctx context.Context, event PaymentEvent) (Payme
 		ignoreReason := "INCOMPLETE_PAYMENT"
 		if event.PaidDate != nil && paid.GreaterThanOrEqual(due) {
 			ignoreReason = ""
-			deadline := event.DueDate.UTC().AddDate(0, 0, rules.GraceDays)
-			if !event.PaidDate.After(deadline) {
-				evaluation = "ONTIME"
-			} else {
-				evaluation = "LATE"
-			}
+			evaluation = paymentEvaluation(event.DueDate, *event.PaidDate, rules.GraceDays)
 		}
 		if evaluation == "IGNORED_INCOMPLETE" {
 			return s.insertRecord(tx, p.TenantID, event, evaluation, ignoreReason, rules.GraceDays, now, &previous, &previous, &result)
@@ -596,8 +583,8 @@ func (s *Service) Apply(ctx context.Context, customerID uint64, in ApplyRequest)
 		}
 		customerErr := scopedCreditCustomers(tx, p).
 			Clauses(clause.Locking{Strength: "UPDATE"}).
-			Select("customer.id,customer.credit_level").
-			Where("customer.id=? AND customer.status='ACTIVE' AND customer.merged_into_id IS NULL", customerID).
+			Select("crm_customers.id,crm_customers.credit_level").
+			Where("crm_customers.id=? AND crm_customers.status='ACTIVE' AND crm_customers.merged_into_id IS NULL", customerID).
 			Take(&customer).Error
 		if errors.Is(customerErr, gorm.ErrRecordNotFound) {
 			return apperror.New(404, "CRM_CUSTOMER_NOT_FOUND", "customer not found")
@@ -796,8 +783,8 @@ func (s *Service) History(ctx context.Context, customerID uint64, page, pageSize
 	page, pageSize = pagination.Normalize(page, pageSize)
 	db := database.FromContext(ctx, s.db)
 	visibleCustomer := scopedCreditCustomers(db.Session(&gorm.Session{NewDB: true}), p).
-		Select("customer.id").
-		Where("customer.id=?", customerID)
+		Select("crm_customers.id").
+		Where("crm_customers.id=?", customerID)
 	// 将可见性子查询保留在实际数据读取中，避免客户组织归属在授权检查与分页查询之间变化时
 	// 泄露已经移出当前范围的信用历史。
 	query := db.Where("tenant_id=? AND customer_id=? AND customer_id IN (?)", p.TenantID, customerID, visibleCustomer)
@@ -820,8 +807,8 @@ func (s *Service) Payments(ctx context.Context, customerID uint64, page, pageSiz
 	page, pageSize = pagination.Normalize(page, pageSize)
 	db := database.FromContext(ctx, s.db)
 	visibleCustomer := scopedCreditCustomers(db.Session(&gorm.Session{NewDB: true}), p).
-		Select("customer.id").
-		Where("customer.id=?", customerID)
+		Select("crm_customers.id").
+		Where("crm_customers.id=?", customerID)
 	query := db.Where("tenant_id=? AND customer_id=? AND customer_id IN (?)", p.TenantID, customerID, visibleCustomer)
 	var total int64
 	if err := query.Model(&creditPaymentRecord{}).Count(&total).Error; err != nil {
@@ -888,13 +875,60 @@ func (s *Service) notifySalesDirectors(tx *gorm.DB, tenant string, customerID, a
 	return nil
 }
 
+// creditNotificationSourceID 把一次信用通知的完整语义折叠成稳定的
+// source_event_id。crm_notifications 的唯一键是 (tenant_id, source_event_id)，
+// 并配合 ON DUPLICATE KEY UPDATE id=id 做幂等写入：
+//   - 同一档等级变化被事务重试时（body/收件人/类型完全相同）得到同一个键，
+//     收件人只会看到一条通知；
+//   - 不同 from/to 或其他正文内容、不同收件人、不同申请生成不同的键，
+//     每次变化都各推一条，不会被上一次变化的键吞掉。
+//
+// 键中不包含时间：重试发生在事务回滚之后，时间必然不同，一旦参与摘要就会
+// 把同一次变化重复写入站内信。摘要长度固定为 "credit:"+64 位十六进制，
+// 满足 source_event_id 的列宽与平台事件码字符集。
+func creditNotificationSourceID(tenant string, customerID, applicationID uint64, recipientID, kind, title, body string) string {
+	// 使用不可能出现在正文中的分隔符拼接，避免不同字段拼接后发生歧义碰撞。
+	material := strings.Join([]string{
+		tenant,
+		strconv.FormatUint(customerID, 10),
+		strconv.FormatUint(applicationID, 10),
+		kind,
+		recipientID,
+		title,
+		body,
+	}, "\x1f")
+	sum := sha256.Sum256([]byte(material))
+	return "credit:" + hex.EncodeToString(sum[:])
+}
+
 func (s *Service) notifyApplication(tx *gorm.DB, tenant string, customerID, applicationID uint64, recipientID, kind, title, body string, now time.Time) error {
 	if strings.TrimSpace(recipientID) == "" {
 		return nil
 	}
-	sourceID := fmt.Sprintf("credit:%s:%d:%d:%s:%s", tenant, customerID, applicationID, kind, recipientID)
+	sourceID := creditNotificationSourceID(tenant, customerID, applicationID, recipientID, kind, title, body)
 	return tx.Exec(`INSERT INTO crm_notifications (tenant_id,created_by,updated_by,source_event_id,type,opportunity_id,customer_id,opportunity_version,opportunity_no,opportunity_name,request_id,request_no,assignment_id,progress_id,recipient_id,recipient_kind,title,body,target_path,status,created_at,updated_at,version)
 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE id=id`,
 		tenant, "system", "system", sourceID, kind, 0, customerID, 0, "", "", 0, "", 0, 0, recipientID, "USER", title, body,
 		fmt.Sprintf("/customer-opportunity/customers?customer_id=%d&tab=credit", customerID), "UNREAD", now, now, 1).Error
+}
+
+// beijingCalendarDay 把时刻折算成北京日历日当天 00:00，用于按业务日粒度比较日期。
+// 数据库中的时间戳仍然是 UTC，只有“业务日期”判断走北京日历。
+func beijingCalendarDay(value time.Time) time.Time {
+	year, month, day := value.In(businessclock.Location()).Date()
+	return time.Date(year, month, day, 0, 0, 0, 0, businessclock.Location())
+}
+
+// paymentEvaluation 判定付款是否在宽限期内完成。
+//
+// 到期日与付款日先各自折算成北京日历日，再比较日历日：宽限截止日当天仍判 ONTIME，
+// 次日起判 LATE。旧实现以 UTC 午夜的 deadline 与付款时刻直接比较，既让宽限日当天
+// 的付款几乎必然判成 LATE（deadline 落在当日 00:00），也把北京时间 00:00–08:00
+// 的付款错算到 UTC 的前一天。
+func paymentEvaluation(dueDate, paidDate time.Time, graceDays int) string {
+	deadline := beijingCalendarDay(dueDate).AddDate(0, 0, graceDays)
+	if !beijingCalendarDay(paidDate).After(deadline) {
+		return "ONTIME"
+	}
+	return "LATE"
 }

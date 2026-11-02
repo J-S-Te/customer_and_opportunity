@@ -177,6 +177,8 @@ func NewRouter(deps RouterDependencies) *gin.Engine {
 	internal.GET("/customers/:customerID/capabilities", requireMachineScope("portal.customer_capabilities.read"), getCustomerCapabilities(deps))
 	internal.PUT("/customers/:customerID/capabilities", requireMachineScope("portal.customer_capabilities.manage"), updateCustomerCapabilities(deps))
 	internal.POST("/report-callbacks", requireMachineScope("report.callback.write"), reportCallback(deps))
+	internal.GET("/report-outbox/failed", requireMachineScope("portal.report.delivery.manage"), listReportDeliveryFailures(deps))
+	internal.POST("/report-outbox/failed/:id/retry", requireMachineScope("portal.report.delivery.manage"), retryReportDeliveryFailure(deps))
 	internal.GET("/report-risk-alerts", requireMachineScope("portal.report.risk.manage"), listReportRiskAlertsForReview(deps))
 	internal.POST("/report-risk-alerts/:id/review", requireMachineScope("portal.report.risk.manage"), reviewReportRiskAlert(deps))
 	internal.GET("/feedbacks", requireMachineScope("portal.feedback.manage"), listFeedbackForOperator(deps))
@@ -1380,6 +1382,47 @@ func reportCallback(deps RouterDependencies) gin.HandlerFunc {
 			return
 		}
 		response.OK(c, gin.H{"accepted": true})
+	}
+}
+
+// listReportDeliveryFailures 只读取验签主体所属租户的投递死信，查询串不允许携带租户。
+func listReportDeliveryFailures(deps RouterDependencies) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		page, pageSize, ok := bindProjectPagination(c)
+		if !ok {
+			return
+		}
+		principal, authenticated := sharedauth.FromContext(c.Request.Context())
+		if !authenticated || strings.TrimSpace(principal.TenantID) == "" || deps.Reports == nil {
+			response.Error(c, apperror.ErrUnauthenticated)
+			return
+		}
+		value, err := deps.Reports.ListDeliveryFailures(c.Request.Context(), principal.TenantID, page, pageSize)
+		if err != nil {
+			response.Error(c, err)
+			return
+		}
+		response.OK(c, value)
+	}
+}
+
+// retryReportDeliveryFailure 只把当前租户的死信事件重置为可重试；不修改载荷、事件身份或申请状态。
+func retryReportDeliveryFailure(deps RouterDependencies) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if !onlyProjectQueryKeys(c) {
+			response.Error(c, apperror.New(http.StatusBadRequest, "COMMON_INVALID_ARGUMENT", "invalid request"))
+			return
+		}
+		principal, authenticated := sharedauth.FromContext(c.Request.Context())
+		if !authenticated || strings.TrimSpace(principal.TenantID) == "" || deps.Reports == nil {
+			response.Error(c, apperror.ErrUnauthenticated)
+			return
+		}
+		if err := deps.Reports.RetryDeliveryFailure(c.Request.Context(), principal.TenantID, c.Param("id")); err != nil {
+			response.Error(c, err)
+			return
+		}
+		response.OK(c, gin.H{"status": report.OutboxRetryWait})
 	}
 }
 

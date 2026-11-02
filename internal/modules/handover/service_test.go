@@ -100,6 +100,14 @@ func serviceFor(t *testing.T, repository *repositoryFake) *Service {
 	return service
 }
 
+// freezeSourceOwner 预置源负责人在该批次的 FROZEN 冻结：
+// Transfer 只接受"属于这个交接批次"的责任项（BIZ-CRM-05）。
+func freezeSourceOwner(repository *repositoryFake, tenantID, batchID, userID string) {
+	repository.freezes[tenantID+"|"+batchID+"|"+userID] = Freeze{
+		ID: "freeze-" + batchID, TenantID: tenantID, BatchID: batchID, UserID: userID, Status: FreezeFrozen,
+	}
+}
+
 func TestFreezeIsIdempotentAndReportsResponsibilities(t *testing.T) {
 	repository := newRepositoryFake("cus-1", "cus-2", "cus-3")
 	service := serviceFor(t, repository)
@@ -142,6 +150,7 @@ func TestResponsibilitiesPaginate(t *testing.T) {
 
 func TestTransferIsIdempotentAndRejectsSelfSuccessor(t *testing.T) {
 	repository := newRepositoryFake("cus-1")
+	freezeSourceOwner(repository, "tenant-1", "batch-1", "user-leaver")
 	service := serviceFor(t, repository)
 	ctx := context.Background()
 
@@ -172,6 +181,7 @@ func TestTransferIsIdempotentAndRejectsSelfSuccessor(t *testing.T) {
 
 func TestTransferRejectsFrozenSuccessor(t *testing.T) {
 	repository := newRepositoryFake("cus-1")
+	freezeSourceOwner(repository, "tenant-1", "batch-1", "user-leaver")
 	repository.freezes["tenant-1|batch-9|user-successor"] = Freeze{
 		ID: "freeze-9", TenantID: "tenant-1", BatchID: "batch-9", UserID: "user-successor", Status: FreezeFrozen,
 	}
@@ -191,6 +201,7 @@ func TestTransferRejectsFrozenSuccessor(t *testing.T) {
 
 func TestReceiptLookupAndCompletion(t *testing.T) {
 	repository := newRepositoryFake("cus-1")
+	freezeSourceOwner(repository, "tenant-1", "batch-1", "user-leaver")
 	service := serviceFor(t, repository)
 	ctx := context.Background()
 
@@ -214,5 +225,75 @@ func TestReceiptLookupAndCompletion(t *testing.T) {
 	}
 	if err := service.Complete(ctx, "tenant-1", "batch-1", "SOMETHING"); !errors.Is(err, ErrValidation) {
 		t.Fatalf("invalid outcome must be rejected: %v", err)
+	}
+}
+
+// BIZ-CRM-05：转移必须证明责任项属于输入的交接批次。
+// 批次不存在、非本批次、已释放三种情形都必须 409 语义，且不写回执、不改数据。
+func TestTransferRequiresFrozenBatchForSourceOwner(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		freeze  *Freeze
+		batchID string
+	}{
+		{name: "no freeze at all", batchID: "batch-1"},
+		{name: "frozen by another batch", batchID: "batch-1", freeze: &Freeze{ID: "freeze-2", TenantID: "tenant-1", BatchID: "batch-2", UserID: "user-leaver", Status: FreezeFrozen}},
+		{name: "released batch", batchID: "batch-1", freeze: &Freeze{ID: "freeze-1", TenantID: "tenant-1", BatchID: "batch-1", UserID: "user-leaver", Status: FreezeReleased}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			repository := newRepositoryFake("cus-1")
+			if test.freeze != nil {
+				repository.freezes["tenant-1|"+test.freeze.BatchID+"|user-leaver"] = *test.freeze
+			}
+			service := serviceFor(t, repository)
+			input := TransferInput{TenantID: "tenant-1", BatchID: test.batchID, ItemID: "item-1", ResourceType: ResourceCustomer,
+				ResourceID: "cus-1", FromUserID: "user-leaver", ToUserID: "user-successor", ExpectedVersion: 3,
+				IdempotencyKey: "handover:" + test.batchID + ":item-1"}
+			receipt, err := service.Transfer(context.Background(), input)
+			if !errors.Is(err, ErrBatchNotFrozen) {
+				t.Fatalf("err = %v, want ErrBatchNotFrozen", err)
+			}
+			if receipt != (Receipt{}) {
+				t.Fatalf("receipt = %+v, want zero value", receipt)
+			}
+			if repository.transferCalls != 0 {
+				t.Fatalf("transfer executed %d times, want none", repository.transferCalls)
+			}
+			// 落 REJECTED/RETRYABLE 回执会让同幂等键重放永久卡死，因此必须没有回执。
+			if len(repository.receipts) != 0 {
+				t.Fatalf("receipts = %v, want none", repository.receipts)
+			}
+			if _, found, lookupErr := repository.FindReceipt(context.Background(), "tenant-1", input.IdempotencyKey); lookupErr != nil || found {
+				t.Fatalf("receipt found = %v err = %v, want absent", found, lookupErr)
+			}
+		})
+	}
+}
+
+// 冻结被释放后，同幂等键重放仍然返回既有 APPLIED 回执，不得重新改派或改判 409。
+func TestTransferReplayAfterReleaseReturnsExistingReceipt(t *testing.T) {
+	repository := newRepositoryFake("cus-1")
+	freezeSourceOwner(repository, "tenant-1", "batch-1", "user-leaver")
+	service := serviceFor(t, repository)
+	ctx := context.Background()
+	input := TransferInput{TenantID: "tenant-1", BatchID: "batch-1", ItemID: "item-1", ResourceType: ResourceCustomer,
+		ResourceID: "cus-1", FromUserID: "user-leaver", ToUserID: "user-successor", ExpectedVersion: 3,
+		IdempotencyKey: "handover:batch-1:item-1"}
+	first, err := service.Transfer(ctx, input)
+	if err != nil || first.Status != ReceiptApplied {
+		t.Fatalf("first transfer receipt = %+v err = %v", first, err)
+	}
+	if err := service.Complete(ctx, "tenant-1", "batch-1", "COMPLETED"); err != nil {
+		t.Fatal(err)
+	}
+	replayed, err := service.Transfer(ctx, input)
+	if err != nil {
+		t.Fatalf("replay after release must return the committed receipt: %v", err)
+	}
+	if replayed != first {
+		t.Fatalf("replayed receipt = %+v, want %+v", replayed, first)
+	}
+	if repository.transferCalls != 1 {
+		t.Fatalf("transfer executed %d times, want exactly once", repository.transferCalls)
 	}
 }

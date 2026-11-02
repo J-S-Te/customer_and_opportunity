@@ -8,6 +8,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"gorm.io/gorm"
 )
 
 const completionPolicy = "ALL_CURRENT_ASSIGNEES_HAVE_WORKLOG"
@@ -30,6 +32,9 @@ type Service struct {
 	approvalRules     *ApprovalRuleStore
 	notifications     WorkflowNotificationWriter
 	freeze            FreezeChecker
+	// db 只在装配了 GORM 仓储时可用：它用于区分"生产写事务缺失"（装配错误，fail-closed）
+	// 与"单元测试内存仓储"（无数据库事务，由冻结检查器复核承担同一语义）。
+	db *gorm.DB
 }
 
 // 新建申请依赖独立投递 worker 的持久化心跳，而不是仅检查当前进程配置。
@@ -62,7 +67,11 @@ func NewService(repo Repository, opportunities OpportunityReader, phones PhonePr
 	if clock == nil {
 		clock = SystemClock{}
 	}
-	return &Service{repo: repo, opportunities: opportunities, phones: phones, clock: clock, ids: ids, dayHours: "8.00"}
+	service := &Service{repo: repo, opportunities: opportunities, phones: phones, clock: clock, ids: ids, dayHours: "8.00"}
+	if gormRepo, ok := repo.(*GORMRepository); ok {
+		service.db = gormRepo.db
+	}
+	return service
 }
 
 // 创建申请先校验商机的数据范围，再检查租户级幂等键，避免猜测幂等键泄露他人申请。

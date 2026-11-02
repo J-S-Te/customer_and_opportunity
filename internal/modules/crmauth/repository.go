@@ -11,14 +11,41 @@ import (
 
 var errNotFound = errors.New("CRM auth record not found")
 
+// SessionTokens 是需要原子写回的刷新结果。访问令牌与 refresh token 都是密文，
+// AccessTokenExpiresAt 使用 UTC，供服务端在令牌到期前决定是否再次刷新。
+type SessionTokens struct {
+	AccessTokenCipher    []byte
+	RefreshTokenCipher   []byte
+	AccessTokenExpiresAt time.Time
+}
+
+// sessionRefreshFunc 在会话行锁内被调用：返回 changed=false 表示无需写入（例如另一个实例已刷新）。
+type sessionRefreshFunc func(current *Session) (SessionTokens, bool, error)
+
 type repository interface {
 	SaveLogin(context.Context, *LoginTransaction) error
 	ConsumeLogin(context.Context, string, time.Time) (*LoginTransaction, error)
 	CreateSession(context.Context, *Session) error
-	FindSession(context.Context, string, time.Time) (*Session, error)
-	TouchSession(context.Context, string, time.Time, time.Time) error
+	FindSession(context.Context, string, time.Time, time.Duration) (*Session, error)
+	TouchSession(context.Context, string, time.Time, time.Time, time.Duration) error
+	RecordActivity(context.Context, string, time.Time, time.Duration) (time.Time, error)
+	RefreshSessionTokens(context.Context, string, time.Time, time.Duration, sessionRefreshFunc) (*Session, error)
 	RevokeSession(context.Context, string, time.Time) error
 	RevokeSessionsForSubject(context.Context, string, string, time.Time) error
+}
+
+// activeSessionPredicate 统一"未撤销 + 未绝对到期 + 未空闲到期"判定。迁移前的存量行
+// last_interactive_at 为 NULL 时以 created_at 作为最后交互时间，升级不会立刻锁死在线会话。
+const activeSessionPredicate = "session_id_hash = ? AND revoked_at IS NULL AND expires_at > ? AND COALESCE(last_interactive_at, created_at) > ?"
+
+// activeSessionQuery 按模式限制本地会话；中央模式只查本地撤销和绝对期限。
+// 参数：db为查询句柄，hash为Cookie摘要，now为时钟，idleTTL为旧模式空闲窗口。
+// 返回值：带有效性条件的查询；idleTTL为零时由调用方继续检查中央权威。
+func activeSessionQuery(db *gorm.DB, hash string, now time.Time, idleTTL time.Duration) *gorm.DB {
+	if idleTTL <= 0 {
+		return db.Where("session_id_hash = ? AND revoked_at IS NULL AND expires_at > ?", hash, now)
+	}
+	return db.Where(activeSessionPredicate, hash, now, now.Add(-idleTTL))
 }
 
 type GORMRepository struct{ db *gorm.DB }
@@ -56,23 +83,28 @@ func (r *GORMRepository) CreateSession(ctx context.Context, value *Session) erro
 	return r.db.WithContext(ctx).Create(value).Error
 }
 
-func (r *GORMRepository) FindSession(ctx context.Context, hash string, now time.Time) (*Session, error) {
+// FindSession 读取未撤销且在当前模式本地期限内的会话。
+// 参数：ctx为请求，hash为Cookie摘要，now为时钟，idleTTL为旧模式窗口或中央模式零值。
+// 返回值：会话；失效返回未找到，数据库故障保留原始错误。
+func (r *GORMRepository) FindSession(ctx context.Context, hash string, now time.Time, idleTTL time.Duration) (*Session, error) {
 	var value Session
-	err := r.db.WithContext(ctx).
-		Where("session_id_hash = ? AND revoked_at IS NULL AND expires_at > ?", hash, now).Take(&value).Error
+	err := activeSessionQuery(r.db.WithContext(ctx), hash, now, idleTTL).Take(&value).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, errNotFound
 	}
 	return &value, err
 }
 
-func (r *GORMRepository) TouchSession(ctx context.Context, hash string, now, checkedAt time.Time) error {
+// TouchSession 更新普通请求和授权核验时间，不推进真实交互窗口。
+// 参数：ctx为请求，hash为Cookie摘要，now为访问时间，checkedAt为重验时间，idleTTL为本地窗口。
+// 返回值：成功为空；失效返回未找到，数据库失败返回错误。
+func (r *GORMRepository) TouchSession(ctx context.Context, hash string, now, checkedAt time.Time, idleTTL time.Duration) error {
 	updates := map[string]any{"last_seen_at": now}
 	if !checkedAt.IsZero() {
 		updates["authorization_checked_at"] = checkedAt
 	}
-	result := r.db.WithContext(ctx).Model(&Session{}).
-		Where("session_id_hash = ? AND revoked_at IS NULL AND expires_at > ?", hash, now).Updates(updates)
+	result := activeSessionQuery(r.db.WithContext(ctx).Model(&Session{}), hash, now, idleTTL).
+		Updates(updates)
 	if result.Error != nil {
 		return result.Error
 	}
@@ -85,14 +117,88 @@ func (r *GORMRepository) TouchSession(ctx context.Context, hash string, now, che
 	var active struct {
 		SessionIDHash string `gorm:"column:session_id_hash"`
 	}
-	err := r.db.WithContext(ctx).Table((Session{}).TableName()).
-		Select("session_id_hash").
-		Where("session_id_hash = ? AND revoked_at IS NULL AND expires_at > ?", hash, now).
-		Take(&active).Error
+	err := activeSessionQuery(r.db.WithContext(ctx).Table((Session{}).TableName()), hash, now, idleTTL).
+		Select("session_id_hash").Take(&active).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return errNotFound
 	}
 	return err
+}
+
+// RecordActivity 只由显式浏览器活动接口调用：同时推进 last_seen_at 与 last_interactive_at。
+// 返回权威空闲期限（最后交互 + 空闲策略与绝对到期中的较早者），供前端 schedule 下一次探测。
+func (r *GORMRepository) RecordActivity(ctx context.Context, hash string, now time.Time, idleTTL time.Duration) (time.Time, error) {
+	args := []any{hash, now, now.Add(-idleTTL)}
+	var row struct {
+		ExpiresAt time.Time
+	}
+	err := r.db.WithContext(ctx).Table((Session{}).TableName()).
+		Select("expires_at").Where(activeSessionPredicate, args...).Take(&row).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return time.Time{}, errNotFound
+	}
+	if err != nil {
+		return time.Time{}, err
+	}
+	result := r.db.WithContext(ctx).Model(&Session{}).
+		Where(activeSessionPredicate, args...).
+		Updates(map[string]any{"last_seen_at": now, "last_interactive_at": now})
+	if result.Error != nil {
+		return time.Time{}, result.Error
+	}
+	if result.RowsAffected != 1 {
+		// 同一毫秒内的并发活动上报可能写入相同 DATETIME(3) 值而报告 0 行；复核权威有效条件，
+		// 合法并发不能误判为登出。
+		var active struct {
+			SessionIDHash string `gorm:"column:session_id_hash"`
+		}
+		if err := r.db.WithContext(ctx).Table((Session{}).TableName()).
+			Select("session_id_hash").Where(activeSessionPredicate, args...).Take(&active).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return time.Time{}, errNotFound
+			}
+			return time.Time{}, err
+		}
+	}
+	return sessionIdleDeadlineAt(now, idleTTL, row.ExpiresAt), nil
+}
+
+// RefreshSessionTokens 在会话行锁内串行化令牌刷新：只有真正需要刷新的一方调用平台令牌端点并写回，
+// 其余并发请求（含其他实例）拿到已刷新的记录。这样避免多个请求同时使用一次性 refresh token
+// 触发平台侧的重放保护，把整条令牌族撤销。
+func (r *GORMRepository) RefreshSessionTokens(ctx context.Context, hash string, now time.Time, idleTTL time.Duration, refresh sessionRefreshFunc) (*Session, error) {
+	var refreshed *Session
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var row Session
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where(activeSessionPredicate, hash, now, now.Add(-idleTTL)).Take(&row).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return errNotFound
+			}
+			return err
+		}
+		tokens, changed, err := refresh(&row)
+		if err != nil {
+			return err
+		}
+		if changed {
+			expiresAt := tokens.AccessTokenExpiresAt.UTC()
+			if err := tx.Model(&Session{}).Where("session_id_hash = ?", hash).Updates(map[string]any{
+				"access_token_cipher": tokens.AccessTokenCipher, "refresh_token_cipher": tokens.RefreshTokenCipher,
+				"access_token_expires_at": expiresAt,
+			}).Error; err != nil {
+				return err
+			}
+			row.AccessTokenCipher, row.RefreshTokenCipher, row.AccessTokenExpiresAt = tokens.AccessTokenCipher, tokens.RefreshTokenCipher, &expiresAt
+		}
+		snapshot := row
+		refreshed = &snapshot
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return refreshed, nil
 }
 
 func (r *GORMRepository) RevokeSession(ctx context.Context, hash string, now time.Time) error {

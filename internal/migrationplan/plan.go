@@ -69,6 +69,8 @@ var baseFiles = map[Schema][]string{
 		"000121_presale_notification_identity.up.sql",
 		"000122_crm_session_username.up.sql",
 		"000124_central_session_governance.up.sql",
+		"000126_crm_oidc_session_idle.up.sql",
+		"000127_crm_handover_gate.up.sql",
 	},
 	Portal: {
 		"000008_create_portal_core.up.sql", "000011_portal_session_claims.up.sql", "000016_portal_project_sync.up.sql",

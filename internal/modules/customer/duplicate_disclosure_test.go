@@ -151,7 +151,7 @@ func TestCustomerUpdateHiddenDuplicateDoesNotDiscloseCandidateSummary(t *testing
 		},
 		duplicates: []DuplicateCandidate{hidden},
 	}
-	service := NewService(nil, repo, &createAuditStub{}, profileCodec(t))
+	service := NewService(nil, repo, &createAuditStub{}, profileCodec(t)).UseFreezeChecker(allowAllFreezeChecker{})
 	request := UpdateRequest{
 		Name: "本人客户", CustomerType: "企业", Industry: "软件", Region: "华东",
 		OwnerUserID: "sales-a", OwnerOrgID: "org-a",

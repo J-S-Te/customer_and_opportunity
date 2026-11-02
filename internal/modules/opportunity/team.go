@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"sort"
 	"strings"
 	"time"
 
@@ -97,6 +98,10 @@ func (s *Service) ChangeOwner(ctx context.Context, id uint64, input ChangeOwnerR
 		return nil, err
 	}
 	err = database.WithTransaction(ctx, s.db, func(txCtx context.Context) error {
+		// 事务内最终防线：预检与写入之间可能刚好落库冻结，门闩行锁与交接侧串行化。
+		if guardErr := s.guardOwnerWrite(txCtx, principal.TenantID, ownerID); guardErr != nil {
+			return guardErr
+		}
 		if updateErr := s.repo.UpdateOwner(txCtx, model, input.Version); updateErr != nil {
 			return updateErr
 		}
@@ -220,6 +225,7 @@ func (s *Service) ReplaceMembers(ctx context.Context, id uint64, input ReplaceMe
 	for _, member := range current {
 		existingMembers[member.UserID] = struct{}{}
 	}
+	addedMembers := make([]Member, 0, len(desired))
 	for _, member := range desired {
 		if _, exists := existingMembers[member.UserID]; exists {
 			continue
@@ -227,10 +233,21 @@ func (s *Service) ReplaceMembers(ctx context.Context, id uint64, input ReplaceMe
 		if err = s.ensureOwnerNotFrozen(ctx, principal.TenantID, member.UserID); err != nil {
 			return nil, err
 		}
+		addedMembers = append(addedMembers, member)
 	}
 	before := memberResponses(current)
 	now := s.now()
+	// 多个新增成员的门闩行按 user_id 排序后加锁，避免并发替换在同一事务里以不同顺序
+	// 抢多把门闩行锁而互相等待。
+	sortedAdded := append([]Member(nil), addedMembers...)
+	sort.Slice(sortedAdded, func(i, j int) bool { return sortedAdded[i].UserID < sortedAdded[j].UserID })
 	err = database.WithTransaction(ctx, s.db, func(txCtx context.Context) error {
+		// 事务内最终防线：只对本次新增成员加门闩复核，既有成员在精确重放时不受影响。
+		for _, member := range sortedAdded {
+			if guardErr := s.guardOwnerWrite(txCtx, principal.TenantID, member.UserID); guardErr != nil {
+				return guardErr
+			}
+		}
 		if replaceErr := s.repo.ReplaceMembers(txCtx, model, input.Version, desired, now); replaceErr != nil {
 			return replaceErr
 		}

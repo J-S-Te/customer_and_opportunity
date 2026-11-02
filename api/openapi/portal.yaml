@@ -173,6 +173,10 @@ paths:
     get: {$ref: '#/components/x-operations/listReportRiskAlertsForReview'}
   /internal/report-risk-alerts/{id}/review:
     post: {$ref: '#/components/x-operations/reviewReportRiskAlert'}
+  /internal/report-outbox/failed:
+    get: {$ref: '#/components/x-operations/listReportOutboxFailures'}
+  /internal/report-outbox/failed/{id}/retry:
+    post: {$ref: '#/components/x-operations/retryReportOutboxFailure'}
   /internal/feedbacks:
     get: {$ref: '#/components/x-operations/listFeedbacksForOperator'}
   /internal/feedbacks/{id}/accept:
@@ -442,6 +446,8 @@ components:
     reportCallback: {<<: *machineProvision, operationId: reportCallback, x-scope: report.callback.write, security: [{machineJWT: [report.callback.write]}], parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]}
     listReportRiskAlertsForReview: {<<: *machineProvision, operationId: listReportRiskAlertsForReview, x-scope: portal.report.risk.manage, security: [{machineJWT: [portal.report.risk.manage]}]}
     reviewReportRiskAlert: {<<: *machineProvision, operationId: reviewReportRiskAlert, x-scope: portal.report.risk.manage, security: [{machineJWT: [portal.report.risk.manage]}], parameters: [{$ref: '#/components/parameters/ID'}, {$ref: '#/components/parameters/IdempotencyKey'}]}
+    listReportOutboxFailures: &machineReportOutbox {<<: *machineProvision, operationId: listReportOutboxFailures, x-scope: portal.report.delivery.manage, security: [{machineJWT: [portal.report.delivery.manage]}]}
+    retryReportOutboxFailure: {<<: *machineReportOutbox, operationId: retryReportOutboxFailure, parameters: [{$ref: '#/components/parameters/ID'}, {$ref: '#/components/parameters/IdempotencyKey'}]}
     listFeedbacksForOperator: &machineFeedback {<<: *machineProvision, operationId: listFeedbacksForOperator, x-scope: portal.feedback.manage, security: [{machineJWT: [portal.feedback.manage]}]}
     acceptFeedback: {<<: *machineFeedback, operationId: acceptFeedback, parameters: [{$ref: '#/components/parameters/ID'}, {$ref: '#/components/parameters/IdempotencyKey'}]}
     respondFeedback: {<<: *machineFeedback, operationId: respondFeedback, parameters: [{$ref: '#/components/parameters/ID'}, {$ref: '#/components/parameters/IdempotencyKey'}]}

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/apperror"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/businessclock"
 	requestctx "github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/request"
 )
 
@@ -131,7 +132,8 @@ func (s *Service) Export(ctx context.Context, actor Actor, publicID string, expe
 }
 
 func exportRows(view View, generatedAt time.Time) ([]string, error) {
-	rows := []string{"等级保护备案资料副本", "本文件为已保存资料的导出，不等同于公安受理或备案凭证。", "备案编号：" + view.FilingNo, "版本：" + strconv.FormatUint(view.Version, 10), "状态：" + view.Status, "单位：" + view.UnitName, "系统：" + view.SystemName, "生成时间（UTC）：" + generatedAt.UTC().Format(time.RFC3339)}
+	// 导出件上的时间标签属于业务展示值，统一按北京时间（businessclock）标注，避免读者误读 UTC。
+	rows := []string{"等级保护备案资料副本", "本文件为已保存资料的导出，不等同于公安受理或备案凭证。", "备案编号：" + view.FilingNo, "版本：" + strconv.FormatUint(view.Version, 10), "状态：" + view.Status, "单位：" + view.UnitName, "系统：" + view.SystemName, "生成时间（北京时间）：" + generatedAt.In(businessclock.Location()).Format(time.RFC3339)}
 	if view.Status == StatusDraft {
 		rows = append(rows, "草稿：可能仍有未填写或未通过校验的内容。")
 	}

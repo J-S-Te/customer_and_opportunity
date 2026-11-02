@@ -132,7 +132,7 @@ func TestManualMutationHandlersForwardIdempotencyKey(t *testing.T) {
 			if test.setup != nil {
 				test.setup(repo)
 			}
-			service := NewService(repo, nil, nil, fixedClock{at: now}, fixedIDs{}).UseOwnerDirectory(assignmentOwnerCatalog{
+			service := NewService(repo, nil, nil, fixedClock{at: now}, fixedIDs{}).UseFreezeChecker(allowAllFreezeChecker{}).UseOwnerDirectory(assignmentOwnerCatalog{
 				users: map[string]ownerdirectory.User{
 					"p1": {ID: "p1", DisplayName: "P1", Organizations: []ownerdirectory.Organization{{ID: "org-1", Name: "技术中心", IsPrimary: true}}},
 				},

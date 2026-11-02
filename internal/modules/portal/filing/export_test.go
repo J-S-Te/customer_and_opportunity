@@ -55,6 +55,10 @@ func TestFilingExportIsOwnedVersionedAndAuditedBeforeReturningBytes(t *testing.T
 	if result.SHA256 != hex.EncodeToString(digest[:]) || !strings.Contains(strings.Join(renderer.rows, "\n"), "不等同于公安受理") {
 		t.Fatalf("result=%+v rows=%v", result, renderer.rows)
 	}
+	// 导出件时间标签按北京时间展示：clock 固定为 2026-08-01T01:02:03Z，即北京 09:02:03。
+	if joined := strings.Join(renderer.rows, "\n"); !strings.Contains(joined, "生成时间（北京时间）：2026-08-01T09:02:03+08:00") {
+		t.Fatalf("rows=%v", renderer.rows)
+	}
 	if repo.actions[len(repo.actions)-1].Action != "EXPORT_PDF" || repo.actions[len(repo.actions)-1].ActorID != actorA().AccountID {
 		t.Fatal("missing export audit")
 	}

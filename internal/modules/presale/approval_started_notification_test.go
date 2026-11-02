@@ -164,7 +164,7 @@ func TestInternalApprovalStartNotifiesEveryActiveFirstNodeApprover(t *testing.T)
 		{ID: "sales-director-2", DisplayName: "销售总监乙"},
 	}}}
 	service := NewService(repo, &accessibleOpportunityReader{values: map[uint64]OpportunitySnapshot{7: {ID: 7, OpportunityNo: "OP7"}}}, testPhoneProtector{}, fixedClock{at: time.Date(2026, 8, 23, 8, 0, 0, 0, time.UTC)}, fixedIDs{}).
-		UseOwnerDirectory(catalog).UseWorkflowNotifications(writer)
+		UseOwnerDirectory(catalog).UseWorkflowNotifications(writer).UseAuditWriter(&requestAuditRecorder{})
 	actor := Actor{TenantID: "tenant-a", UserID: "sales-1", UserName: "销售", Permissions: map[string]bool{"presale.create": true}}
 
 	created, err := service.CreateRequest(context.Background(), actor, "create-with-notification", validCreateSecurityInput(7))

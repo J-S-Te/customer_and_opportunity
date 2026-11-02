@@ -22,6 +22,7 @@ import (
 	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/types"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/portal/report"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/portalreportreference"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/businessclock"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/database"
 	"gorm.io/gorm"
 )
@@ -153,7 +154,8 @@ func (w *PDFWatermarker) Apply(ctx context.Context, raw []byte, c report.Waterma
 	if err != nil || !safeText(number, 32) {
 		return nil, ErrInvalid
 	}
-	text := fmt.Sprintf("客户：%s\n账号：%s\n报告申请：%s\n下载时间：%s\n追踪：%s", wrapWatermarkText(identity.CustomerName, 28), wrapWatermarkText(identity.AccountMasked, 28), number, c.DownloadedAt.In(time.FixedZone("Asia/Shanghai", 8*60*60)).Format(time.RFC3339), c.TrackingCode)
+	// 下载时间按业务时区（北京时间）展示，复用 businessclock 的时区定义，避免各处自建 FixedZone。
+	text := fmt.Sprintf("客户：%s\n账号：%s\n报告申请：%s\n下载时间：%s\n追踪：%s", wrapWatermarkText(identity.CustomerName, 28), wrapWatermarkText(identity.AccountMasked, 28), number, c.DownloadedAt.In(businessclock.Location()).Format(time.RFC3339), c.TrackingCode)
 	metrics, ok := font.UserFontMetrics[w.fontName]
 	if !ok {
 		return nil, ErrInvalid

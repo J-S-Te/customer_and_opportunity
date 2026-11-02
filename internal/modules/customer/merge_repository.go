@@ -227,7 +227,8 @@ func (r *GORMRepository) MarkCustomersMerged(ctx context.Context, source, target
 	}
 	sourceResult := db.Model(&Customer{}).
 		Where("id=? AND tenant_id=? AND version=? AND status=? AND merged_into_id IS NULL AND deleted_at IS NULL", source.ID, source.TenantID, sourceVersion, StatusActive).
-		Updates(map[string]any{"status": StatusMerged, "merged_into_id": target.ID, "end_date": now, "updated_by": actorID, "updated_at": now, "version": gorm.Expr("version+1")})
+		// end_date 是业务日历日（DATE 列），按北京日历日派生；updated_at 仍是 UTC 时刻。
+		Updates(map[string]any{"status": StatusMerged, "merged_into_id": target.ID, "end_date": businessDateValue(now), "updated_by": actorID, "updated_at": now, "version": gorm.Expr("version+1")})
 	if sourceResult.Error != nil {
 		return sourceResult.Error
 	}

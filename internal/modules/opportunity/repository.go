@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/auth"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/businessclock"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/database"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/pagination"
 	"gorm.io/gorm"
@@ -45,6 +47,7 @@ type Repository interface {
 	ReplaceMembers(context.Context, *Opportunity, uint64, []Member, time.Time) error
 	CreateOutboxEvents(context.Context, []OutboxEvent) error
 	FindOutboxEvent(context.Context, string, string) (*OutboxEvent, error)
+	ContractTransferAccepted(context.Context, string, uint64) (bool, error)
 	FindChangeIdempotency(context.Context, string, uint64, string, string, string) (*ChangeIdempotency, error)
 	FindChangeIdempotencyForUpdate(context.Context, string, uint64, string, string, string) (*ChangeIdempotency, error)
 	CreateChangeIdempotency(context.Context, *ChangeIdempotency) error
@@ -637,10 +640,26 @@ func (r *GORMRepository) FindOutboxEvent(ctx context.Context, tenantID, eventID 
 	return &model, err
 }
 
+// ContractTransferAccepted 回答“该商机是否已经成功受理过转合同”。
+// 转合同事件 ID 由 (tenant, opportunity, version) 推导，版本推进会产生新的
+// event_id，因此去重必须按聚合与事件类型查询任意版本的发件箱记录，
+// 不能依赖单条 event_id 是否存在。受理后的恢复路径是 Outbox 重试/死信运维，
+// 而不是再次提交转合同。
+func (r *GORMRepository) ContractTransferAccepted(ctx context.Context, tenantID string, opportunityID uint64) (bool, error) {
+	var count int64
+	err := database.FromContext(ctx, r.db).Model(&OutboxEvent{}).
+		Where("tenant_id=? AND aggregate_type=? AND aggregate_id=? AND event_type=?", tenantID, "opportunity", strconv.FormatUint(opportunityID, 10), contractTransferEventType).
+		Limit(1).
+		Count(&count).Error
+	return count > 0, err
+}
+
 func toResponse(model *Opportunity) Response {
 	var endDate *string
 	if model.EndDate != nil {
-		value := model.EndDate.Format("2006-01-02")
+		// end_date 是业务日历日（DATE 列，前端展示“作废日期”），按北京日历日派生；
+		// 否则北京时间 00:00–08:00 的作废会显示成 UTC 的前一天。
+		value := model.EndDate.In(businessclock.Location()).Format("2006-01-02")
 		endDate = &value
 	}
 	return Response{ID: model.ID, OpportunityNo: model.OpportunityNo, Name: model.Name, CustomerID: model.CustomerID, Type: model.Type, Source: model.Source, Types: []OpportunityCatalogValue{}, Sources: []OpportunityCatalogValue{}, ExpectedAmount: model.ExpectedAmount.StringFixed(2), ExpectedSignDate: model.ExpectedSignDate.Format("2006-01-02"), RequirementSummary: model.RequirementSummary, SystemCount: model.SystemCount, PainPoints: model.PainPoints, CompetitorInfo: model.CompetitorInfo, OwnerUserID: model.OwnerUserID, OwnerOrgID: model.OwnerOrgID, CurrentStage: model.CurrentStage, Status: model.Status, ContractRef: model.ContractRef, ContractID: model.ContractID, ContractIntakeID: model.ContractIntakeID, ContractLinkStatus: model.ContractLinkStatus, ContractLinkedAt: model.ContractLinkedAt, ContractSyncVersion: model.ContractSyncVersion, LostReason: model.LostReason, TerminalPendingType: model.TerminalPendingType, StageChangedAt: model.StageChangedAt, EndDate: endDate, StatusBeforeVoid: model.StatusBeforeVoid, Version: model.Version, CreatedAt: model.CreatedAt, UpdatedAt: model.UpdatedAt}

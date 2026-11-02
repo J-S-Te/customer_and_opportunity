@@ -7,8 +7,14 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/middleware"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/auth"
 )
+
+// HandoverMachineScope 是平台为人员离职交接签发的专用机器 scope。
+// 交接端点在机器身份认证之外还必须持有该 scope（BIZ-XAPI-01），
+// 否则任何已登记的机器凭据都能驱动离职冻结/责任转移。
+const HandoverMachineScope = "handover.machine"
 
 // Handler 暴露人员离职交接的机器协议端点。租户边界来自机器身份，不接受请求体覆盖。
 type Handler struct{ service *Service }
@@ -16,15 +22,17 @@ type Handler struct{ service *Service }
 func NewHandler(service *Service) *Handler { return &Handler{service: service} }
 
 // RegisterInternalRoutes 在已通过机器身份认证的内部路由组上注册五类操作。
+// 每条路由额外要求 handover.machine scope；权限码来自签名 claims，不读请求头。
 func RegisterInternalRoutes(group *gin.RouterGroup, handler *Handler) {
 	if group == nil || handler == nil {
 		return
 	}
-	group.POST("/handover/freeze", handler.freeze)
-	group.GET("/handover/responsibilities", handler.responsibilities)
-	group.POST("/handover/transfers", handler.transfer)
-	group.GET("/handover/transfers/:itemID", handler.receipt)
-	group.POST("/handover/complete", handler.complete)
+	requireMachineScope := middleware.RequirePermission(HandoverMachineScope)
+	group.POST("/handover/freeze", requireMachineScope, handler.freeze)
+	group.GET("/handover/responsibilities", requireMachineScope, handler.responsibilities)
+	group.POST("/handover/transfers", requireMachineScope, handler.transfer)
+	group.GET("/handover/transfers/:itemID", requireMachineScope, handler.receipt)
+	group.POST("/handover/complete", requireMachineScope, handler.complete)
 }
 
 type freezePayload struct {
@@ -176,6 +184,9 @@ func writeHandoverError(c *gin.Context, err error) {
 		c.JSON(http.StatusNotFound, gin.H{"code": "HANDOVER_NOT_FOUND", "message": "交接记录不存在"})
 	case errors.Is(err, ErrFrozen):
 		c.JSON(http.StatusConflict, gin.H{"code": "HANDOVER_SUCCESSOR_FROZEN", "message": "承接人处于交接冻结状态"})
+	case errors.Is(err, ErrBatchNotFrozen):
+		// 源负责人未被该批次冻结：不写回执、不改数据，由平台退避或人工受控恢复。
+		c.JSON(http.StatusConflict, gin.H{"code": "HANDOVER_BATCH_NOT_FROZEN", "message": "源负责人不处于该批次交接冻结状态"})
 	case errors.Is(err, ErrConflict):
 		c.JSON(http.StatusConflict, gin.H{"code": "HANDOVER_CONFLICT", "message": "交接状态或版本冲突"})
 	default:

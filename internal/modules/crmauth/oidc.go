@@ -30,8 +30,11 @@ type OIDCOptions struct {
 	Scopes                                                                           []string
 }
 
+// errOIDCRefreshRejected 表示提供方明确拒绝 refresh token（过期、撤销、重放或客户端不匹配）。
+// 服务层据此撤销本地会话；网络/5xx 等临时错误不得当作会话失效。
+var errOIDCRefreshRejected = errors.New("CRM OIDC refresh token was rejected")
+
 type verifiedClaims struct {
-	RefreshToken                                                                   string
 	AccessTokenExpiresAt                                                           time.Time
 	CentralBinding                                                                 central.Binding
 	Subject, IdentityID, TenantID, PersonID, DisplayName, RoleConfigHash, Username string
@@ -43,13 +46,22 @@ type verifiedClaims struct {
 	AuthzRevision                                                                  uint64
 	ExpiresAt                                                                      time.Time
 	AccessToken                                                                    string
-	LoginIP                                                                        string
+	// RefreshToken 只在登录/回调时由提供方签发；服务端加密保存后可越过短命访问令牌继续重验授权。
+	RefreshToken string
+	LoginIP      string
+}
+
+// refreshedTokens 是令牌刷新结果；RefreshToken 在提供方未轮换时保留原值。
+type refreshedTokens struct {
+	AccessToken, RefreshToken string
+	ExpiresAt                 time.Time
 }
 
 type oidcClient interface {
 	AuthorizationURL(state, nonce, verifier string) string
 	Exchange(context.Context, string, string, string) (verifiedClaims, error)
 	UserInfo(context.Context, string) (verifiedClaims, error)
+	RefreshToken(context.Context, string) (refreshedTokens, error)
 }
 
 type forcedLoginOIDCClient interface {
@@ -202,9 +214,9 @@ func (c *platformOIDCClient) ExchangeWithCentral(ctx context.Context, code, veri
 	return c.exchange(ctx, code, verifier, nonce, ticket)
 }
 
-// exchange 统一处理标准换码和受控中央桥接，不允许跳过nonce、签名或业务授权。
-// 参数：ctx为请求，code/verifier/nonce为OIDC材料，ticket为中央票据或旧模式空值。
-// 返回值：有效授权及仅服务器可见的刷新、绑定材料；失败返回错误。
+// exchange 兑换授权码并验证身份、授权和可选中央绑定。
+// 参数：ctx为请求，code为授权码，verifier为PKCE材料，nonce为原随机量，ticket为中央票据。
+// 返回值：已核验声明与令牌材料；协议、身份、授权或中央依赖失败返回错误。
 func (c *platformOIDCClient) exchange(ctx context.Context, code, verifier, nonce, ticket string) (verifiedClaims, error) {
 	if strings.TrimSpace(code) == "" || verifier == "" || nonce == "" {
 		return verifiedClaims{}, errors.New("CRM OIDC callback parameters are incomplete")
@@ -364,6 +376,57 @@ func (c *platformOIDCClient) AuthorizationContext(ctx context.Context, accessTok
 		primaryOrgID = decision.OrganizationIDs[0]
 	}
 	return verifiedClaims{Subject: raw.Subject, IdentityID: raw.IdentityID, TenantID: raw.TenantID, PersonID: raw.PersonID, PrimaryOrgID: primaryOrgID, Roles: raw.Roles, Permissions: raw.Permissions, OrganizationIDs: decision.OrganizationIDs, DataScopes: scopes, AuthzRevision: raw.AuthorizationRevision, LoginIP: loginip.Normalize(raw.UserLoginIP)}, nil
+}
+
+// RefreshToken 在调用方持有会话行锁时轮换服务器端访问和刷新材料。
+// 参数：ctx为有界请求，refreshToken为服务器解密的原始刷新令牌。
+// 返回值：新材料；明确令牌失效返回拒绝标识，依赖故障保持错误供中央模式503处理。
+func (c *platformOIDCClient) RefreshToken(ctx context.Context, refreshToken string) (refreshedTokens, error) {
+	if strings.TrimSpace(refreshToken) == "" {
+		return refreshedTokens{}, fmt.Errorf("%w: refresh token is missing", errOIDCRefreshRejected)
+	}
+	seed := &oauth2.Token{RefreshToken: refreshToken, Expiry: time.Now().Add(-time.Minute)}
+	refreshed, err := c.config.TokenSource(oidc.ClientContext(ctx, c.httpClient), seed).Token()
+	if err != nil {
+		if c.refreshRejected(err) {
+			return refreshedTokens{}, fmt.Errorf("%w: %v", errOIDCRefreshRejected, err)
+		}
+		return refreshedTokens{}, fmt.Errorf("refresh CRM OIDC token: %w", err)
+	}
+	if strings.TrimSpace(refreshed.AccessToken) == "" {
+		return refreshedTokens{}, errors.New("CRM OIDC token refresh returned no access token")
+	}
+	return refreshedTokens{AccessToken: refreshed.AccessToken, RefreshToken: firstNonEmpty(refreshed.RefreshToken, refreshToken), ExpiresAt: refreshed.Expiry.UTC()}, nil
+}
+
+// refreshRejected 按模式保留明确失效语义，避免中央客户端配置故障误注销。
+// 参数：err为提供方返回的刷新协议或传输错误。
+// 返回值：中央仅明确无效令牌为真；旧模式沿用原有4xx拒绝分类。
+func (c *platformOIDCClient) refreshRejected(err error) bool {
+	if c.central == nil {
+		return oidcRefreshRejected(err)
+	}
+	var protocol *oauth2.RetrieveError
+	return errors.As(err, &protocol) &&
+		(protocol.ErrorCode == "invalid_grant" || protocol.ErrorCode == "invalid_token")
+}
+
+// oidcRefreshRejected 区分提供方明确拒绝与临时不可用。oauth2 以 RetrieveError 报告协议错误，
+// 4xx 或 invalid_grant/invalid_token 视为令牌已失效；网络错误和 5xx 必须允许会话保留并快速重试。
+func oidcRefreshRejected(err error) bool {
+	var retrieveErr *oauth2.RetrieveError
+	if !errors.As(err, &retrieveErr) {
+		return false
+	}
+	switch retrieveErr.ErrorCode {
+	case "invalid_grant", "invalid_token", "unauthorized_client", "invalid_client":
+		return true
+	}
+	if retrieveErr.Response != nil {
+		status := retrieveErr.Response.StatusCode
+		return status == http.StatusBadRequest || status == http.StatusUnauthorized || status == http.StatusForbidden
+	}
+	return false
 }
 
 func (c *platformOIDCClient) authorizationContextWithRefresh(ctx context.Context, token *oauth2.Token) (verifiedClaims, *oauth2.Token, error) {

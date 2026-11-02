@@ -20,6 +20,7 @@ import (
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/apperror"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/audit"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/auth"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/businessclock"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/database"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/pagination"
 	requestctx "github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/request"
@@ -206,6 +207,10 @@ func (s *Service) Create(ctx context.Context, request CreateRequest) (*Response,
 		if duplicateErr := s.validateCreateDuplicates(txCtx, principal, request, 0); duplicateErr != nil {
 			return duplicateErr
 		}
+		// 事务内最终防线：事务外的预检只用于早失败，冻结可能在事务开启后落库。
+		if guardErr := s.guardOwnerWrite(txCtx, principal.TenantID, request.OwnerUserID); guardErr != nil {
+			return guardErr
+		}
 		if persistErr := s.persistCreatedCustomer(txCtx, principal, model, request.Reason); persistErr != nil {
 			return persistErr
 		}
@@ -391,7 +396,8 @@ func isCustomerCreateRaceCandidate(err error) bool {
 // persistCreatedCustomer 必须在调用方持有的事务内执行。交互创建和导入的每个独立提交行共用它，
 // 使编号分配、数据落库和脱敏审计不会形成两套不同语义。
 func (s *Service) persistCreatedCustomer(ctx context.Context, principal auth.Principal, model *Customer, reason string) error {
-	number, err := s.repo.NextNumber(ctx, principal.TenantID, s.now().Format("20060102"))
+	// 编号日期段属于业务日历值，必须按北京时间取日；存储时间戳仍保持 UTC。
+	number, err := s.repo.NextNumber(ctx, principal.TenantID, businessclock.DateString(s.now()))
 	if err != nil {
 		return err
 	}
@@ -435,7 +441,8 @@ func (s *Service) Update(ctx context.Context, id uint64, request UpdateRequest) 
 	if current.Version != request.Version {
 		return nil, ErrVersionConflict
 	}
-	if current.OwnerUserID != request.OwnerUserID {
+	ownerChanged := current.OwnerUserID != request.OwnerUserID
+	if ownerChanged {
 		if err := s.ensureOwnerNotFrozen(ctx, principal.TenantID, request.OwnerUserID); err != nil {
 			return nil, err
 		}
@@ -511,6 +518,12 @@ func (s *Service) Update(ctx context.Context, id uint64, request UpdateRequest) 
 		current.Contacts = append(current.Contacts, Contact{Model: database.Model{TenantID: principal.TenantID, CreatedBy: principal.UserID, UpdatedBy: principal.UserID, Version: 1}, CustomerID: id, Name: strings.TrimSpace(item.Name), PhoneCipher: phoneCipher, PhoneMasked: phoneMasked, EmailCipher: emailCipher, EmailMasked: emailMasked, IsRegistration: item.IsRegistration, SortOrder: index})
 	}
 	err = database.WithTransaction(ctx, s.db, func(txCtx context.Context) error {
+		// 负责人变更同样在事务内加门闩复核：预检与写入之间可能刚好落库冻结。
+		if ownerChanged {
+			if guardErr := s.guardOwnerWrite(txCtx, principal.TenantID, request.OwnerUserID); guardErr != nil {
+				return guardErr
+			}
+		}
 		if updateErr := s.repo.Update(txCtx, current, request.Version); updateErr != nil {
 			return updateErr
 		}
@@ -586,8 +599,9 @@ func (s *Service) changeStatus(ctx context.Context, id uint64, request StatusCha
 		if len(blockers) > 0 {
 			return nil, apperror.WithDetails(ErrVoidBlocked, map[string]any{"blockers": blockers})
 		}
-		now := s.now()
-		model.EndDate = &now
+		// end_date 是业务日历日（DATE 列，前端展示“失效日期”），按北京日历日派生。
+		endDate := businessDateValue(s.now())
+		model.EndDate = &endDate
 	} else {
 		if model.Status != StatusVoid {
 			return nil, ErrNotVoid
@@ -928,6 +942,14 @@ func customerStatusLabel(status string) string {
 	default:
 		return "未知"
 	}
+}
+
+// businessDateValue 把时刻折算成“业务日历日”的 DATE 存储值：取北京日历日的年月日，
+// 再以 UTC 午夜表示。end_date 是 DATE 列（前端按“失效日期”展示），只保留年月日；
+// 但驱动写库前会先按连接 loc（生产 DSN 是 loc=UTC）换算时间，直接写北京午夜会被写成前一天。
+func businessDateValue(value time.Time) time.Time {
+	year, month, day := value.In(businessclock.Location()).Date()
+	return time.Date(year, month, day, 0, 0, 0, 0, time.UTC)
 }
 
 func (s *Service) CreateFollowup(ctx context.Context, id uint64, input FollowupCreateRequest) (*FollowupResponse, error) {

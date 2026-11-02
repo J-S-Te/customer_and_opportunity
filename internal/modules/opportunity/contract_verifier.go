@@ -43,12 +43,24 @@ type HTTPContractVerifier struct {
 	nonceReader io.Reader
 }
 
+// contractSummary 是合同子系统“客户归属合同摘要”的解码结构。
+//
+// 本结构对未知字段零容忍（decodeContractSummaryJSON 使用 DisallowUnknownFields），
+// 合同子系统新增字段时必须在这里同批次放开，否则整个成功响应会被判为无效。
+// 下面三个证据字段只用于展示与记录“关联时间的来源与精度”，不参与任何归属判定：
+// 核验依据始终是 CRM 客户一致（见 BelongsToCustomer）。
 type contractSummary struct {
 	ContractID       string    `json:"contract_id"`
 	ContractNumber   string    `json:"contract_number"`
 	CRMCustomerID    uint64    `json:"crm_customer_id"`
 	CRMOpportunityID uint64    `json:"crm_opportunity_id"`
 	LinkedAt         time.Time `json:"linked_at"`
+	// LinkedAtSource ∈ CRM_REVIEW | REVIEW_LOG | AUDIT_LOG | INTAKE_CREATED | APPROX_CONTRACT_UPDATED。
+	LinkedAtSource string `json:"linked_at_source"`
+	// LinkedAtPrecision ∈ exact | approx；approx 只表示“仅供参考”，不是核验失败。
+	LinkedAtPrecision string `json:"linked_at_precision"`
+	// FirstLinkedAt 是合同侧最早一次可证明关联时间。
+	FirstLinkedAt time.Time `json:"first_linked_at"`
 }
 
 type contractSummaryEnvelope struct {
@@ -144,9 +156,12 @@ func (v *HTTPContractVerifier) BelongsToCustomer(ctx context.Context, contractRe
 	}
 	if !validCanonicalULID(summary.ContractID) || !validContractNumber(summary.ContractNumber) ||
 		(summary.ContractID != contractRef && summary.ContractNumber != contractRef) ||
-		summary.CRMOpportunityID == 0 || summary.LinkedAt.IsZero() {
+		summary.LinkedAt.IsZero() {
 		return false, errors.New("contract summary endpoint returned an invalid response")
 	}
+	// 商机关联不是客户归属的前置条件：合同可以先归属 CRM 客户、后关联商机。
+	// crm_opportunity_id 为 0 时仍应允许签约核验；是否已关联商机由 CRM 侧
+	// 的商机状态与用户操作决定，不由只读摘要接口替业务做判断。
 	return true, nil
 }
 
