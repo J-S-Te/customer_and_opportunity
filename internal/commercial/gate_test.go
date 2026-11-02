@@ -17,6 +17,9 @@ func TestReviewedPolicyAndUnknownFailClosed(t *testing.T) {
 		{"crm", "POST", "/api/v1/customers/duplicate-check", core.READ_HISTORY},
 		{"crm", "POST", "/api/v1/customer-exports", core.EXPORT_HISTORY},
 		{"crm", "POST", "/api/v1/internal/portal/invites/verify", core.ESSENTIAL_SERVICE},
+		// 会话活动上报属于认证必需路径，不能被商业许可到期门禁拦截。
+		{"crm", "POST", "/api/v1/auth/activity", core.ESSENTIAL_SERVICE},
+		{"crm", "GET", "/api/v1/auth/me", core.ESSENTIAL_SERVICE},
 		{"crm", "POST", "/api/v1/internal/portal/invites/consume", core.MUTATE_BUSINESS},
 		{"portal", "GET", "/activate", core.MUTATE_BUSINESS},
 		{"portal", "POST", "/api/v1/project-exports/:id/downloads", core.EXPORT_HISTORY},

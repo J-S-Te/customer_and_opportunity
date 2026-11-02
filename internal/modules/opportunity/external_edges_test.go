@@ -26,6 +26,9 @@ type externalEdgesRepository struct {
 	externalCreates int
 	stageUpdates    int
 	stageLogs       int
+	// transferAccepted 模拟该商机是否已有任意版本的 OPPORTUNITY_SIGNED 发件箱事件。
+	transferAccepted bool
+	acceptedErr      error
 }
 
 type auditCapture struct {
@@ -69,6 +72,9 @@ func (r *externalEdgesRepository) CreateChangeIdempotency(_ context.Context, val
 
 func (r *externalEdgesRepository) FindOutboxEvent(context.Context, string, string) (*OutboxEvent, error) {
 	return nil, nil
+}
+func (r *externalEdgesRepository) ContractTransferAccepted(context.Context, string, uint64) (bool, error) {
+	return r.transferAccepted, r.acceptedErr
 }
 func (r *externalEdgesRepository) CreateOutboxEvents(context.Context, []OutboxEvent) error {
 	r.outboxCreates++

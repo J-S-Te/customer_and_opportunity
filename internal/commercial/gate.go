@@ -29,13 +29,14 @@ func Start(ctx context.Context, application string) (Check, error) {
 
 func Operation(kind, method, path string) core.Operation {
 	switch path {
-	case "/livez", "/readyz", "/healthz", "/auth/login", "/auth/callback", "/auth/logout", "/auth/local-logout", "/auth/backchannel-logout", "/api/v1/auth/me", "/api/v1/capabilities", "/api/v1/audit-outbox/status", "/api/v1/account/security", "/api/v1/account/sessions":
+	case "/livez", "/readyz", "/healthz", "/auth/login", "/auth/callback", "/auth/logout", "/auth/local-logout", "/auth/backchannel-logout", "/api/v1/auth/me", "/api/v1/auth/activity", "/api/v1/capabilities", "/api/v1/audit-outbox/status", "/api/v1/account/security", "/api/v1/account/sessions":
 		return core.ESSENTIAL_SERVICE
 	}
 	if kind == "crm" {
 		switch method + " " + path {
 		case "POST /api/v1/customers/duplicate-check", "GET /api/v1/internal/portal-report/download-identity",
-			"GET /api/v1/internal/handover/responsibilities", "GET /api/v1/internal/handover/transfers/:itemID":
+			// 交接机器协议四端统一挂在服务根 /internal/v1/handover/* 下，不再经 /api/v1/internal。
+			"GET /internal/v1/handover/responsibilities", "GET /internal/v1/handover/transfers/:itemID":
 			return core.READ_HISTORY
 		case "POST /api/v1/customer-exports", "POST /api/v1/presale/reports/exports":
 			return core.EXPORT_HISTORY
@@ -45,6 +46,9 @@ func Operation(kind, method, path string) core.Operation {
 	}
 	if kind == "portal" {
 		switch method + " " + path {
+		case "GET /internal/report-outbox/failed":
+			// 门户报告投递死信的运维只读列表：属历史读取，不因授权到期被完全阻断。
+			return core.READ_HISTORY
 		case "POST /api/v1/projects/:projectID/exports", "POST /api/v1/project-exports/:id/download-grants", "POST /api/v1/project-exports/:id/downloads", "POST /api/v1/reports/:id/download-grants", "POST /api/v1/report-requests/:id/download-grants", "POST /api/v1/reports/:id/downloads", "POST /api/v1/report-requests/:id/downloads", "POST /api/v1/filings/:id/exports":
 			return core.EXPORT_HISTORY
 		case "DELETE /api/v1/account/sessions/:id", "POST /api/v1/account/security-events/:id/ack", "POST /internal/accounts/disable", "POST /internal/accounts/reconciliation-snapshot", "POST /api/v1/report-notifications/:id/read", "POST /api/v1/feedback-notifications/:id/read", "POST /api/v1/project-conversations/:id/read", "POST /internal/project-conversations/:id/read", "POST /internal/evaluations/:id/low-score-notice/read":

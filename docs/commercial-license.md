@@ -6,13 +6,21 @@ Service ID, OAuth Client/Secret (`license.runtime` only), and persisted state fi
 Do not reuse audit, catalog publisher or interactive-login credentials.
 
 `COMMERCIAL_LICENSE_ENABLED=false` is the compatibility default before controlled
-enrollment. Set true only via the reviewed platform process. Invalid trust/binding
+enrollment, but the mode is an explicit opt-in: empty or `false` is rejected at
+startup unless `COMMERCIAL_LICENSE_COMPATIBILITY=true` is also set (normalized
+exact `true`; empty, `1` or `yes` fail closed), and it stays refused when binding
+fields or persisted runtime state exist. Set `true` only via the reviewed platform
+process; `false` plus the compatibility flag is not an authorization substitute.
+Invalid trust/binding
 or incomplete credential configuration refuses startup; absent or invalid signed
 state refuses business operations. A platform outage never extends license expiry.
 
 Common `COMMERCIAL_LICENSE_` variables: INSTANCE_ID, ENVIRONMENT, SERVICE_ID,
 STATE_PATH, PLATFORM_PUBLIC_KEY_PATH, PLATFORM_BASE_URL, CLIENT_ID, CLIENT_SECRET,
 COVERAGE_DIGEST, IMAGE_DIGEST, ALLOW_HTTP. Digests are SHA-256 with `sha256:` prefix.
+`COMPATIBILITY` is not a managed variable: it only marks a never-enrolled component
+as deliberately running without controlled licensing, and is ignored when
+`ENABLED=true`.
 PLATFORM_PUBLIC_KEY_PATH is read-only Ed25519 public-key PEM. The real vendor key
 is embedded in the reviewed consumer; deployment cannot replace it. ENVIRONMENT
 uses the commercial installation binding, not OAuth's `prod`/`dev` alias. HTTP

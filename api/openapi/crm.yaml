@@ -39,6 +39,8 @@ paths:
     post: {$ref: '#/components/x-operations/crmLocalLogout'}
   /api/v1/auth/me:
     get: {$ref: '#/components/x-operations/crmMe'}
+  /api/v1/auth/activity:
+    post: {$ref: '#/components/x-operations/crmActivity'}
   /api/v1/capabilities:
     get: {$ref: '#/components/x-operations/getRuntimeCapabilities'}
   /api/v1/audit-outbox/status:
@@ -599,6 +601,7 @@ components:
     crmBackchannelLogout: {operationId: crmBackchannelLogout, tags: [Authentication], security: [], requestBody: {required: true, content: {application/x-www-form-urlencoded: {schema: {type: object, required: [logout_token], additionalProperties: false, properties: {logout_token: {type: string, maxLength: 16384}}}}}}, responses: {'204': {description: Logout token accepted or already processed}, '400': {description: Invalid logout token}, '503': {description: Logout transaction unavailable}}}
     crmLocalLogout: {operationId: crmLocalLogout, tags: [Authentication], security: [], responses: {'204': {description: Session cookie cleared locally}}}
     crmMe: &crmRead {operationId: crmMe, tags: [Authentication], security: [{crmSession: []}], responses: {'200': {$ref: '#/components/responses/OK'}, '401': {$ref: '#/components/responses/Error'}, '403': {$ref: '#/components/responses/Error'}}}
+    crmActivity: {operationId: crmActivity, tags: [Authentication], security: [{crmSession: []}], responses: {'200': {$ref: '#/components/responses/OK'}, '400': {$ref: '#/components/responses/Error'}, '401': {$ref: '#/components/responses/Error'}, '403': {$ref: '#/components/responses/Error'}}}
     getRuntimeCapabilities: {<<: *crmRead, operationId: getRuntimeCapabilities, tags: [Authentication], description: Returns non-secret process configuration readiness for optional integrations and persisted freshness evidence for the independent presale delivery worker. This is not authorization or a remote health probe.}
     listOwnerDirectory:
       operationId: listOwnerDirectory

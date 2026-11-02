@@ -106,6 +106,11 @@ func (s *Service) CreateRequest(ctx context.Context, actor Actor, key string, in
 				return e
 			}
 		}
+		// 新建申请与审计同事务提交：after 为本次落库结果，before 为空（CREATE 无前值）。
+		// 幂等重放分支在上面已提前返回，重放不会产生第二条审计。
+		if e = s.writeRequestAudit(tx, actor, "CREATE", r.ID, nil, requestView(r), ""); e != nil {
+			return e
+		}
 		created = r
 		return nil
 	})
@@ -161,6 +166,8 @@ func (s *Service) ReopenRequest(ctx context.Context, actor Actor, id uint64, ver
 			return err
 		}
 		previousStatus := r.Status
+		// 重新提交会把可编辑字段整体覆盖，先取更新前快照，供审计记录字段级前后值。
+		before := requestView(r)
 		inst, err := s.repo.FindApprovalInstanceForUpdate(tx, actor.TenantID, id)
 		if err != nil {
 			return err
@@ -207,6 +214,11 @@ func (s *Service) ReopenRequest(ctx context.Context, actor Actor, id uint64, ver
 			}
 		}
 		if err = s.statusLog(tx, r, previousStatus, StatusPendingApproval, "REOPENED", "", actor.UserID, actor.RequestID); err != nil {
+			return err
+		}
+		// 重新提交是申请主数据唯一的“更新”入口：before/after 快照与状态变更同事务提交，
+		// 使期望开始/结束时间这类字段在多次重开中的每次改动都能被追溯。
+		if err = s.writeRequestAudit(tx, actor, "UPDATE", r.ID, before, requestView(r), ""); err != nil {
 			return err
 		}
 		reopened = r

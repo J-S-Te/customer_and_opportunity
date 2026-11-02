@@ -79,6 +79,29 @@ func (h *Handler) Callback(c *gin.Context) {
 	c.Redirect(http.StatusFound, target)
 }
 
+// Activity 只在浏览器显式上报真实鼠标/键盘交互时推进空闲期限。它位于需要 Origin 与
+// X-CSRF-Token 的写路由组内；普通业务请求不会调用本方法，轮询也不能为空闲会话续期。
+func (h *Handler) Activity(c *gin.Context) {
+	cookie, err := c.Request.Cookie(h.options.CookieName)
+	if err != nil || cookie.Value == "" {
+		response.Error(c, apperror.ErrUnauthenticated)
+		return
+	}
+	activity, err := h.service.RecordActivity(c.Request.Context(), cookie.Value)
+	if err != nil {
+		if errors.Is(err, sharedauthorization.ErrUnavailable) {
+			response.Error(c, apperror.Wrap(err, http.StatusServiceUnavailable, "COMMON_DEPENDENCY_UNAVAILABLE", "session store is temporarily unavailable"))
+			return
+		}
+		response.Error(c, apperror.ErrUnauthenticated)
+		return
+	}
+	response.OK(c, gin.H{
+		"idle_timeout_seconds": int(activity.IdleTimeout / time.Second),
+		"idle_remaining_ms":    activity.Remaining.Milliseconds(),
+	})
+}
+
 func (h *Handler) Logout(c *gin.Context) {
 	if cookie, err := c.Request.Cookie(h.options.CookieName); err == nil {
 		h.service.Logout(c.Request.Context(), cookie.Value)

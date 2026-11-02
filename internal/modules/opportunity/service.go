@@ -17,6 +17,7 @@ import (
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/apperror"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/audit"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/auth"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/businessclock"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/database"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/pagination"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/request"
@@ -26,6 +27,15 @@ import (
 type ContractVerifier interface {
 	BelongsToCustomer(context.Context, string, uint64) (bool, error)
 }
+
+const (
+	// contractTransferEventType 是 CRM 向合同系统投递“商机已签约”的唯一事件类型。
+	contractTransferEventType = "OPPORTUNITY_SIGNED"
+	// 合同关联状态与迁移 000082 的取值域一致；新建商机的初始值是 PENDING。
+	ContractLinkPending   = "PENDING"
+	ContractLinkConfirmed = "LINK_CONFIRMED"
+	ContractLinkException = "LINK_EXCEPTION"
+)
 
 func (s *Service) Board(ctx context.Context, query ListQuery) ([]BoardColumn, error) {
 	principal, err := requirePrincipal(ctx)
@@ -278,7 +288,7 @@ func (s *Service) Create(ctx context.Context, input CreateRequest) (*Response, e
 		return nil, apperror.New(422, "CRM_OPPORTUNITY_INVALID_AMOUNT", "expected amount must be greater than zero")
 	}
 	signDate, err := time.Parse("2006-01-02", input.ExpectedSignDate)
-	if err != nil || signDate.Before(s.now().Truncate(24*time.Hour)) {
+	if err != nil || beijingCalendarDay(signDate).Before(beijingCalendarDay(s.now())) {
 		return nil, apperror.New(422, "CRM_OPPORTUNITY_INVALID_SIGN_DATE", "expected sign date must not be earlier than today")
 	}
 	requestHash, err := createRequestHash(input)
@@ -307,6 +317,10 @@ func (s *Service) Create(ctx context.Context, input CreateRequest) (*Response, e
 			}
 			return createReplayResult(txCtx, replayed)
 		}
+		// 事务内最终防线：事务外的预检只用于早失败，冻结可能在事务开启后落库。
+		if guardErr := s.guardOwnerWrite(txCtx, principal.TenantID, input.OwnerUserID); guardErr != nil {
+			return guardErr
+		}
 		var typeItems, sourceItems []CatalogItem
 		if s.catalog != nil {
 			typeItems, model.Type, err = s.catalog.ResolveSelections(txCtx, principal.TenantID, CatalogKindType, input.TypeIDs, input.Type, 0)
@@ -318,7 +332,8 @@ func (s *Service) Create(ctx context.Context, input CreateRequest) (*Response, e
 				return err
 			}
 		}
-		model.OpportunityNo, err = s.repo.NextNumber(txCtx, principal.TenantID, s.now().Format("20060102"))
+		// 编号日期段属于业务日历值，必须按北京时间取日；存储时间戳仍保持 UTC。
+		model.OpportunityNo, err = s.repo.NextNumber(txCtx, principal.TenantID, businessclock.DateString(s.now()))
 		if err != nil {
 			return err
 		}
@@ -508,6 +523,14 @@ func isDuplicateCreateError(err error) bool {
 		strings.Contains(mysqlErr.Message, "uq_opportunity_create_idem")
 }
 
+// isDuplicateContractTransferEvent 判断并发转合同是否撞到同一条发件箱事件。
+// 只匹配固定的 event_id 唯一键，避免把其它唯一键冲突误报为“已转合同”。
+func isDuplicateContractTransferEvent(err error) bool {
+	var mysqlErr *mysqlDriver.MySQLError
+	return errors.As(err, &mysqlErr) && mysqlErr.Number == 1062 &&
+		strings.Contains(mysqlErr.Message, "uq_crm_outbox_event")
+}
+
 func (s *Service) Update(ctx context.Context, id uint64, input UpdateRequest) (*Response, error) {
 	principal, err := requirePrincipal(ctx)
 	if err != nil {
@@ -532,11 +555,18 @@ func (s *Service) Update(ctx context.Context, id uint64, input UpdateRequest) (*
 	if model.Status == StatusVoid {
 		return nil, ErrInactive
 	}
-	if !model.CreatedAt.IsZero() && signDate.Before(dateOnly(model.CreatedAt)) {
+	// 签约日与商机创建日都按北京日历日比较，与 Create 路径“不早于今天”的口径一致；
+	// 旧的 dateOnly 是 UTC 日粒度，会把北京时间 00:00–08:00 创建的商机算成 UTC 的前一天。
+	if signDateBeforeCreation(model.CreatedAt, signDate) {
 		return nil, apperror.New(422, "CRM_OPPORTUNITY_INVALID_SIGN_DATE", "expected sign date must not be earlier than opportunity creation date")
 	}
 	if model.Version != input.Version {
 		return nil, ErrVersionConflict
+	}
+	// 终态商机的金额与预计签约日期是合同回写和转合同投递的权威口径，
+	// 关闭后一律冻结；其他主数据仍按现有语义允许受审计编辑。
+	if model.Status == StatusClosed && closedMasterDataChanged(model, amount, signDate) {
+		return nil, ErrTerminalMasterDataFrozen
 	}
 	if strings.TrimSpace(input.Reason) == "" {
 		return nil, apperror.New(422, "CRM_OPPORTUNITY_CHANGE_REASON_REQUIRED", "change reason is required")
@@ -618,6 +648,38 @@ func dateOnly(value time.Time) time.Time {
 	return time.Date(value.Year(), value.Month(), value.Day(), 0, 0, 0, 0, time.UTC)
 }
 
+// beijingCalendarDay 把时刻折算成北京日历日当天 00:00，用于“不早于今天”这类业务日判断。
+// 旧实现用 s.now().Truncate(24*time.Hour)，得到的是 UTC 午夜：北京时间 00:00–08:00
+// 期间“今天”还停在 UTC 的前一天，导致北京侧已是昨天的日期被放行。
+func beijingCalendarDay(value time.Time) time.Time {
+	year, month, day := value.In(businessclock.Location()).Date()
+	return time.Date(year, month, day, 0, 0, 0, 0, businessclock.Location())
+}
+
+// businessDateValue 把时刻折算成“业务日历日”的 DATE 存储值：取北京日历日的年月日，
+// 再以 UTC 午夜表示。end_date 是 DATE 列（前端按“结束/作废日期”展示），只保留年月日；
+// 但驱动写库前会先按连接 loc（生产 DSN 是 loc=UTC）换算时间，直接写北京午夜会被写成前一天。
+func businessDateValue(value time.Time) time.Time {
+	year, month, day := value.In(businessclock.Location()).Date()
+	return time.Date(year, month, day, 0, 0, 0, 0, time.UTC)
+}
+
+// signDateBeforeCreation 判断预计签约日是否早于商机创建日，两侧都先折算成北京日历日。
+// signDate 来自 time.Parse("2006-01-02")，是 UTC 午夜的日期值；直接与 CreatedAt 比
+// 会退回 UTC 日粒度，所以必须先把两侧都归一成北京日历日再比。语义仍是“签约日不早于创建日”。
+func signDateBeforeCreation(createdAt, signDate time.Time) bool {
+	if createdAt.IsZero() {
+		return false
+	}
+	return beijingCalendarDay(signDate).Before(beijingCalendarDay(createdAt))
+}
+
+// closedMasterDataChanged 判断已关闭商机是否试图改写金额或预计签约日期。
+// 日期按业务日粒度比较，避免数据库 DATE 列与请求时区差异造成误判。
+func closedMasterDataChanged(model *Opportunity, amount decimal.Decimal, signDate time.Time) bool {
+	return !amount.Equal(model.ExpectedAmount) || !dateOnly(signDate).Equal(dateOnly(model.ExpectedSignDate))
+}
+
 func (s *Service) Void(ctx context.Context, id uint64, input LifecycleRequest) (*Response, error) {
 	principal, err := requirePrincipal(ctx)
 	if err != nil {
@@ -644,8 +706,10 @@ func (s *Service) Void(ctx context.Context, id uint64, input LifecycleRequest) (
 		return nil, apperror.WithDetails(ErrVoidBlocked, map[string]any{"blockers": blockers})
 	}
 	before := toResponse(model)
-	previousStatus, now := model.Status, s.now()
-	model.Status, model.StatusBeforeVoid, model.EndDate, model.UpdatedBy = StatusVoid, &previousStatus, &now, principal.UserID
+	previousStatus := model.Status
+	// end_date 是业务日历日（DATE 列，展示“作废日期”），按北京日历日派生。
+	endDate := businessDateValue(s.now())
+	model.Status, model.StatusBeforeVoid, model.EndDate, model.UpdatedBy = StatusVoid, &previousStatus, &endDate, principal.UserID
 	if err = s.persistLifecycle(ctx, principal, model, before, input, previousStatus, "VOID"); err != nil {
 		return nil, err
 	}
@@ -879,8 +943,8 @@ func (s *Service) ChangeStage(ctx context.Context, id uint64, input StageChangeR
 	if model.Version != input.Version {
 		return nil, ErrVersionConflict
 	}
-	if model.Status == StatusVoid {
-		return nil, ErrInactive
+	if err = validateStageChange(model, input.TargetStage); err != nil {
+		return nil, err
 	}
 	if input.TargetStage == StageSigned {
 		if input.ContractRef == nil || strings.TrimSpace(*input.ContractRef) == "" {
@@ -951,6 +1015,23 @@ func (s *Service) ApplyExternalStatus(ctx context.Context, input ExternalStatusR
 	target, pending := mapExternalStatus(input.Status, input.ContractRef, input.LostReason)
 	if target == "" {
 		return nil, apperror.New(422, "CRM_OPPORTUNITY_UNKNOWN_EXTERNAL_STATUS", "unsupported external status")
+	}
+	if model.Status == StatusClosed {
+		// 终态商机不再接受外部阶段回调：迟到、乱序或重复的报价/投标状态
+		// 不得把已签约或已失败商机复活，也不得覆盖合同引用。只留审计证据并
+		// 返回稳定冲突，与迟到回调的既有安全结果保持一致。
+		if auditErr := s.audit.Write(ctx, audit.Event{TenantID: principal.TenantID, Module: "opportunity", Operation: "EXTERNAL_STATUS_TERMINAL_REJECTED", ResourceType: "opportunity", ResourceID: uintString(model.ID), ActorID: principal.UserID, ActorNameSnapshot: principal.DisplayName, BeforeJSON: audit.JSON(toResponse(model)), AfterJSON: audit.JSON(struct {
+			Type              string    `json:"type"`
+			SourceID          string    `json:"source_id"`
+			Status            string    `json:"status"`
+			TargetStage       string    `json:"target_stage"`
+			ChangedAt         time.Time `json:"changed_at"`
+			CurrentStage      string    `json:"current_stage"`
+			OpportunityStatus string    `json:"opportunity_status"`
+		}{Type: input.Type, SourceID: input.SourceID, Status: input.Status, TargetStage: target, ChangedAt: input.ChangedAt.UTC(), CurrentStage: model.CurrentStage, OpportunityStatus: model.Status}), Result: "REJECTED"}); auditErr != nil {
+			return nil, auditErr
+		}
+		return nil, ErrExternalStatusTerminal
 	}
 	before := toResponse(model)
 	applyStage(model, target, input.ContractRef, input.LostReason, pending, input.ChangedAt.UTC(), principal.UserID)
@@ -1231,6 +1312,19 @@ func (s *Service) ContractTransfer(ctx context.Context, id uint64, input Contrac
 			responseValue = replay
 			return nil
 		}
+		// 转合同闸门置于版本判断之前：事件 ID 随版本变化，仅比较当前版本会放过
+		// “编辑商机后再次转合同”的路径。已回写的合同关联或任意已受理的
+		// OPPORTUNITY_SIGNED 发件箱事件都表示该商机已经转合同。
+		if contractTransferAlreadyLinked(model) {
+			return ErrContractTransferAlreadyLinked
+		}
+		accepted, acceptedErr := s.repo.ContractTransferAccepted(txCtx, principal.TenantID, id)
+		if acceptedErr != nil {
+			return acceptedErr
+		}
+		if accepted {
+			return ErrContractTransferAlreadyLinked
+		}
 		if model.Version != input.Version {
 			return ErrVersionConflict
 		}
@@ -1261,7 +1355,12 @@ func (s *Service) ContractTransfer(ctx context.Context, id uint64, input Contrac
 		if encodeErr != nil {
 			return encodeErr
 		}
-		if createErr := s.repo.CreateOutboxEvents(txCtx, []OutboxEvent{{EventID: eventID, TenantID: principal.TenantID, EventType: "OPPORTUNITY_SIGNED", AggregateType: "opportunity", AggregateID: uintString(id), Payload: payload, Status: "PENDING", CreatedAt: s.now()}}); createErr != nil {
+		if createErr := s.repo.CreateOutboxEvents(txCtx, []OutboxEvent{{EventID: eventID, TenantID: principal.TenantID, EventType: contractTransferEventType, AggregateType: "opportunity", AggregateID: uintString(id), Payload: payload, Status: "PENDING", CreatedAt: s.now()}}); createErr != nil {
+			// 并发双提交（不同幂等键、同版本）会竞争同一个 event_id；唯一键落败方
+			// 必须得到“已转合同”的明确 409，而不是被兜底成 500。
+			if isDuplicateContractTransferEvent(createErr) {
+				return ErrContractTransferAlreadyLinked
+			}
 			return createErr
 		}
 		if createErr := s.repo.CreateChangeIdempotency(txCtx, &ChangeIdempotency{TenantID: principal.TenantID, OpportunityID: id, Operation: "CONTRACT_TRANSFER", ActorID: principal.UserID, Key: key, RequestHash: requestHash, ResponseJSON: responseJSON, CreatedAt: s.now()}); createErr != nil {
@@ -1374,6 +1473,19 @@ func contractTransferRequestHash(version uint64, reason string) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// contractTransferAlreadyLinked 判断合同系统是否已经回写过该商机的合同关联。
+// contract_link_status 的初始值是 PENDING，因此只有非空合同标识或
+// 已确认/异常的关联状态才算已关联；PENDING 与空白值都不阻止首次转合同。
+func contractTransferAlreadyLinked(model *Opportunity) bool {
+	if model.ContractLinkStatus == ContractLinkConfirmed || model.ContractLinkStatus == ContractLinkException {
+		return true
+	}
+	if model.ContractID != nil && strings.TrimSpace(*model.ContractID) != "" {
+		return true
+	}
+	return model.ContractIntakeID != nil && strings.TrimSpace(*model.ContractIntakeID) != ""
+}
+
 func (s *Service) persistStage(ctx context.Context, principal auth.Principal, model *Opportunity, before Response, expected uint64, log StageLog) error {
 	return database.WithTransaction(ctx, s.db, func(txCtx context.Context) error {
 		if err := s.repo.UpdateStage(txCtx, model, expected); err != nil {
@@ -1389,6 +1501,54 @@ func (s *Service) persistStage(ctx context.Context, principal auth.Principal, mo
 		}
 		return s.audit.Write(txCtx, audit.Event{TenantID: principal.TenantID, Module: "opportunity", Operation: "STAGE_CHANGE", ResourceType: "opportunity", ResourceID: uintString(model.ID), ActorID: principal.UserID, ActorNameSnapshot: principal.DisplayName, BeforeJSON: audit.JSON(before), AfterJSON: audit.JSON(toResponse(model)), Reason: log.Reason, Result: "SUCCESS"})
 	})
+}
+
+// allowedStageTransitions 是商机阶段状态机的唯一允许迁移表。
+// 进行中阶段之间保持现有业务允许的前后向推进与纠偏；任一进行中阶段可进入
+// 已签约/失败终态；终态商机没有出边，只能通过受控更正/重开流程处理
+// （本轮不实现重开命令），避免已签约或已失败商机被自由回退。
+var allowedStageTransitions = map[string]map[string]bool{
+	StageInitial: {
+		StageInitial: true, StageRequirement: true, StageSolution: true,
+		StageQuotation: true, StageBid: true, StageSigned: true, StageFailed: true,
+	},
+	StageRequirement: {
+		StageInitial: true, StageRequirement: true, StageSolution: true,
+		StageQuotation: true, StageBid: true, StageSigned: true, StageFailed: true,
+	},
+	StageSolution: {
+		StageInitial: true, StageRequirement: true, StageSolution: true,
+		StageQuotation: true, StageBid: true, StageSigned: true, StageFailed: true,
+	},
+	StageQuotation: {
+		StageInitial: true, StageRequirement: true, StageSolution: true,
+		StageQuotation: true, StageBid: true, StageSigned: true, StageFailed: true,
+	},
+	StageBid: {
+		StageInitial: true, StageRequirement: true, StageSolution: true,
+		StageQuotation: true, StageBid: true, StageSigned: true, StageFailed: true,
+	},
+	StageSigned: {},
+	StageFailed: {},
+}
+
+// validateStageChange 在执行阶段变更前落实状态机闸门。VOID 保持既有语义，
+// CLOSED 一律拒绝人工阶段变更并指向受控更正/重开流程。
+func validateStageChange(model *Opportunity, target string) error {
+	if model.Status == StatusVoid {
+		return ErrInactive
+	}
+	if model.Status == StatusClosed {
+		return ErrTerminalStageLocked
+	}
+	if model.Status != StatusFollowing {
+		return ErrInvalidStage
+	}
+	allowed, ok := allowedStageTransitions[model.CurrentStage]
+	if !ok || !allowed[target] {
+		return ErrInvalidStage
+	}
+	return nil
 }
 
 func applyStage(model *Opportunity, stage string, contractRef, lostReason *string, pending string, changedAt time.Time, actor string) {

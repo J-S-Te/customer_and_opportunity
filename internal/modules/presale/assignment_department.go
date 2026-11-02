@@ -182,6 +182,10 @@ func (s *Service) selectExecutionDepartmentAndTeamLead(ctx context.Context, acto
 			return ErrInvalidTransition
 		}
 		now := s.clock.Now()
+		// 事务内最终防线：预检与写入之间可能刚好落库冻结。
+		if e = s.guardUserWrite(tx, actor.TenantID, in.TeamLeadPersonID); e != nil {
+			return e
+		}
 		if _, e = s.endCurrentTeamLeadAssignment(tx, r, actor, "团队负责人重新指派", now); e != nil {
 			return e
 		}

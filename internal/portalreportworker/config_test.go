@@ -62,3 +62,61 @@ func TestIngestOnlyRejectsUnsupportedSourceScheme(t *testing.T) {
 		t.Fatal("unsupported source URL scheme accepted")
 	}
 }
+
+// fullDeliveryConfigEnv 建立完整投递模式的最小有效配置，供自检开关用例复用。
+func fullDeliveryConfigEnv(t *testing.T) {
+	t.Helper()
+	t.Setenv("PORTAL_REPORT_WORKER_INGEST_ONLY", "false")
+	t.Setenv("PORTAL_REPORT_PROJECT_TLS_REQUIRE_MTLS", "false")
+	t.Setenv("PORTAL_OIDC_TENANT_ID", "tenant-fixture")
+	t.Setenv("PORTAL_REPORT_STORE_ROOT", t.TempDir())
+	t.Setenv("PORTAL_REPORT_CONTENT_KEY_BASE64", "eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHg=")
+	t.Setenv("PORTAL_REPORT_INGEST_DESCRIPTOR_KEY_BASE64", "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=")
+	t.Setenv("PORTAL_REPORT_SOURCE_BASE_URL", "https://gateway.example")
+	t.Setenv("PORTAL_REPORT_SOURCE_TOKEN_URL", "https://identity.example/oauth2/token")
+	t.Setenv("PORTAL_REPORT_SOURCE_CLIENT_ID", "portal-report-source")
+	t.Setenv("PORTAL_REPORT_SOURCE_CLIENT_SECRET", "fixture")
+	t.Setenv("PORTAL_REPORT_WORKER_MYSQL_DSN", "user:pass@tcp(mysql:3306)/customer_portal")
+	t.Setenv("PORTAL_REPORT_PROJECT_TOKEN_URL", "https://identity.example/oauth2/token")
+	t.Setenv("PORTAL_REPORT_PROJECT_CLIENT_ID", "report-writer")
+	t.Setenv("PORTAL_REPORT_PROJECT_CLIENT_SECRET", "secret")
+	t.Setenv("PORTAL_REPORT_PROJECT_REQUEST_URL", "https://project.example/report-requests")
+}
+
+func TestProjectPreflightDefaultsToDisabled(t *testing.T) {
+	fullDeliveryConfigEnv(t)
+	cfg, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig() err=%v", err)
+	}
+	if cfg.ProjectPreflight {
+		t.Fatal("project preflight must default to disabled")
+	}
+	t.Setenv("PORTAL_REPORT_PROJECT_PREFLIGHT", "true")
+	cfg, err = LoadConfig()
+	if err != nil || !cfg.ProjectPreflight {
+		t.Fatalf("preflight cfg=%+v err=%v", cfg.ProjectPreflight, err)
+	}
+	t.Setenv("PORTAL_REPORT_PROJECT_PREFLIGHT", "definitely-not-a-bool")
+	if _, err := LoadConfig(); err == nil {
+		t.Fatal("invalid preflight flag was accepted")
+	}
+}
+
+func TestProjectPreflightIsInertInIngestOnlyMode(t *testing.T) {
+	t.Setenv("PORTAL_REPORT_WORKER_INGEST_ONLY", "true")
+	t.Setenv("PORTAL_REPORT_INGEST_DESCRIPTOR_KEY_BASE64", "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=")
+	t.Setenv("PORTAL_REPORT_CONTENT_KEY_BASE64", "eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHg=")
+	t.Setenv("PORTAL_REPORT_WORKER_MYSQL_DSN", "fixture@tcp(mysql:3306)/customer_portal")
+	t.Setenv("PORTAL_REPORT_STORE_ROOT", t.TempDir())
+	t.Setenv("PORTAL_OIDC_TENANT_ID", "tenant-fixture")
+	t.Setenv("PORTAL_REPORT_SOURCE_BASE_URL", "https://gateway.example")
+	t.Setenv("PORTAL_REPORT_SOURCE_TOKEN_URL", "https://platform.example/oauth2/token")
+	t.Setenv("PORTAL_REPORT_SOURCE_CLIENT_ID", "portal-report-source")
+	t.Setenv("PORTAL_REPORT_SOURCE_CLIENT_SECRET", "fixture")
+	t.Setenv("PORTAL_REPORT_PROJECT_PREFLIGHT", "true")
+	cfg, err := LoadConfig()
+	if err != nil || cfg.ProjectPreflight {
+		t.Fatalf("ingest-only preflight cfg=%+v err=%v", cfg.ProjectPreflight, err)
+	}
+}

@@ -43,6 +43,16 @@ type testOpportunityRow struct {
 
 func (testOpportunityRow) TableName() string { return "crm_opportunities" }
 
+// testGateRow 复刻 migrations/000125_crm_handover_gate.up.sql 的形状，
+// 一次性 MySQL schema 由测试自建，仍走真实行锁语义。
+type testGateRow struct {
+	TenantID  string    `gorm:"column:tenant_id;size:64;primaryKey"`
+	UserID    string    `gorm:"column:user_id;size:64;primaryKey"`
+	UpdatedAt time.Time `gorm:"column:updated_at"`
+}
+
+func (testGateRow) TableName() string { return "crm_handover_gate" }
+
 // handoverTestRepository 在显式提供的一次性 MySQL schema 上建表；
 // 未配置 HANDOVER_TEST_MYSQL_DSN 时跳过，不用模拟替代真实 MySQL 行为。
 func handoverTestRepository(t *testing.T) (*GORMRepository, *gorm.DB) {
@@ -55,7 +65,7 @@ func handoverTestRepository(t *testing.T) (*GORMRepository, *gorm.DB) {
 	if err != nil {
 		t.Fatalf("open disposable MySQL schema: %v", err)
 	}
-	models := []any{&freezeRow{}, &receiptRow{}, &testCustomerRow{}, &testOpportunityRow{}, &testMemberRow{}, &testPresaleRequestRow{}, &testPresaleAssignmentRow{}}
+	models := []any{&freezeRow{}, &receiptRow{}, &testCustomerRow{}, &testOpportunityRow{}, &testMemberRow{}, &testPresaleRequestRow{}, &testPresaleAssignmentRow{}, &testGateRow{}}
 	for _, model := range models {
 		_ = db.Migrator().DropTable(model)
 	}
@@ -560,5 +570,71 @@ func TestTransferUpdatesOwnerOrganizationOnMySQL(t *testing.T) {
 	}
 	if opportunity.OwnerUserID != successor || opportunity.OwnerOrgID != "org-new" {
 		t.Fatalf("opportunity owner=%s org=%s", opportunity.OwnerUserID, opportunity.OwnerOrgID)
+	}
+}
+
+// BIZ-CRM-05：批次归属校验在真实 MySQL 上的行为——非本批次不写回执、不改数据；
+// 同幂等键重放保持既有回执；冻结释放后新键无法再驱动改派。
+func TestTransferBatchAttributionOnMySQL(t *testing.T) {
+	repository, db := handoverTestRepository(t)
+	service, err := NewService(repository, NewID, func() time.Time { return time.Now().UTC() })
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	tenant, leaver, successor := "tenant-crm-5", "user-leaver", "user-successor"
+	customerID := seedHandoverCustomer(t, db, tenant, leaver, "ACTIVE", 3)
+
+	freeze, count, err := service.Freeze(ctx, tenant, "01CRMBATCH000000000000051", "01CRMREQUEST0000000000005", leaver)
+	if err != nil || count != 1 {
+		t.Fatalf("freeze = %+v count=%d err=%v", freeze, count, err)
+	}
+	// 冻结落库必须先自愈门闩行：责任写入与冻结对同一行串行化。
+	var gateRows int64
+	if err = db.Model(&testGateRow{}).Where("tenant_id = ? AND user_id = ?", tenant, leaver).Count(&gateRows).Error; err != nil || gateRows != 1 {
+		t.Fatalf("gate rows = %d err = %v, want 1", gateRows, err)
+	}
+
+	foreign := TransferInput{TenantID: tenant, BatchID: "01CRMBATCH000000000000999", ItemID: "01CRMITEM0000000000000501",
+		ResourceType: ResourceCustomer, ResourceID: "customer:" + itoa(customerID), FromUserID: leaver, ToUserID: successor,
+		ExpectedVersion: 3, IdempotencyKey: "handover:foreign:item-1"}
+	if _, err = service.Transfer(ctx, foreign); !errors.Is(err, ErrBatchNotFrozen) {
+		t.Fatalf("foreign batch err = %v, want ErrBatchNotFrozen", err)
+	}
+	if _, found, lookupErr := repository.FindReceipt(ctx, tenant, foreign.IdempotencyKey); lookupErr != nil || found {
+		t.Fatalf("foreign batch must not write a receipt: found=%v err=%v", found, lookupErr)
+	}
+	var unchanged testCustomerRow
+	if err = db.First(&unchanged, customerID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if unchanged.OwnerUserID != leaver || unchanged.Version != 3 {
+		t.Fatalf("customer changed by rejected transfer: %+v", unchanged)
+	}
+
+	input := TransferInput{TenantID: tenant, BatchID: freeze.BatchID, ItemID: "01CRMITEM0000000000000502",
+		ResourceType: ResourceCustomer, ResourceID: "customer:" + itoa(customerID), FromUserID: leaver, ToUserID: successor,
+		ExpectedVersion: 3, IdempotencyKey: "handover:own:item-1"}
+	receipt, err := service.Transfer(ctx, input)
+	if err != nil || receipt.Status != ReceiptApplied || receipt.AppliedVersion != 4 {
+		t.Fatalf("own batch receipt = %+v err = %v", receipt, err)
+	}
+	replayed, err := service.Transfer(ctx, input)
+	if err != nil || replayed != receipt {
+		t.Fatalf("replay = %+v err = %v, want %+v", replayed, err, receipt)
+	}
+
+	if err = service.Complete(ctx, tenant, freeze.BatchID, "COMPLETED"); err != nil {
+		t.Fatal(err)
+	}
+	released := input
+	released.IdempotencyKey = "handover:released:item-1"
+	released.ExpectedVersion = 4
+	released.FromUserID, released.ToUserID = successor, "user-third"
+	if _, err = service.Transfer(ctx, released); !errors.Is(err, ErrBatchNotFrozen) {
+		t.Fatalf("released batch err = %v, want ErrBatchNotFrozen", err)
+	}
+	if _, found, lookupErr := repository.FindReceipt(ctx, tenant, released.IdempotencyKey); lookupErr != nil || found {
+		t.Fatalf("released batch must not write a receipt: found=%v err=%v", found, lookupErr)
 	}
 }

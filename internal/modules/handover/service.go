@@ -16,6 +16,9 @@ var (
 	ErrConflict   = errors.New("handover state conflict")
 	ErrNotFound   = errors.New("handover record not found")
 	ErrFrozen     = errors.New("user is frozen by an in-flight handover")
+	// ErrBatchNotFrozen 表示源负责人没有被输入批次对应的 FROZEN 冻结记录：
+	// 既不能证明责任项属于该交接批次，也不能证明该用户确实在交接中。
+	ErrBatchNotFrozen = errors.New("handover batch is not frozen for the source owner")
 )
 
 // 回执状态（与平台协议一致）。
@@ -196,6 +199,15 @@ func (service *Service) Transfer(ctx context.Context, input TransferInput) (Rece
 	} else if found {
 		// 同幂等键重复投递：原样返回既有回执，绝不重复变更。
 		return existing, nil
+	}
+	// 批次归属校验（BIZ-CRM-05）：只有 (tenant, batch_id, from_user) 存在 FROZEN 冻结行时，
+	// 该责任项才算属于这个交接批次。任意 batch_id 或已被释放的冻结都不能驱动改派。
+	// 这里不落 REJECTED/RETRYABLE 回执：FindReceipt 按幂等键短路，落非终态回执会让同键重放永久卡死。
+	// 409 交由平台按既有退避/受控恢复处理，本地既不写回执也不改数据。
+	if freeze, found, err := service.repository.ActiveFreeze(ctx, input.TenantID, input.FromUserID); err != nil {
+		return Receipt{}, err
+	} else if !found || freeze.Status != FreezeFrozen || freeze.BatchID != input.BatchID {
+		return Receipt{}, fmt.Errorf("source owner %s is not frozen by handover batch %s: %w", input.FromUserID, input.BatchID, ErrBatchNotFrozen)
 	}
 	// 承接人自身处于交接冻结时不得接收新责任。
 	if freeze, found, err := service.repository.ActiveFreeze(ctx, input.TenantID, input.ToUserID); err != nil {

@@ -16,15 +16,15 @@ func TestCRMHistoryLicenseRetainsExactHandoverReadsAndTransferFailures(t *testin
 		operation             core.Operation
 		want                  int
 	}{
-		{"GET", "/api/v1/internal/handover/responsibilities", "/api/v1/internal/handover/responsibilities", core.READ_HISTORY, 204},
-		{"GET", "/api/v1/internal/handover/transfers/:itemID", "/api/v1/internal/handover/transfers/old-item", core.READ_HISTORY, 204},
+		{"GET", "/internal/v1/handover/responsibilities", "/internal/v1/handover/responsibilities", core.READ_HISTORY, 204},
+		{"GET", "/internal/v1/handover/transfers/:itemID", "/internal/v1/handover/transfers/old-item", core.READ_HISTORY, 204},
 		{"GET", "/api/v1/contract-transfer-outbox/failed", "/api/v1/contract-transfer-outbox/failed", core.READ_HISTORY, 204},
 		{"POST", "/api/v1/contract-transfer-outbox/failed/:id/retry", "/api/v1/contract-transfer-outbox/failed/old/retry", core.MUTATE_BUSINESS, 403},
-		{"POST", "/api/v1/internal/handover/freeze", "/api/v1/internal/handover/freeze", core.MUTATE_BUSINESS, 403},
-		{"POST", "/api/v1/internal/handover/transfers", "/api/v1/internal/handover/transfers", core.MUTATE_BUSINESS, 403},
-		{"POST", "/api/v1/internal/handover/complete", "/api/v1/internal/handover/complete", core.MUTATE_BUSINESS, 403},
-		{"GET", "/api/v1/internal/handover/new-effect", "/api/v1/internal/handover/new-effect", core.MUTATE_BUSINESS, 403},
-		{"POST", "/api/v1/internal/handover/responsibilities", "/api/v1/internal/handover/responsibilities", core.MUTATE_BUSINESS, 403},
+		{"POST", "/internal/v1/handover/freeze", "/internal/v1/handover/freeze", core.MUTATE_BUSINESS, 403},
+		{"POST", "/internal/v1/handover/transfers", "/internal/v1/handover/transfers", core.MUTATE_BUSINESS, 403},
+		{"POST", "/internal/v1/handover/complete", "/internal/v1/handover/complete", core.MUTATE_BUSINESS, 403},
+		{"GET", "/internal/v1/handover/new-effect", "/internal/v1/handover/new-effect", core.MUTATE_BUSINESS, 403},
+		{"POST", "/internal/v1/handover/responsibilities", "/internal/v1/handover/responsibilities", core.MUTATE_BUSINESS, 403},
 	}
 	for _, tc := range cases {
 		t.Run(tc.method+tc.path, func(t *testing.T) {

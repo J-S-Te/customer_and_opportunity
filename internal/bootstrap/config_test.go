@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"strings"
 	"testing"
+	"time"
 )
 
 func setBaseConfig(t *testing.T) {
@@ -27,6 +28,10 @@ func setBaseConfig(t *testing.T) {
 	t.Setenv("PLATFORM_ENVIRONMENT_CODE", "test")
 	t.Setenv("PLATFORM_AUDIT_CLIENT_ID", "crm-audit")
 	t.Setenv("PLATFORM_AUDIT_CLIENT_SECRET", "audit-secret")
+	// 会话期限必须由每个用例显式声明，避免宿主环境或前序用例遗留值污染断言。
+	t.Setenv("OIDC_SESSION_IDLE_TTL", "")
+	t.Setenv("OIDC_SESSION_ABSOLUTE_TTL", "")
+	t.Setenv("OIDC_SESSION_TTL", "")
 }
 
 func setPortalDisableConfig(t *testing.T) {
@@ -373,6 +378,71 @@ func TestLoadConfigOwnerDirectoryIsOptionalButCompleteAndExactlyScopedWhenEnable
 	config, err = LoadConfig()
 	if err != nil || !config.OwnerDirectoryEnabled {
 		t.Fatalf("config=%#v err=%v", config, err)
+	}
+}
+
+func TestLoadConfigUnifiedSessionIdleAndAbsoluteDefaults(t *testing.T) {
+	setBaseConfig(t)
+	config, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	if config.OIDCSessionIdleTTL != 30*time.Minute || config.OIDCSessionAbsoluteTTL != 8*time.Hour {
+		t.Fatalf("session durations = idle %s absolute %s, want 30m/8h", config.OIDCSessionIdleTTL, config.OIDCSessionAbsoluteTTL)
+	}
+}
+
+// 旧键 OIDC_SESSION_TTL 只在新 ABSOLUTE 未设置时作为绝对期限，避免升级时被静默放大到 8h；
+// 两个键都存在时以新键为准。
+func TestLoadConfigLegacySessionTTLIsAbsorbedOnlyWhenNewAbsoluteIsUnset(t *testing.T) {
+	setBaseConfig(t)
+	t.Setenv("OIDC_SESSION_TTL", "2h")
+	config, err := LoadConfig()
+	if err != nil || config.OIDCSessionAbsoluteTTL != 2*time.Hour {
+		t.Fatalf("legacy absolute config=%#v err=%v", config, err)
+	}
+	t.Setenv("OIDC_SESSION_ABSOLUTE_TTL", "6h")
+	config, err = LoadConfig()
+	if err != nil || config.OIDCSessionAbsoluteTTL != 6*time.Hour {
+		t.Fatalf("new-key-wins config=%#v err=%v", config, err)
+	}
+}
+
+// 旧部署的 15m 绝对期限短于默认空闲 30m，必须因绝对期限不大于空闲而在启动期失败关闭，
+// 迫使运维显式改配新键，而不是静默得到 8h 或永远不空闲过期。
+func TestLoadConfigLegacyShortSessionTTLFailsClosedUntilExplicitlyRemigrated(t *testing.T) {
+	setBaseConfig(t)
+	t.Setenv("OIDC_SESSION_TTL", "15m")
+	if _, err := LoadConfig(); err == nil || !strings.Contains(err.Error(), "OIDC_SESSION_ABSOLUTE_TTL") {
+		t.Fatalf("legacy 15m TTL error = %v", err)
+	}
+	t.Setenv("OIDC_SESSION_ABSOLUTE_TTL", "8h")
+	config, err := LoadConfig()
+	if err != nil || config.OIDCSessionAbsoluteTTL != 8*time.Hour {
+		t.Fatalf("explicit remigration config=%#v err=%v", config, err)
+	}
+}
+
+func TestLoadConfigRejectsInvalidSessionDurations(t *testing.T) {
+	tests := []struct {
+		name, idle, absolute, wantError string
+	}{
+		{"idle too short", "30s", "8h", "OIDC_SESSION_IDLE_TTL"},
+		{"idle too long", "25h", "48h", "OIDC_SESSION_IDLE_TTL"},
+		{"absolute equal to idle", "30m", "30m", "OIDC_SESSION_ABSOLUTE_TTL"},
+		{"absolute shorter than idle", "2h", "1h", "OIDC_SESSION_ABSOLUTE_TTL"},
+		{"absolute beyond defensive maximum", "30m", "8d", "OIDC_SESSION_ABSOLUTE_TTL"},
+		{"idle is not a duration", "soon", "8h", "OIDC_SESSION_IDLE_TTL"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			setBaseConfig(t)
+			t.Setenv("OIDC_SESSION_IDLE_TTL", test.idle)
+			t.Setenv("OIDC_SESSION_ABSOLUTE_TTL", test.absolute)
+			if _, err := LoadConfig(); err == nil || !strings.Contains(err.Error(), test.wantError) {
+				t.Fatalf("LoadConfig() error = %v, want contains %q", err, test.wantError)
+			}
+		})
 	}
 }
 

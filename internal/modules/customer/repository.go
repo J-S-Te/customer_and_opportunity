@@ -8,6 +8,7 @@ import (
 
 	"github.com/shopspring/decimal"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/auth"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/businessclock"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/database"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/pagination"
 	"gorm.io/gorm"
@@ -317,47 +318,10 @@ func (r *GORMRepository) Create(ctx context.Context, customer *Customer) error {
 	return database.FromContext(ctx, r.db).Create(customer).Error
 }
 
+// scopedCustomer 是包内调用点的入口，范围语义只有一处实现（ApplyDataScope，见 scope.go），
+// 其他模块（如合同引用）复用同一谓词，避免多份副本在交接与角色特例上漂移。
 func scopedCustomer(db *gorm.DB, principal auth.Principal) *gorm.DB {
-	// 租户条件始终存在；组织范围必须使用令牌中经平台确认的组织集合，空集合按无权限处理，
-	// 不能退化为租户全量或信任请求参数中的组织标识。
-	db = db.Where("crm_customers.tenant_id = ? AND crm_customers.deleted_at IS NULL", principal.TenantID)
-	// 销售角色的客户归属是“当前负责人”，交接后旧负责人必须立即失去访问；
-	// created_by 只保留创建历史，不能作为访问依据。即使平台授权上下文带有
-	// application/tenant 级数据范围，也不能因此放大 CRM 客户可见范围。
-	if salesOnlyPrincipal(principal) {
-		return db.Where("crm_customers.owner_user_id = ?", principal.UserID)
-	}
-	switch principal.ScopeMode {
-	case auth.ScopeAll:
-		return db
-	case auth.ScopeOrg:
-		if len(principal.OrganizationIDs) == 0 {
-			return db.Where("1 = 0")
-		}
-		return db.Where("crm_customers.owner_org_id IN ?", principal.OrganizationIDs)
-	default:
-		return db.Where("crm_customers.owner_user_id = ?", principal.UserID)
-	}
-}
-
-func salesOnlyPrincipal(principal auth.Principal) bool {
-	hasSales := false
-	for _, role := range principal.Roles {
-		if role == "sales" {
-			hasSales = true
-			break
-		}
-	}
-	if !hasSales {
-		return false
-	}
-	for _, role := range principal.Roles {
-		switch role {
-		case "sales_director", "customer_admin", "crm_super_admin", "auditor", "admin":
-			return false
-		}
-	}
-	return true
+	return ApplyDataScope(db, principal)
 }
 
 func (r *GORMRepository) FindByID(ctx context.Context, principal auth.Principal, id uint64, preload bool) (*Customer, error) {
@@ -699,7 +663,9 @@ func toResponse(model *Customer) Response {
 	}
 	var endDate *string
 	if model.EndDate != nil {
-		value := model.EndDate.UTC().Format("2006-01-02")
+		// end_date 是业务日历日（DATE 列，前端展示“失效/合并日期”），按北京日历日派生；
+		// 旧实现固定取 UTC 日，北京时间 00:00–08:00 的失效会显示成前一天。
+		value := model.EndDate.In(businessclock.Location()).Format("2006-01-02")
 		endDate = &value
 	}
 	return Response{ID: model.ID, CustomerNo: model.CustomerNo, Name: model.Name, CustomerType: model.CustomerType, Industry: model.Industry, Region: model.Region, OwnerUserID: model.OwnerUserID, OwnerOrgID: model.OwnerOrgID, Status: model.Status, CreditLevel: model.CreditLevel, CreditUpdatedAt: model.CreditUpdatedAt, EndDate: endDate, MergedIntoID: model.MergedIntoID, Contacts: contacts, Version: model.Version, CreatedAt: model.CreatedAt, UpdatedAt: model.UpdatedAt, OpportunityAmountSum: "0.00"}

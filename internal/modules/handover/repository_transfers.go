@@ -55,6 +55,10 @@ func (repository *GORMRepository) transferTeamMembership(ctx context.Context, in
 			outcome = receipt
 			return err
 		}
+		// 承接人冻结与改派对同一门闩行串行化。
+		if guardErr := guardSuccessor(tx, in); guardErr != nil {
+			return guardErr
+		}
 		var successorCount int64
 		if err := tx.Table("crm_opportunity_members").
 			Where("tenant_id = ? AND opportunity_id = ? AND user_id = ? AND deleted_at IS NULL", in.TenantID, opportunityID, in.ToUserID).
@@ -105,6 +109,10 @@ func (repository *GORMRepository) transferPresaleAssignment(ctx context.Context,
 		if receipt, handled, err := existingReceipt(tx, in); err != nil || handled {
 			outcome = receipt
 			return err
+		}
+		// 承接人冻结与改派对同一门闩行串行化。
+		if guardErr := guardSuccessor(tx, in); guardErr != nil {
+			return guardErr
 		}
 		// 团队负责人由技术总监在售前申请上选择，不属于可自动转给接任者的执行责任。
 		// 存在当前 TEAM_LEAD 行时要求技术总监先重选，不能把负责人静默改成执行人。

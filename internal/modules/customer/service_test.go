@@ -142,7 +142,7 @@ func TestCreateExportUsesOwnerAndOrganizationNamesAndChineseStatus(t *testing.T)
 	directory := &ownerCatalogProbe{users: map[string]ownerdirectory.User{
 		"owner-1": {ID: "owner-1", DisplayName: "张三", Organizations: []ownerdirectory.Organization{{ID: "org-1", Name: "华东销售部"}}},
 	}}
-	service := (&Service{repo: repository, now: func() time.Time { return createdAt }}).UseOwnerDirectory(directory)
+	service := (&Service{repo: repository, now: func() time.Time { return createdAt }}).UseOwnerDirectory(directory).UseFreezeChecker(allowAllFreezeChecker{})
 	ctx := auth.WithPrincipal(context.Background(), auth.Principal{TenantID: "tenant-a", UserID: "exporter"})
 	file, err := service.CreateExport(ctx)
 	if err != nil {
@@ -182,7 +182,7 @@ func TestCreateExportEscapesCSVFormulaInjection(t *testing.T) {
 	directory := &ownerCatalogProbe{users: map[string]ownerdirectory.User{
 		"owner-1": {ID: "owner-1", DisplayName: "张三", Organizations: []ownerdirectory.Organization{{ID: "org-1", Name: "华东销售部"}}},
 	}}
-	service := (&Service{repo: repository, now: func() time.Time { return createdAt }}).UseOwnerDirectory(directory)
+	service := (&Service{repo: repository, now: func() time.Time { return createdAt }}).UseOwnerDirectory(directory).UseFreezeChecker(allowAllFreezeChecker{})
 	ctx := auth.WithPrincipal(context.Background(), auth.Principal{TenantID: "tenant-a", UserID: "exporter"})
 	file, err := service.CreateExport(ctx)
 	if err != nil {

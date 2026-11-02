@@ -28,6 +28,10 @@ type OIDCOptions struct {
 	Scopes                                                                           []string
 }
 
+// errOIDCRefreshRejected 表示提供方明确拒绝 refresh token（过期、撤销、重放或客户端不匹配）。
+// 服务层据此撤销本地会话；网络/5xx 等临时错误不得当作会话失效。
+var errOIDCRefreshRejected = errors.New("CRM OIDC refresh token was rejected")
+
 type verifiedClaims struct {
 	Subject, IdentityID, TenantID, PersonID, DisplayName, RoleConfigHash, Username string
 	OIDCSessionID                                                                  string
@@ -38,13 +42,22 @@ type verifiedClaims struct {
 	AuthzRevision                                                                  uint64
 	ExpiresAt                                                                      time.Time
 	AccessToken                                                                    string
-	LoginIP                                                                        string
+	// RefreshToken 只在登录/回调时由提供方签发；服务端加密保存后可越过短命访问令牌继续重验授权。
+	RefreshToken string
+	LoginIP      string
+}
+
+// refreshedTokens 是令牌刷新结果；RefreshToken 在提供方未轮换时保留原值。
+type refreshedTokens struct {
+	AccessToken, RefreshToken string
+	ExpiresAt                 time.Time
 }
 
 type oidcClient interface {
 	AuthorizationURL(state, nonce, verifier string) string
 	Exchange(context.Context, string, string, string) (verifiedClaims, error)
 	UserInfo(context.Context, string) (verifiedClaims, error)
+	RefreshToken(context.Context, string) (refreshedTokens, error)
 }
 
 type forcedLoginOIDCClient interface {
@@ -216,6 +229,7 @@ func (c *platformOIDCClient) Exchange(ctx context.Context, code, verifier, nonce
 	contextClaims.PersonID = firstNonEmpty(contextClaims.PersonID, claims.PersonID)
 	contextClaims.ExpiresAt = earliestExpiry(claims.ExpiresAt, effectiveToken.Expiry)
 	contextClaims.AccessToken = effectiveToken.AccessToken
+	contextClaims.RefreshToken = effectiveToken.RefreshToken
 	return contextClaims, nil
 }
 
@@ -290,6 +304,45 @@ func (c *platformOIDCClient) AuthorizationContext(ctx context.Context, accessTok
 		primaryOrgID = decision.OrganizationIDs[0]
 	}
 	return verifiedClaims{Subject: raw.Subject, IdentityID: raw.IdentityID, TenantID: raw.TenantID, PersonID: raw.PersonID, PrimaryOrgID: primaryOrgID, Roles: raw.Roles, Permissions: raw.Permissions, OrganizationIDs: decision.OrganizationIDs, DataScopes: scopes, AuthzRevision: raw.AuthorizationRevision, LoginIP: loginip.Normalize(raw.UserLoginIP)}, nil
+}
+
+// RefreshToken 使用回调阶段签发的 refresh token 换取新的访问令牌。平台对 refresh token
+// 采用一次性轮换，因此调用方必须在会话行锁内串行调用（见 GORMRepository.RefreshSessionTokens），
+// 不能由并行请求各自刷新。提供方明确拒绝时返回 errOIDCRefreshRejected，临时错误保持原样。
+func (c *platformOIDCClient) RefreshToken(ctx context.Context, refreshToken string) (refreshedTokens, error) {
+	if strings.TrimSpace(refreshToken) == "" {
+		return refreshedTokens{}, fmt.Errorf("%w: refresh token is missing", errOIDCRefreshRejected)
+	}
+	seed := &oauth2.Token{RefreshToken: refreshToken, Expiry: time.Now().Add(-time.Minute)}
+	refreshed, err := c.config.TokenSource(oidc.ClientContext(ctx, c.httpClient), seed).Token()
+	if err != nil {
+		if oidcRefreshRejected(err) {
+			return refreshedTokens{}, fmt.Errorf("%w: %v", errOIDCRefreshRejected, err)
+		}
+		return refreshedTokens{}, fmt.Errorf("refresh CRM OIDC token: %w", err)
+	}
+	if strings.TrimSpace(refreshed.AccessToken) == "" {
+		return refreshedTokens{}, errors.New("CRM OIDC token refresh returned no access token")
+	}
+	return refreshedTokens{AccessToken: refreshed.AccessToken, RefreshToken: firstNonEmpty(refreshed.RefreshToken, refreshToken), ExpiresAt: refreshed.Expiry.UTC()}, nil
+}
+
+// oidcRefreshRejected 区分提供方明确拒绝与临时不可用。oauth2 以 RetrieveError 报告协议错误，
+// 4xx 或 invalid_grant/invalid_token 视为令牌已失效；网络错误和 5xx 必须允许会话保留并快速重试。
+func oidcRefreshRejected(err error) bool {
+	var retrieveErr *oauth2.RetrieveError
+	if !errors.As(err, &retrieveErr) {
+		return false
+	}
+	switch retrieveErr.ErrorCode {
+	case "invalid_grant", "invalid_token", "unauthorized_client", "invalid_client":
+		return true
+	}
+	if retrieveErr.Response != nil {
+		status := retrieveErr.Response.StatusCode
+		return status == http.StatusBadRequest || status == http.StatusUnauthorized || status == http.StatusForbidden
+	}
+	return false
 }
 
 func (c *platformOIDCClient) authorizationContextWithRefresh(ctx context.Context, token *oauth2.Token) (verifiedClaims, *oauth2.Token, error) {

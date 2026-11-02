@@ -98,6 +98,10 @@ func (s *Service) TakeoverExecutingTeamLead(ctx context.Context, actor Actor, id
 			return ErrInvalidTransition
 		}
 		now := s.clock.Now()
+		// 事务内最终防线：预检与写入之间可能刚好落库冻结。
+		if txErr = s.guardUserWrite(tx, actor.TenantID, in.TeamLeadPersonID); txErr != nil {
+			return txErr
+		}
 		if _, txErr = s.endCurrentTeamLeadAssignment(tx, r, actor, "执行中负责人接管", now); txErr != nil {
 			return txErr
 		}

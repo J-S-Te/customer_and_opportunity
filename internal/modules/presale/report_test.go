@@ -52,14 +52,73 @@ func TestReportSummaryUsesUTCAndPercentUnits(t *testing.T) {
 	}
 }
 
-func TestReportTrendFillsMissingUTCDays(t *testing.T) {
+func TestReportTrendFillsMissingBeijingDays(t *testing.T) {
 	t.Parallel()
+	// 夹具窗口是北京 [2026-08-01 00:00, 2026-08-04 00:00)，归一后是 UTC
+	// [2026-07-31 16:00, 2026-08-03 16:00)；趋势按北京日历日打标签，因此是 3 天。
 	values, err := NewReportService(&reportRepositoryStub{}).Trend(context.Background(), reportActor("ALL"), reportQueryFixture())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(values) != 4 || values[0].Date != "2026-07-31" || values[0].WorkHours != "0.00" || values[2].Date != "2026-08-02" || values[2].WorkHours != "2.00" {
+	if len(values) != 3 || values[0].Date != "2026-08-01" || values[0].WorkHours != "0.00" || values[1].Date != "2026-08-02" || values[1].WorkHours != "2.00" || values[2].Date != "2026-08-03" {
 		t.Fatalf("trend=%+v", values)
+	}
+}
+
+// 跨月边界：UTC 2025-12-31T16:00Z 起已是北京 2026-01-01，横轴不能出现 2025-12-31。
+func TestReportTrendUsesBeijingDaysAcrossUTCMonthBoundary(t *testing.T) {
+	t.Parallel()
+	query := ReportQuery{
+		From: time.Date(2025, 12, 31, 16, 0, 0, 0, time.UTC), // 北京 2026-01-01 00:00
+		To:   time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC),    // 北京 2026-01-02 08:00
+	}
+	values, err := NewReportService(&reportRepositoryStub{}).Trend(context.Background(), reportActor("ALL"), query)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(values) != 2 || values[0].Date != "2026-01-01" || values[1].Date != "2026-01-02" {
+		t.Fatalf("trend=%+v", values)
+	}
+	// 同一窗口内的任一时刻，其北京日期都必须落在补零范围内，否则 SQL 返回的行会被丢弃。
+	first, endExclusive := trendDayRange(query.From, query.To)
+	for at := query.From; at.Before(query.To); at = at.Add(15 * time.Minute) {
+		day := beijingDay(at)
+		if day.Before(first) || !day.Before(endExclusive) {
+			t.Fatalf("instant %s maps to Beijing day %s outside [%s,%s)",
+				at, day.Format(time.DateOnly), first.Format(time.DateOnly), endExclusive.Format(time.DateOnly))
+		}
+	}
+}
+
+// To 恰为北京午夜时该日不进横轴；越过后一纳秒才进横轴，保证 [From,To) 与分组一致。
+func TestReportTrendDayRangeTreatsUpperBoundAsExclusive(t *testing.T) {
+	t.Parallel()
+	from := time.Date(2025, 12, 31, 16, 0, 0, 0, time.UTC) // 北京 2026-01-01 00:00
+	to := time.Date(2026, 1, 1, 16, 0, 0, 0, time.UTC)     // 北京 2026-01-02 00:00
+	first, endExclusive := trendDayRange(from, to)
+	if first.Format(time.DateOnly) != "2026-01-01" || endExclusive.Format(time.DateOnly) != "2026-01-02" {
+		t.Fatalf("day range=[%s,%s) want=[2026-01-01,2026-01-02)", first.Format(time.DateOnly), endExclusive.Format(time.DateOnly))
+	}
+	if _, extended := trendDayRange(from, to.Add(time.Nanosecond)); extended.Format(time.DateOnly) != "2026-01-03" {
+		t.Fatalf("day range end=%s want=2026-01-03", extended.Format(time.DateOnly))
+	}
+}
+
+// 分组 SQL 与补零范围必须同用北京日历日；只改一端会造成漏日或重日。
+func TestReportTrendSQLGroupsByBeijingCalendarDay(t *testing.T) {
+	t.Parallel()
+	where, _ := reportWorklogWhere(ReportScope{TenantID: "tenant-1", All: true}, reportQueryFixture(), "w", "r", "o")
+	sql := reportTrendSQL(where)
+	if strings.Contains(sql, "DATE_FORMAT(w.work_start") {
+		t.Fatalf("trend SQL still groups by the UTC calendar day")
+	}
+	if got := strings.Count(sql, beijingWorklogDayExpr); got != 3 {
+		t.Fatalf("trend SQL uses the Beijing day expression %d times, want select/group by/order by", got)
+	}
+	if !strings.Contains(sql, beijingWorklogDayExpr+" AS date") ||
+		!strings.Contains(sql, "GROUP BY "+beijingWorklogDayExpr) ||
+		!strings.Contains(sql, "ORDER BY "+beijingWorklogDayExpr) {
+		t.Fatalf("trend SQL does not use the same Beijing day expression everywhere")
 	}
 }
 

@@ -1,6 +1,9 @@
 package auth
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 type ScopeMode string
 
@@ -33,6 +36,11 @@ type Principal struct {
 	// 提供的规范用户登录地址。该字段可选：
 	// 认证器不得从任意请求头填入该值。
 	LoginIP string
+	// SessionIdleTimeout 与 SessionIdleDeadline 只由浏览器会话认证器填充，表示本会话的
+	// 权威空闲策略与期限（min(最后交互+空闲, 绝对到期)）。它们仅用于向本页返回空闲窗口，
+	// 不参与业务授权判断；机器/集成主体保持零值。
+	SessionIdleTimeout  time.Duration
+	SessionIdleDeadline time.Time
 }
 
 // DataScope 为子系统业务代码保留授权上下文的传输契约，

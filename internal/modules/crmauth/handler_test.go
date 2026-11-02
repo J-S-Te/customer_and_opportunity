@@ -1,6 +1,7 @@
 package crmauth
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -83,6 +84,62 @@ func TestLogoutFallsBackToLocalApplicationWhenEndpointIsInvalid(t *testing.T) {
 
 	if location := recorder.Header().Get("Location"); location != "/customer-opportunity/" {
 		t.Fatalf("Location = %q, want local application", location)
+	}
+}
+
+// 活动接口只接受持有效会话 Cookie 的浏览器请求；成功信封返回权威空闲窗口，
+// 且只有该接口推进 last_interactive_at。CSRF/Origin 防护由挂载它的写路由组统一执行。
+func TestActivityEndpointRequiresValidSessionAndRecordsInteraction(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	now := time.Date(2026, 10, 30, 2, 0, 0, 0, time.UTC)
+	repo := newMemoryRepo()
+	claims := validClaims(now)
+	claims.ExpiresAt = now.Add(24 * time.Hour)
+	claims.RefreshToken = "refresh-token"
+	service := newTestService(t, repo, &fakeOIDC{exchanged: claims, current: claims}, now)
+	handler := NewHandler(service, HTTPOptions{CookieName: "crm_session"})
+	router := gin.New()
+	router.POST("/auth/activity", handler.Activity)
+
+	// 无会话 Cookie：仍返回既有的 401 未认证信封。
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/auth/activity", nil))
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("missing cookie status = %d", recorder.Code)
+	}
+
+	token := loginSession(t, service)
+	service.now = func() time.Time { return now.Add(26 * time.Minute) }
+	request := httptest.NewRequest(http.MethodPost, "/auth/activity", nil)
+	request.AddCookie(&http.Cookie{Name: "crm_session", Value: token})
+	recorder = httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("activity status = %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var envelope struct {
+		Code string `json:"code"`
+		Data struct {
+			IdleTimeoutSeconds int   `json:"idle_timeout_seconds"`
+			IdleRemainingMS    int64 `json:"idle_remaining_ms"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("decode activity response: %v", err)
+	}
+	if envelope.Code != "OK" || envelope.Data.IdleTimeoutSeconds != 1800 || envelope.Data.IdleRemainingMS != (30*time.Minute).Milliseconds() {
+		t.Fatalf("activity response = %+v", envelope)
+	}
+	if interactive := repo.sessions[tokenHash(token)].LastInteractiveAt; interactive == nil || !interactive.Equal(now.Add(26*time.Minute)) {
+		t.Fatalf("last_interactive_at = %v", interactive)
+	}
+
+	// 空闲期限之后同一 Cookie 不能再续期。
+	service.now = func() time.Time { return now.Add(60 * time.Minute) }
+	recorder = httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("idle-expired activity status = %d", recorder.Code)
 	}
 }
 

@@ -173,3 +173,41 @@ func TestMachineAuthenticateAdmitsContractSignedWriteScope(t *testing.T) {
 		t.Fatalf("Authenticate() with unknown scope error = %v, want ErrUnauthenticated", err)
 	}
 }
+
+// 平台为人员离职交接签发的 handover.machine 机器令牌必须按平台协议被 MachineAuth 接受：
+// 平台会带 X-Integration-Timestamp/Nonce，scope 进入主体权限供路由层 RequirePermission 判定。
+func TestMachineAuthenticateAdmitsHandoverMachineScope(t *testing.T) {
+	now := time.Date(2026, 10, 30, 8, 0, 0, 0, time.UTC)
+	authenticator, privateKey := newMachineTestAuthenticator(t, now)
+	request := func(token string) *http.Request {
+		request := httptest.NewRequest(http.MethodPost, "/api/v1/internal/handover/freeze", nil)
+		request.Header.Set("Authorization", "Bearer "+token)
+		request.Header.Set("X-Integration-Timestamp", now.Format(time.RFC3339Nano))
+		request.Header.Set("X-Integration-Nonce", "nonce-handover-freeze")
+		return request
+	}
+	base := machineTestJWTPayload{
+		Issuer: "basic-platform", Audience: "basic-platform-application", TokenUse: "application",
+		Subject: "platform-handover", OAuthClientID: "01J00000000000000000000011", TenantID: "tenant-1",
+		ApplicationID: "01J00000000000000000000012", ApplicationCode: "platform", EnvironmentID: "01J00000000000000000000013",
+		EnvironmentCode: "prod", Scopes: []string{"handover.machine"},
+		IssuedAt: now.Add(-time.Minute).Unix(), NotBefore: now.Add(-time.Minute).Unix(), ExpiresAt: now.Add(10 * time.Minute).Unix(),
+	}
+	principal, err := authenticator.Authenticate(t.Context(), request(signMachineTestToken(t, privateKey, base)))
+	if err != nil {
+		t.Fatalf("Authenticate() with handover.machine scope error = %v", err)
+	}
+	if _, ok := principal.Permissions["handover.machine"]; !ok {
+		t.Fatalf("principal permissions = %#v, want handover.machine", principal.Permissions)
+	}
+	if principal.TenantID != "tenant-1" || principal.UserID != "machine:platform-handover" {
+		t.Fatalf("unexpected handover machine principal: %#v", principal)
+	}
+
+	// 白名单是显式契约：相邻但未登记的 scope 仍必须失败关闭。
+	sibling := base
+	sibling.Scopes = []string{"handover.approval"}
+	if _, err = authenticator.Authenticate(t.Context(), request(signMachineTestToken(t, privateKey, sibling))); !errors.Is(err, ErrUnauthenticated) {
+		t.Fatalf("Authenticate() with unregistered handover scope error = %v, want ErrUnauthenticated", err)
+	}
+}

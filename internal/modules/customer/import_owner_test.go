@@ -126,7 +126,7 @@ func TestImportCompleteHeadersAndNewRowMapping(t *testing.T) {
 func TestImportCommitRevalidatesActorPrimaryOrganization(t *testing.T) {
 	ctx := auth.WithPrincipal(context.Background(), auth.Principal{TenantID: "tenant-a", UserID: "a"})
 	catalog := importTestCatalog()
-	service := &Service{owners: catalog}
+	service := (&Service{owners: catalog}).UseFreezeChecker(allowAllFreezeChecker{})
 	if err := service.validateImportOwner(ctx, "a", "sales"); err != nil {
 		t.Fatal(err)
 	}
@@ -158,7 +158,7 @@ func TestCommitImportRowRejectsRevokedOwnerBeforeCustomerWrite(t *testing.T) {
 	catalog := importTestCatalog()
 	catalog.validateErr = ownerdirectory.ErrSelectionInvalid
 	imports := &importOwnerRowRepository{}
-	service := &Service{owners: catalog, imports: imports, codec: profileCodec(t), now: time.Now}
+	service := (&Service{owners: catalog, imports: imports, codec: profileCodec(t), now: time.Now}).UseFreezeChecker(allowAllFreezeChecker{})
 	encoded, err := json.Marshal(importCommand{Name: "安全回归客户", OwnerUserID: "a", OwnerOrgID: "sales"})
 	if err != nil {
 		t.Fatal(err)

@@ -106,7 +106,7 @@ func TestLegacyAssignmentExactReplaySurvivesLaterRoleRevocation(t *testing.T) {
 	request, instance := ts011Request(t, ts011LegacyNodes(t))
 	repo := &mutationRepository{request: request, approval: instance, replays: map[string]*MutationReplay{}}
 	directory := ts011NewDirectory()
-	service := NewService(repo, nil, nil, fixedClock{at: time.Date(2026, 10, 18, 9, 0, 0, 0, time.UTC)}, fixedIDs{}).UseOwnerDirectory(directory)
+	service := NewService(repo, nil, nil, fixedClock{at: time.Date(2026, 10, 18, 9, 0, 0, 0, time.UTC)}, fixedIDs{}).UseFreezeChecker(allowAllFreezeChecker{}).UseOwnerDirectory(directory)
 	input := ReplaceAssignmentsInput{
 		Assignees: []AssignmentTarget{{PersonID: "exec-a", Role: "project_manager"}}, ChangeReason: "历史规则指派", Version: 3,
 	}

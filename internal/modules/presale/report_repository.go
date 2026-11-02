@@ -108,17 +108,28 @@ func reportCoverageRequestWhere(scope ReportScope, query ReportQuery, request st
 	return where, args
 }
 
+// beijingWorklogDayExpr 把以 UTC 存储的 work_start 折算成北京日历日的 YYYY-MM-DD 文本。
+// 固定使用数字偏移而不是时区名，避免依赖 MySQL 是否已加载时区表。
+// 服务层补零（trendDayRange）必须使用同一北京日历口径，否则横轴日期与分组结果错位。
+const beijingWorklogDayExpr = `DATE_FORMAT(CONVERT_TZ(w.work_start,'+00:00','+08:00'),'%Y-%m-%d')`
+
 func (r *GORMRepository) ReportTrend(ctx context.Context, scope ReportScope, query ReportQuery) ([]ReportTrendPoint, error) {
 	where, args := reportWorklogWhere(scope, query, "w", "r", "o")
 	var values []ReportTrendPoint
-	err := database.FromContext(ctx, r.db).Raw(`SELECT DATE_FORMAT(w.work_start,'%Y-%m-%d') AS date,
+	err := database.FromContext(ctx, r.db).Raw(reportTrendSQL(where), args...).Scan(&values).Error
+	return values, err
+}
+
+// reportTrendSQL 的 SELECT、GROUP BY、ORDER BY 复用同一个北京日历日表达式，
+// 保证分组键与排序键一致，也与服务层 trendDayRange 的补零口径一致。
+func reportTrendSQL(where string) string {
+	return `SELECT ` + beijingWorklogDayExpr + ` AS date,
 		COALESCE(CAST(SUM(w.work_hours) AS CHAR), '0.00') AS work_hours,
 		COUNT(DISTINCT w.person_id) AS participant_count, COUNT(DISTINCT w.id) AS worklog_count
 		FROM crm_presale_worklogs w
 		JOIN crm_presale_requests r ON r.tenant_id=w.tenant_id AND r.id=w.request_id
 		JOIN crm_opportunities o ON o.tenant_id=r.tenant_id AND o.id=r.opportunity_id
-		WHERE `+where+` GROUP BY DATE_FORMAT(w.work_start,'%Y-%m-%d') ORDER BY DATE_FORMAT(w.work_start,'%Y-%m-%d')`, args...).Scan(&values).Error
-	return values, err
+		WHERE ` + where + ` GROUP BY ` + beijingWorklogDayExpr + ` ORDER BY ` + beijingWorklogDayExpr
 }
 
 func (r *GORMRepository) ReportDistribution(ctx context.Context, scope ReportScope, query ReportQuery, dimension string) ([]ReportDistributionRow, error) {

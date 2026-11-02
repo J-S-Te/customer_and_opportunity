@@ -71,7 +71,7 @@ func TestReopenRequestUsesNewApprovalRoundNotificationKey(t *testing.T) {
 		{ID: "approver-1", DisplayName: "销售总监甲"},
 	}}}
 	service := NewService(repo, &accessibleOpportunityReader{values: map[uint64]OpportunitySnapshot{7: {ID: 7, OpportunityNo: "OP7"}}}, testPhoneProtector{}, fixedClock{at: reopenAt}, fixedIDs{}).
-		UseOwnerDirectory(catalog).UseWorkflowNotifications(writer)
+		UseOwnerDirectory(catalog).UseWorkflowNotifications(writer).UseAuditWriter(&requestAuditRecorder{})
 
 	if _, err := service.ReopenRequest(context.Background(), actor, 9, 3, validReopenInput()); err != nil {
 		t.Fatalf("ReopenRequest: %v", err)

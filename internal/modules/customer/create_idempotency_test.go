@@ -150,7 +150,7 @@ func createTestRequest(key string) CreateRequest {
 
 func newCreateTestService(t *testing.T, repo Repository, writer audit.Writer) *Service {
 	t.Helper()
-	service := NewService(nil, repo, writer, profileCodec(t))
+	service := NewService(nil, repo, writer, profileCodec(t)).UseFreezeChecker(allowAllFreezeChecker{})
 	service.now = func() time.Time { return time.Date(2026, 8, 1, 2, 0, 0, 0, time.UTC) }
 	return service
 }

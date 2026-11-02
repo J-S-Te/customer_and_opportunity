@@ -3,6 +3,7 @@ package bootstrap
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"sort"
@@ -128,7 +129,7 @@ func New(config Config) (*App, error) {
 	authRepository := crmauth.NewGORMRepository(db)
 	authService, authErr := crmauth.NewService(authRepository, oidcClient, config.EncryptionKey, crmauth.Options{
 		TenantID: config.OIDCTenantID, RoleConfigHash: config.OIDCRoleConfigHash,
-		EnvironmentCode: config.PlatformEnvironmentCode, SessionTTL: config.OIDCSessionTTL, MaxRoles: config.OIDCMaxRoles,
+		EnvironmentCode: config.PlatformEnvironmentCode, SessionIdleTTL: config.OIDCSessionIdleTTL, SessionAbsoluteTTL: config.OIDCSessionAbsoluteTTL, MaxRoles: config.OIDCMaxRoles,
 	}, brokerVerifier)
 	if authErr != nil {
 		return nil, authErr
@@ -163,14 +164,28 @@ func New(config Config) (*App, error) {
 			permissions = append(permissions, code)
 		}
 		sort.Strings(permissions)
-		response.OK(c, gin.H{
+		data := gin.H{
 			"user_id": principal.UserID, "person_id": principal.PersonID,
 			"tenant_id": principal.TenantID, "display_name": principal.DisplayName, "username": principal.Username,
 			"primary_org_id": principal.PrimaryOrgID, "organization_ids": append([]string{}, principal.OrganizationIDs...),
 			"roles": principal.Roles, "permissions": permissions, "scope_mode": principal.ScopeMode,
 			"role_config_hash": principal.RoleConfigHash, "authz_revision": principal.AuthzRevision,
-		})
+		}
+		// 追加可选会话空闲窗口字段，既有调用方可忽略；剩余时间取 min(最后活动+空闲, 绝对到期) 的非负毫秒。
+		if principal.SessionIdleTimeout > 0 {
+			data["idle_timeout_seconds"] = int(principal.SessionIdleTimeout / time.Second)
+		}
+		if !principal.SessionIdleDeadline.IsZero() {
+			remaining := principal.SessionIdleDeadline.Sub(time.Now()).Milliseconds()
+			if remaining < 0 {
+				remaining = 0
+			}
+			data["idle_remaining_ms"] = remaining
+		}
+		response.OK(c, data)
 	})
+	// 浏览器显式活动上报：只续期空闲窗口，不改变绝对到期；沿用写请求的 Origin/CSRF 防护。
+	api.POST("/auth/activity", authHandler.Activity)
 	// 此管理端点复用现有的审计读取权限，
 	// 有意与公开的存活和就绪探针分离，仅暴露
 	// 调用方租户的本地 Outbox 聚合状态。
@@ -423,7 +438,10 @@ func New(config Config) (*App, error) {
 	if handoverErr != nil {
 		return nil, handoverErr
 	}
-	handover.RegisterInternalRoutes(internal, handover.NewHandler(handoverService))
+	// 交接机器协议路径四端统一为 /internal/v1/handover/*（平台编排器的固定后缀，
+	// 基址只包含本服务的 APP_PATH_PREFIX），因此单独挂一组内部路由；
+	// 认证/许可中间件与 /api/v1/internal 完全一致，scope 校验在模块内完成。
+	handover.RegisterInternalRoutes(base.Group("/internal/v1", internalAuthMiddleware), handover.NewHandler(handoverService))
 	// 审批责任必须由审批引擎确认当前审批人；未配置引擎时审批类责任不会出现在清单中。
 	if config.ApprovalTaskResolverEnabled {
 		approvalTasks, approvalErr := presale.NewHTTPApprovalTaskResolver(context.Background(), presale.ApprovalTaskResolverOptions{
@@ -438,9 +456,10 @@ func New(config Config) (*App, error) {
 		handoverService.SetApprovalResolver(handoverApprovalResolver{resolver: approvalTasks})
 	}
 	// 写路径冻结覆盖：交接中的用户不得再被指派为客户/商机负责人。
-	customerService.UseFreezeChecker(handoverRepository)
-	opportunityService.UseFreezeChecker(handoverRepository)
-	presaleService.UseFreezeChecker(handoverRepository)
+	// 冻结强制为 fail-closed（未接线即拒绝责任写入），因此装配必须自证接线生效。
+	if wiringErr := wireHandoverFreezeEnforcement(customerService, opportunityService, presaleService, handoverRepository); wiringErr != nil {
+		return nil, wiringErr
+	}
 	server := &http.Server{Addr: config.Address, Handler: router, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second}
 	auditContext, auditCancel := context.WithCancel(context.Background())
 	auditDone := make(chan struct{})
@@ -469,6 +488,37 @@ func New(config Config) (*App, error) {
 	}()
 	started = true
 	return &App{Config: config, DB: db, Router: router, Server: server, auditCancel: auditCancel, auditDone: auditDone, licenseCancel: licenseCancel, importSourceDone: importSourceDone}, nil
+}
+
+// handoverFreezeSource 是交接仓储向三条责任写入路径暴露的最小冻结查询能力。
+// 接口方法集与 customer/opportunity/presale 各自的 FreezeChecker 完全一致。
+type handoverFreezeSource interface {
+	ActiveFreezeUser(ctx context.Context, tenantID, userID string) (bool, error)
+}
+
+// wireHandoverFreezeEnforcement 把交接冻结强制接入客户、商机、售前三条责任写入路径，
+// 并自证接线生效：冻结检查 fail-closed，漏接任何一个写入方都会让该模块的所有责任写入被拒绝，
+// 所以这里在组装期直接失败，而不是留到运行期变成 500。
+func wireHandoverFreezeEnforcement(customerService *customer.Service, opportunityService *opportunity.Service, presaleService *presale.Service, source handoverFreezeSource) error {
+	if customerService == nil || opportunityService == nil || presaleService == nil || source == nil {
+		return errors.New("handover freeze enforcement requires all responsibility writers and a freeze source")
+	}
+	customerService.UseFreezeChecker(source)
+	opportunityService.UseFreezeChecker(source)
+	presaleService.UseFreezeChecker(source)
+	for _, writer := range []struct {
+		name     string
+		enforced bool
+	}{
+		{"customer", customerService.HandoverFreezeEnforced()},
+		{"opportunity", opportunityService.HandoverFreezeEnforced()},
+		{"presale", presaleService.HandoverFreezeEnforced()},
+	} {
+		if !writer.enforced {
+			return fmt.Errorf("handover freeze enforcement is not wired for %s responsibility writes", writer.name)
+		}
+	}
+	return nil
 }
 
 func (a *App) Close(ctx context.Context) error {

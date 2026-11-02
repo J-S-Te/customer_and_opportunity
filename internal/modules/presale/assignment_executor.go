@@ -143,6 +143,10 @@ func (s *Service) ReplaceExecutorAssignments(ctx context.Context, actor Actor, i
 			if _, exists := current[personID]; exists {
 				continue
 			}
+			// 事务内最终防线：预检与写入之间可能刚好落库冻结。
+			if e = s.guardUserWrite(tx, actor.TenantID, personID); e != nil {
+				return e
+			}
 			target := targets[personID]
 			name := target.PersonName
 			if name == "" {

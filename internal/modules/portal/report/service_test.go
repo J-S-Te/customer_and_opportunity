@@ -16,7 +16,14 @@ func TestTransitionAllowed(t *testing.T) {
 	tests := []struct {
 		from, to Status
 		allowed  bool
-	}{{StatusSubmitted, StatusApproving, true}, {StatusSubmitted, StatusIssued, false}, {StatusApproving, StatusRejected, true}, {StatusApproving, StatusApprovedProcessing, true}, {StatusApprovedProcessing, StatusIssued, true}, {StatusApprovedProcessing, StatusProcessingFailed, true}, {StatusIssued, StatusApproving, false}}
+	}{
+		{StatusSubmitted, StatusApproving, true}, {StatusSubmitted, StatusIssued, false},
+		// 回调状态机永远不能产生投递终态；SUBMISSION_FAILED 只能由投递死信在系统侧写入。
+		{StatusSubmitted, StatusSubmissionFailed, false}, {StatusSubmissionFailed, StatusApproving, false},
+		{StatusSubmissionFailed, StatusIssued, false}, {StatusApproving, StatusRejected, true},
+		{StatusApproving, StatusApprovedProcessing, true}, {StatusApprovedProcessing, StatusIssued, true},
+		{StatusApprovedProcessing, StatusProcessingFailed, true}, {StatusIssued, StatusApproving, false},
+	}
 	for _, tt := range tests {
 		if got := transitionAllowed(tt.from, tt.to); got != tt.allowed {
 			t.Errorf("transition %s -> %s = %v, want %v", tt.from, tt.to, got, tt.allowed)
@@ -49,6 +56,7 @@ type reportRepoStub struct {
 	request        *Request
 	file           *File
 	ingestJob      *IngestJob
+	outbox         *Outbox
 	update         map[string]any
 	updateRuns     int
 	events         []StatusEvent
@@ -136,6 +144,12 @@ func (r *reportRepoStub) UpdateIngestJob(_ context.Context, _ *IngestJob, fields
 	return nil
 }
 func (r *reportRepoStub) CreateOutbox(context.Context, *Outbox) error { return nil }
+func (r *reportRepoStub) FindOutboxForUpdate(_ context.Context, id uint64) (*Outbox, error) {
+	if r.outbox == nil || r.outbox.ID != id {
+		return nil, ErrNotFound
+	}
+	return r.outbox, nil
+}
 func (r *reportRepoStub) CreateStatusEvent(_ context.Context, value *StatusEvent) error {
 	if r.eventErr != nil {
 		return r.eventErr
@@ -743,5 +757,113 @@ func TestGetDetailRejectsMissingTenantScope(t *testing.T) {
 	service := NewService(&reportRepoStub{request: callbackRequest()}, nil, nil, nil, reportClock{now: time.Now()}, nil)
 	if _, err := service.GetDetail(context.Background(), Actor{CustomerID: 9}, 7); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("GetDetail() err=%v want not found", err)
+	}
+}
+
+func deliveryDeadLetterFixture(status Status) (*reportRepoStub, Outbox) {
+	request := callbackRequest()
+	request.Status, request.AccountID = status, "oidc-sub-1"
+	outbox := Outbox{ID: 21, EventID: "outbox-event-1", TenantID: request.TenantID, EventType: OutboxEventSubmitted, AggregateID: request.ID, Status: OutboxProcessing, LockedBy: "worker-1", RetryCount: 6}
+	return &reportRepoStub{request: request, outbox: &outbox}, outbox
+}
+
+func TestMarkDeliveryDeadLetterConvergesSubmittedRequestToVisibleTerminalFailure(t *testing.T) {
+	now := time.Date(2026, 10, 30, 2, 0, 0, 0, time.UTC)
+	repo, outbox := deliveryDeadLetterFixture(StatusSubmitted)
+	service := NewService(repo, nil, nil, nil, reportClock{now: now}, nil)
+	if err := service.MarkDeliveryDeadLetter(context.Background(), outbox); err != nil {
+		t.Fatalf("MarkDeliveryDeadLetter() err=%v", err)
+	}
+	if repo.update["status"] != StatusSubmissionFailed || repo.update["updated_by"] != "portal-report-worker" {
+		t.Fatalf("update=%+v", repo.update)
+	}
+	if len(repo.events) != 1 || repo.events[0].EventType != "SUBMISSION_FAILED" || repo.events[0].FromStatus != StatusSubmitted || repo.events[0].ToStatus != StatusSubmissionFailed || repo.events[0].ActorType != "SYSTEM" || repo.events[0].Sequence != repo.request.Version+1 {
+		t.Fatalf("events=%+v", repo.events)
+	}
+	if len(repo.notifications) != 1 || repo.notifications[0].Kind != NotificationKindSubmissionFailed || repo.notifications[0].Status != NotificationUnread || repo.notifications[0].RequestID != repo.request.ID {
+		t.Fatalf("notifications=%+v", repo.notifications)
+	}
+	if repo.file != nil || repo.ingestJob != nil {
+		t.Fatalf("dead letter must not publish files or ingest jobs: file=%+v job=%+v", repo.file, repo.ingestJob)
+	}
+}
+
+func TestMarkDeliveryDeadLetterRejectsNonSubmittedRequest(t *testing.T) {
+	for _, status := range []Status{StatusApproving, StatusApprovedProcessing, StatusIngestPending, StatusIssued, StatusRejected, StatusProcessingFailed} {
+		repo, outbox := deliveryDeadLetterFixture(status)
+		service := NewService(repo, nil, nil, nil, reportClock{now: time.Now()}, nil)
+		if err := service.MarkDeliveryDeadLetter(context.Background(), outbox); !errors.Is(err, ErrInvalidTransition) {
+			t.Fatalf("status=%s err=%v, want invalid transition", status, err)
+		}
+		if repo.updateRuns != 0 || len(repo.events) != 0 || len(repo.notifications) != 0 {
+			t.Fatalf("status=%s mutated aggregate: updates=%d events=%+v notifications=%+v", status, repo.updateRuns, repo.events, repo.notifications)
+		}
+	}
+}
+
+func TestMarkDeliveryDeadLetterFailsClosedWhenLeaseIsLost(t *testing.T) {
+	repo, outbox := deliveryDeadLetterFixture(StatusSubmitted)
+	repo.outbox.Status, repo.outbox.LockedBy = OutboxRetryWait, ""
+	service := NewService(repo, nil, nil, nil, reportClock{now: time.Now()}, nil)
+	if err := service.MarkDeliveryDeadLetter(context.Background(), outbox); err == nil || errors.Is(err, ErrInvalidTransition) {
+		t.Fatalf("lease loss err=%v", err)
+	}
+	if repo.updateRuns != 0 || len(repo.events) != 0 || len(repo.notifications) != 0 {
+		t.Fatalf("lease loss mutated aggregate: updates=%d events=%+v notifications=%+v", repo.updateRuns, repo.events, repo.notifications)
+	}
+
+	// 同一租约但被其他 Worker 接手时同样失败关闭。
+	repo, outbox = deliveryDeadLetterFixture(StatusSubmitted)
+	repo.outbox.LockedBy = "worker-2"
+	if err := NewService(repo, nil, nil, nil, reportClock{now: time.Now()}, nil).MarkDeliveryDeadLetter(context.Background(), outbox); err == nil {
+		t.Fatal("foreign lease was accepted")
+	}
+	if repo.updateRuns != 0 || len(repo.events) != 0 {
+		t.Fatalf("foreign lease mutated aggregate: updates=%d events=%+v", repo.updateRuns, repo.events)
+	}
+	// 事件身份不符时拒绝，避免用其他事件改写本申请。
+	repo, outbox = deliveryDeadLetterFixture(StatusSubmitted)
+	repo.outbox.EventID = "other-event"
+	if err := NewService(repo, nil, nil, nil, reportClock{now: time.Now()}, nil).MarkDeliveryDeadLetter(context.Background(), outbox); !errors.Is(err, ErrCallbackConflict) {
+		t.Fatalf("event identity mismatch err=%v", err)
+	}
+}
+
+func TestMarkDeliveryDeadLetterReplayIsIdempotentDuringDeadLetter(t *testing.T) {
+	repo, outbox := deliveryDeadLetterFixture(StatusSubmissionFailed)
+	// 死信已提交后重放：Outbox 行处于 DEAD_LETTER，申请已终态，精确重放不追加事件或通知。
+	repo.outbox.Status, repo.outbox.LockedBy = OutboxDeadLetter, ""
+	service := NewService(repo, nil, nil, nil, reportClock{now: time.Now()}, nil)
+	if err := service.MarkDeliveryDeadLetter(context.Background(), outbox); err != nil {
+		t.Fatalf("replay err=%v", err)
+	}
+	if err := service.MarkDeliveryDeadLetter(context.Background(), outbox); err != nil {
+		t.Fatalf("second replay err=%v", err)
+	}
+	if repo.updateRuns != 0 || len(repo.events) != 0 || len(repo.notifications) != 0 {
+		t.Fatalf("replay mutated aggregate: updates=%d events=%+v notifications=%+v", repo.updateRuns, repo.events, repo.notifications)
+	}
+}
+
+func TestMarkDeliveryDeadLetterRejectsInvalidOutboxIdentity(t *testing.T) {
+	repo, _ := deliveryDeadLetterFixture(StatusSubmitted)
+	service := NewService(repo, nil, nil, nil, reportClock{now: time.Now()}, nil)
+	for _, broken := range []Outbox{{}, {ID: 1}, {ID: 1, EventID: "evt"}, {ID: 1, EventID: "evt", AggregateID: 7}, {ID: 1, EventID: "evt", AggregateID: 7, TenantID: strings.Repeat("t", 65)}} {
+		if err := service.MarkDeliveryDeadLetter(context.Background(), broken); !errors.Is(err, ErrInvalidCallback) {
+			t.Fatalf("outbox=%+v err=%v, want invalid callback", broken, err)
+		}
+	}
+	if repo.updateRuns != 0 || len(repo.events) != 0 {
+		t.Fatalf("invalid identity mutated aggregate: updates=%d events=%+v", repo.updateRuns, repo.events)
+	}
+}
+
+func TestCallbackCannotProduceDeliveryTerminalState(t *testing.T) {
+	request := callbackRequest()
+	cb := validCallback()
+	cb.Status = StatusSubmissionFailed
+	service := NewService(&reportRepoStub{request: request}, nil, nil, nil, reportClock{now: time.Now()}, nil)
+	if err := service.ApplyCallback(context.Background(), cb); !errors.Is(err, ErrInvalidCallback) {
+		t.Fatalf("callback accepted delivery terminal state: %v", err)
 	}
 }

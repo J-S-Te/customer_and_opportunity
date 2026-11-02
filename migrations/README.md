@@ -87,6 +87,9 @@
 73. `000117_presale_multi_approval_nodes.up.sql`
 74. `000120_customer_import_source_lifecycle.up.sql`（先持久化导入源任务，再由API内后台上传；完成/过期精确解绑确认后清除临时密文，不删除历史业务作业；需同时发布支持绑定release墓碑的网关）
 75. `000121_presale_notification_identity.up.sql`（新增指派/事件/通知身份命名空间，新执行人统一平台 `USER`；不猜测回填历史身份。必须先迁移，再同步发布 CRM API 和两个通知 worker；本轮仅 native 校验，实际隔离 MySQL 由集成任务验证。）
+76. `000122_crm_session_username.up.sql`（会话显示用户名；仅展示用途，存量会话不因此撤销。）
+77. `000124_crm_oidc_session_idle.up.sql`（CRM 会话空闲模型：新增 `last_interactive_at` 并以 `created_at` 回填存量行；新增加密 refresh token 与访问令牌到期时间列，供服务端在 15 分钟访问令牌到期前刷新。不改其他表、不撤销存量会话；旧行保持 NULL 并按原有重验行为自然到期。上线前须先执行本迁移再发布新镜像。）
+78. `000125_crm_handover_gate.up.sql`（人员离职交接门闩行：新增 `(tenant_id, user_id)` 主键的 `crm_handover_gate`，把"冻结落库"与责任写入对同一用户串行化。纯新增、幂等可重复执行，行由 `INSERT ... ON DUPLICATE KEY UPDATE` 自愈，无需回填历史数据；上线顺序为「先执行本迁移 → 再发布 CRM 镜像」，旧镜像不读该表、可安全共库灰度。）
 
 ## customer_portal schema
 

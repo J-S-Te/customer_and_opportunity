@@ -15,8 +15,16 @@ import (
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/loginip"
 )
 
-// 本地会话最长只缓存授权十五分钟；实际过期时间还会受平台令牌有效期和服务端重验约束。
-const maxOIDCSessionTTL = 15 * time.Minute
+// 统一业务子系统会话策略：空闲 30 分钟滑动、绝对 8 小时不滑动。空闲只由显式浏览器活动
+// 接口续期；访问令牌到期由服务端使用 refresh token 刷新，不能再把本地会话截短到 15 分钟。
+const (
+	defaultOIDCSessionIdleTTL     = 30 * time.Minute
+	defaultOIDCSessionAbsoluteTTL = 8 * time.Hour
+	minOIDCSessionIdleTTL         = time.Minute
+	maxOIDCSessionIdleTTL         = 24 * time.Hour
+	// 绝对期限的防御性上限；默认 8h 已覆盖完整工作时段，超长配置应视为运维错误。
+	maxOIDCSessionAbsoluteTTL = 7 * 24 * time.Hour
+)
 
 type Config struct {
 	Address                   string
@@ -36,7 +44,8 @@ type Config struct {
 	OIDCTenantID              string
 	OIDCRoleConfigHash        string
 	OIDCSessionCookieName     string
-	OIDCSessionTTL            time.Duration
+	OIDCSessionIdleTTL        time.Duration
+	OIDCSessionAbsoluteTTL    time.Duration
 	OIDCBackchannelLogoutTTL  time.Duration
 	OIDCSessionSecure         bool
 	OIDCMaxRoles              int
@@ -190,9 +199,23 @@ func LoadConfig() (Config, error) {
 	if err != nil {
 		return Config{}, fmt.Errorf("OIDC_ALLOW_INSECURE_HTTP_SESSION: %w", err)
 	}
-	sessionTTL, err := time.ParseDuration(valueOrDefault("OIDC_SESSION_TTL", "15m"))
+	sessionIdleTTL, err := time.ParseDuration(valueOrDefault("OIDC_SESSION_IDLE_TTL", defaultOIDCSessionIdleTTL.String()))
 	if err != nil {
-		return Config{}, fmt.Errorf("OIDC_SESSION_TTL: %w", err)
+		return Config{}, fmt.Errorf("OIDC_SESSION_IDLE_TTL: %w", err)
+	}
+	// 绝对期限优先取新键；兼容旧键 OIDC_SESSION_TTL：旧环境未显式配置新键时以旧值作为本次
+	// 绝对期限，避免升级瞬间把既有部署静默放大到 8h。两者都配置时以新键为准。
+	sessionAbsoluteTTL := defaultOIDCSessionAbsoluteTTL
+	if raw := strings.TrimSpace(os.Getenv("OIDC_SESSION_ABSOLUTE_TTL")); raw != "" {
+		sessionAbsoluteTTL, err = time.ParseDuration(raw)
+		if err != nil {
+			return Config{}, fmt.Errorf("OIDC_SESSION_ABSOLUTE_TTL: %w", err)
+		}
+	} else if raw = strings.TrimSpace(os.Getenv("OIDC_SESSION_TTL")); raw != "" {
+		sessionAbsoluteTTL, err = time.ParseDuration(raw)
+		if err != nil {
+			return Config{}, fmt.Errorf("OIDC_SESSION_TTL: %w", err)
+		}
 	}
 	backchannelLogoutTTL, err := time.ParseDuration(valueOrDefault("OIDC_BACKCHANNEL_LOGOUT_MAX_TTL", "5m"))
 	if err != nil {
@@ -332,7 +355,7 @@ func LoadConfig() (Config, error) {
 		OIDCIssuer: os.Getenv("OIDC_ISSUER"), OIDCBackchannelBaseURL: os.Getenv("OIDC_BACKCHANNEL_BASE_URL"),
 		OIDCClientID: os.Getenv("OIDC_CLIENT_ID"), OIDCClientSecret: os.Getenv("OIDC_CLIENT_SECRET"), OIDCIDPHint: strings.TrimSpace(valueOrDefault("OIDC_IDP_HINT", "basic-platform")), OIDCRedirectURI: os.Getenv("OIDC_REDIRECT_URI"), OIDCPostLogoutRedirectURI: os.Getenv("OIDC_POST_LOGOUT_REDIRECT_URI"),
 		OIDCScopes: splitFields(valueOrDefault("OIDC_SCOPES", "openid profile")), OIDCTenantID: os.Getenv("OIDC_TENANT_ID"), OIDCRoleConfigHash: os.Getenv("OIDC_ROLE_CONFIG_HASH"),
-		OIDCSessionCookieName: valueOrDefault("OIDC_SESSION_COOKIE_NAME", "customer_opportunity_session"), OIDCSessionTTL: sessionTTL, OIDCBackchannelLogoutTTL: backchannelLogoutTTL, OIDCSessionSecure: sessionSecure, OIDCMaxRoles: maxRoles,
+		OIDCSessionCookieName: valueOrDefault("OIDC_SESSION_COOKIE_NAME", "customer_opportunity_session"), OIDCSessionIdleTTL: sessionIdleTTL, OIDCSessionAbsoluteTTL: sessionAbsoluteTTL, OIDCBackchannelLogoutTTL: backchannelLogoutTTL, OIDCSessionSecure: sessionSecure, OIDCMaxRoles: maxRoles,
 		AllowInsecureHTTPSession: allowInsecureHTTPSession,
 		MachineTokenIssuer:       os.Getenv("MACHINE_TOKEN_ISSUER"), MachineTokenAudience: os.Getenv("MACHINE_TOKEN_AUDIENCE"),
 		MachineTokenPublicKeyPath:        os.Getenv("MACHINE_TOKEN_PUBLIC_KEY_PATH"),
@@ -748,8 +771,13 @@ func (c Config) validateOIDC() error {
 			return fmt.Errorf("%s is required", key)
 		}
 	}
-	if c.OIDCSessionTTL <= 0 || c.OIDCSessionTTL > maxOIDCSessionTTL {
-		return fmt.Errorf("OIDC_SESSION_TTL must be positive and at most %s", maxOIDCSessionTTL)
+	// 空闲与绝对期限必须显式有效且绝对大于空闲；任一非法都在启动期失败关闭，
+	// 不能让部署带着"永远不会空闲过期"或"绝对期限短于空闲"的配置上线。
+	if c.OIDCSessionIdleTTL < minOIDCSessionIdleTTL || c.OIDCSessionIdleTTL > maxOIDCSessionIdleTTL {
+		return fmt.Errorf("OIDC_SESSION_IDLE_TTL must be between %s and %s", minOIDCSessionIdleTTL, maxOIDCSessionIdleTTL)
+	}
+	if c.OIDCSessionAbsoluteTTL <= c.OIDCSessionIdleTTL || c.OIDCSessionAbsoluteTTL > maxOIDCSessionAbsoluteTTL {
+		return fmt.Errorf("OIDC_SESSION_ABSOLUTE_TTL must be greater than OIDC_SESSION_IDLE_TTL and at most %s", maxOIDCSessionAbsoluteTTL)
 	}
 	if c.OIDCBackchannelLogoutTTL != 0 && (c.OIDCBackchannelLogoutTTL < 30*time.Second || c.OIDCBackchannelLogoutTTL > 15*time.Minute) {
 		return fmt.Errorf("OIDC_BACKCHANNEL_LOGOUT_MAX_TTL must be between 30s and 15m")

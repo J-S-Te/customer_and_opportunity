@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/database"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/handoverguard"
 	"gorm.io/gorm"
 )
 
@@ -94,21 +96,36 @@ type responsibilityRow struct {
 }
 
 // CreateFreeze 幂等创建冻结。
+// 插入冻结行前先锁 (tenant, user) 门闩行：责任分配写事务同样先锁这一行，
+// 因此"冻结落库"与"通过检查的在途写入"被串行化，不会互相穿过对方的检查。
 func (repository *GORMRepository) CreateFreeze(ctx context.Context, freeze Freeze) (Freeze, bool, error) {
 	record := freezeRow{ID: freeze.ID, TenantID: freeze.TenantID, BatchID: freeze.BatchID, RequestID: freeze.RequestID,
 		UserID: freeze.UserID, Status: freeze.Status, FrozenAt: freeze.FrozenAt.UTC(),
 		CreatedAt: freeze.FrozenAt.UTC(), UpdatedAt: freeze.FrozenAt.UTC()}
-	if err := repository.db.WithContext(ctx).Create(&record).Error; err != nil {
-		if !isDuplicate(err) {
-			return Freeze{}, false, err
+	var created Freeze
+	var inserted bool
+	err := repository.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if lockErr := handoverguard.Lock(tx, freeze.TenantID, freeze.UserID); lockErr != nil {
+			return lockErr
 		}
-		existing, found, lookupErr := repository.ActiveFreeze(ctx, freeze.TenantID, freeze.UserID)
-		if lookupErr != nil || !found {
-			return Freeze{}, false, fmt.Errorf("handover freeze lookup failed: %v", lookupErr)
+		if createErr := tx.Create(&record).Error; createErr != nil {
+			if !isDuplicate(createErr) {
+				return createErr
+			}
+			existing, found, lookupErr := activeFreezeRow(tx, freeze.TenantID, freeze.UserID)
+			if lookupErr != nil || !found {
+				return fmt.Errorf("handover freeze lookup failed: %v", lookupErr)
+			}
+			created, inserted = freezeFromRow(existing), false
+			return nil
 		}
-		return existing, false, nil
+		created, inserted = freezeFromRow(record), true
+		return nil
+	})
+	if err != nil {
+		return Freeze{}, false, err
 	}
-	return freezeFromRow(record), true, nil
+	return created, inserted, nil
 }
 
 // ReleaseFreeze 解除冻结；重复解除幂等。
@@ -133,16 +150,26 @@ func (repository *GORMRepository) ReleaseFreeze(ctx context.Context, tenantID, b
 
 // ActiveFreeze 判断用户当前是否被交接冻结（写路径据此拒绝新责任）。
 func (repository *GORMRepository) ActiveFreeze(ctx context.Context, tenantID, userID string) (Freeze, bool, error) {
-	var record freezeRow
-	err := repository.db.WithContext(ctx).Where("tenant_id = ? AND user_id = ? AND status = ?", tenantID, userID, FreezeFrozen).
-		Order("frozen_at DESC").Take(&record).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return Freeze{}, false, nil
-	}
-	if err != nil {
+	record, found, err := activeFreezeRow(database.FromContext(ctx, repository.db), tenantID, userID)
+	if err != nil || !found {
 		return Freeze{}, false, err
 	}
 	return freezeFromRow(record), true, nil
+}
+
+// activeFreezeRow 在同一连接/事务上读取最新 FROZEN 行。
+// 调用方已开启事务时必须复用该事务，冻结复核才与门闩行锁在同一快照内成立。
+func activeFreezeRow(db *gorm.DB, tenantID, userID string) (freezeRow, bool, error) {
+	var record freezeRow
+	err := db.Where("tenant_id = ? AND user_id = ? AND status = ?", tenantID, userID, FreezeFrozen).
+		Order("frozen_at DESC").Take(&record).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return freezeRow{}, false, nil
+	}
+	if err != nil {
+		return freezeRow{}, false, err
+	}
+	return record, true, nil
 }
 
 // ListPendingApprovalInstances 返回待审的售前审批实例候选（有界、按租户）。
@@ -290,6 +317,10 @@ func (repository *GORMRepository) TransferOwnership(ctx context.Context, in Tran
 		if !errors.Is(err, gorm.ErrRecordNotFound) {
 			return err
 		}
+		// 承接人冻结与改派对同一门闩行串行化：预检之后落库的冻结同样会拒绝本次改派。
+		if guardErr := guardSuccessor(tx, in); guardErr != nil {
+			return guardErr
+		}
 		fields := map[string]any{"owner_user_id": in.ToUserID, "updated_by": in.ToUserID, "updated_at": now.UTC(), "version": gorm.Expr("version + 1")}
 		if repository.orgResolver != nil {
 			orgID, resolveErr := repository.orgResolver.PrimaryOrganization(ctx, in.TenantID, in.ToUserID)
@@ -402,6 +433,18 @@ func optional(value string) *string {
 
 func isDuplicate(err error) bool {
 	return err != nil && strings.Contains(strings.ToLower(err.Error()), "duplicate")
+}
+
+// guardSuccessor 在改派事务内锁承接人的门闩行并复核冻结。
+// 承接人处于交接冻结时不得接收新责任，且该判定与冻结落库串行化。
+func guardSuccessor(tx *gorm.DB, in TransferInput) error {
+	if err := handoverguard.Guard(tx, in.TenantID, in.ToUserID); err != nil {
+		if errors.Is(err, handoverguard.ErrUserFrozen) {
+			return fmt.Errorf("successor %s is frozen by an in-flight handover: %w", in.ToUserID, ErrFrozen)
+		}
+		return err
+	}
+	return nil
 }
 
 // 售前请求的终态：这些请求的承接任务不再计入交接责任。

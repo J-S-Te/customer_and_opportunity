@@ -99,6 +99,65 @@ func TestHTTPContractVerifierNotFoundAndCustomerMismatchReturnFalse(t *testing.T
 	}
 }
 
+func TestHTTPContractVerifierAcceptsCustomerMatchedContractWithoutOpportunity(t *testing.T) {
+	// 合同可以先归属 CRM 客户、后关联商机；摘要返回 crm_opportunity_id=0 时
+	// 仍应视为“属于该客户”，不能把正常签约核验错误判为无效响应。
+	response := `{"code":"OK","message":"ok","request_id":"contract-request","data":{"contract_id":"01J00000000000000000000000","contract_number":"HT-1","crm_customer_id":7,"crm_opportunity_id":0,"linked_at":"2026-08-01T01:02:03Z"}}`
+	verifier, closeServer := newContractVerifierForResponse(t, http.StatusOK, response)
+	defer closeServer()
+	belongs, err := verifier.BelongsToCustomer(context.Background(), "HT-1", 7)
+	if err != nil || !belongs {
+		t.Fatalf("BelongsToCustomer()=%v,%v", belongs, err)
+	}
+}
+
+// TestHTTPContractVerifierParsesLinkEvidenceFields 固定“合同摘要新增证据字段可解析”：
+// 合同子系统（BIZ-linked_at 方案 A）在成功响应里新增 linked_at_source /
+// linked_at_precision / first_linked_at。本仓解码结构对这些字段零容忍
+// （DisallowUnknownFields），因此字段白名单必须与合同子系统同批次放开；
+// 放开后严格解码仍必须成功，且新增字段不得影响归属判定。
+func TestHTTPContractVerifierParsesLinkEvidenceFields(t *testing.T) {
+	response := `{"code":"OK","message":"ok","request_id":"contract-request","data":{"contract_id":"01J00000000000000000000000","contract_number":"HT-1","crm_customer_id":7,"crm_opportunity_id":9,"linked_at":"2026-08-01T01:02:03Z","linked_at_source":"AUDIT_LOG","linked_at_precision":"exact","first_linked_at":"2026-07-01T01:02:03Z"}}`
+	verifier, closeServer := newContractVerifierForResponse(t, http.StatusOK, response)
+	defer closeServer()
+	belongs, err := verifier.BelongsToCustomer(context.Background(), "HT-1", 7)
+	if err != nil || !belongs {
+		t.Fatalf("BelongsToCustomer()=%v,%v 新证据字段必须可解析且不影响归属判定", belongs, err)
+	}
+	// 同一份响应必须能被严格解码成包含证据字段的结构；字段缺失或拼错时
+	// DisallowUnknownFields 会在这里报错，而不是等生产调用才发现。
+	var envelope contractSummaryEnvelope
+	raw := []byte(response)
+	if err := decodeContractSummaryJSON(raw, &envelope); err != nil || envelope.Data == nil {
+		t.Fatalf("严格解码失败: %v data=%+v", err, envelope.Data)
+	}
+	data := envelope.Data
+	if data.LinkedAtSource != "AUDIT_LOG" || data.LinkedAtPrecision != "exact" ||
+		!data.FirstLinkedAt.Equal(time.Date(2026, 7, 1, 1, 2, 3, 0, time.UTC)) {
+		t.Fatalf("证据字段解析错误: %+v", data)
+	}
+}
+
+// TestHTTPContractVerifierDoesNotRejectApproximateLinkedAt 固定“approx 不拒绝核验”：
+// 历史合同没有关联证据时合同侧回退 updated_at 并标注 APPROX_CONTRACT_UPDATED/approx。
+// 精度只是告知调用方该时间不能用于判断业务先后顺序，客户一致时核验必须照常通过。
+func TestHTTPContractVerifierDoesNotRejectApproximateLinkedAt(t *testing.T) {
+	response := `{"code":"OK","message":"ok","request_id":"contract-request","data":{"contract_id":"01J00000000000000000000000","contract_number":"HT-1","crm_customer_id":7,"crm_opportunity_id":0,"linked_at":"2026-08-01T01:02:03Z","linked_at_source":"APPROX_CONTRACT_UPDATED","linked_at_precision":"approx","first_linked_at":"2026-08-01T01:02:03Z"}}`
+	verifier, closeServer := newContractVerifierForResponse(t, http.StatusOK, response)
+	defer closeServer()
+	belongs, err := verifier.BelongsToCustomer(context.Background(), "HT-1", 7)
+	if err != nil || !belongs {
+		t.Fatalf("BelongsToCustomer()=%v,%v approx 精度不得导致核验失败", belongs, err)
+	}
+	// 精度不是客户归属：客户不一致时 approx 也必须判为“不属于该客户”。
+	mismatch := strings.Replace(response, `"crm_customer_id":7`, `"crm_customer_id":8`, 1)
+	verifier, closeServer = newContractVerifierForResponse(t, http.StatusOK, mismatch)
+	defer closeServer()
+	if belongs, err := verifier.BelongsToCustomer(context.Background(), "HT-1", 7); err != nil || belongs {
+		t.Fatalf("BelongsToCustomer()=%v,%v 客户不一致必须判为不属于", belongs, err)
+	}
+}
+
 func TestHTTPContractVerifierRejectsMalformedAndOversizedResponses(t *testing.T) {
 	valid := `{"code":"OK","message":"ok","request_id":"contract-request","data":{"contract_id":"01J00000000000000000000000","contract_number":"HT-1","crm_customer_id":7,"crm_opportunity_id":9,"linked_at":"2026-08-01T01:02:03Z"}}`
 	tests := []struct{ name, response string }{

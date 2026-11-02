@@ -20,6 +20,7 @@ var (
 	ErrReportExportLimit       = errors.New("CRM_PRESALE_REPORT_EXPORT_LIMIT")
 	ErrReportExportBusy        = errors.New("CRM_PRESALE_REPORT_EXPORT_BUSY")
 	ErrContactPhoneUnavailable = errors.New("CRM_PRESALE_CONTACT_PHONE_UNAVAILABLE")
+	ErrAuditUnavailable        = errors.New("CRM_PRESALE_AUDIT_UNAVAILABLE")
 	ErrDependencyUnavailable   = errors.New("INTEGRATION_DEPENDENCY_UNAVAILABLE")
 	ErrOpportunityNotEligible  = errors.New("CRM_PRESALE_OPPORTUNITY_NOT_ELIGIBLE")
 	ErrTeamLeadInvalid         = errors.New("CRM_PRESALE_TEAM_LEAD_INVALID")
@@ -52,6 +53,8 @@ func apiError(err error) error {
 		return apperror.New(http.StatusTooManyRequests, "CRM_PRESALE_REPORT_EXPORT_BUSY", "报表导出繁忙，请稍后重试")
 	case errors.Is(err, ErrContactPhoneUnavailable):
 		return apperror.New(http.StatusServiceUnavailable, "CRM_PRESALE_CONTACT_PHONE_UNAVAILABLE", "contact phone is unavailable")
+	case errors.Is(err, ErrAuditUnavailable):
+		return apperror.New(http.StatusServiceUnavailable, "CRM_PRESALE_AUDIT_UNAVAILABLE", "audit trail is unavailable; the presale request was not changed")
 	case errors.Is(err, ErrDependencyUnavailable):
 		return apperror.New(http.StatusServiceUnavailable, "INTEGRATION_DEPENDENCY_UNAVAILABLE", "integration dependency is unavailable")
 	case errors.Is(err, ErrOpportunityNotEligible):

@@ -282,6 +282,25 @@ func TestCreateGrantRequiresIssuedScopedReportAndTrustedFile(t *testing.T) {
 	}
 }
 
+func TestCreateGrantTreatsSubmissionFailedAsNonSuccess(t *testing.T) {
+	// 投递死信写入的终态不是已发放：即使存在历史文件元数据也不能签发下载授权。
+	now := time.Now().UTC()
+	repo, actor, token := downloadFixture(now)
+	repo.grant = nil
+	repo.request.Status = StatusSubmissionFailed
+	service := NewDownloadService(repo, nil, nil, reportClock{now: now}, idStub{value: "id"}, tokenStub{token: token}, 0)
+	_, err := service.CreateGrant(context.Background(), actor, 7, GrantCommand{IdempotencyKey: "click"})
+	if !errors.Is(err, ErrReportNotIssued) {
+		t.Fatalf("submission failed err=%v, want not issued", err)
+	}
+	if repo.grant != nil || len(repo.events) != 0 || repo.revoked != 0 {
+		t.Fatalf("grant=%+v events=%+v revoked=%d", repo.grant, repo.events, repo.revoked)
+	}
+	if StatusSubmissionFailed.IsTerminalFailure() != true || StatusIssued.IsTerminalFailure() != false || StatusSubmitted.IsTerminalFailure() != false {
+		t.Fatal("terminal failure classification must exclude in-flight and issued states")
+	}
+}
+
 func TestCreateGrantIDORIsNotFound(t *testing.T) {
 	now := time.Now().UTC()
 	repo, _, token := downloadFixture(now)

@@ -30,7 +30,16 @@ const (
 	StatusIssued             Status = "ISSUED"
 	StatusRejected           Status = "REJECTED"
 	StatusProcessingFailed   Status = "PROCESSING_FAILED"
+	// StatusSubmissionFailed 是投递死信写入的终态：申请从未被下游受理。
+	// 客户恢复方式是新建申请并使用新的幂等键，不复用旧下游幂等键。
+	StatusSubmissionFailed Status = "SUBMISSION_FAILED"
 )
+
+// IsTerminalFailure 标识同一申请上客户无法继续推进的终止失败态。
+// 下载授权、发放通知和任何成功判定都不得把这些状态当作已发放或仍在处理。
+func (s Status) IsTerminalFailure() bool {
+	return s == StatusSubmissionFailed || s == StatusProcessingFailed || s == StatusRejected
+}
 
 type Request struct {
 	ActorModel
@@ -80,12 +89,14 @@ type StatusEvent struct {
 func (StatusEvent) TableName() string { return "portal_report_status_events" }
 
 const (
-	NotificationKindIssued = "REPORT_ISSUED"
-	NotificationUnread     = "UNREAD"
-	NotificationRead       = "READ"
+	NotificationKindIssued           = "REPORT_ISSUED"
+	NotificationKindSubmissionFailed = "REPORT_SUBMISSION_FAILED"
+	NotificationUnread               = "UNREAD"
+	NotificationRead                 = "READ"
 )
 
-// Notification 是账号范围内的 Portal 站内信，仅在可信报告入库成功后创建，不代表邮件或外部消息已送达。
+// Notification 是账号范围内的 Portal 站内信，只在可信报告入库成功或申请投递进入终止失败态时创建，
+// 不代表邮件或外部消息已送达。
 type Notification struct {
 	ID         uint64     `gorm:"primaryKey;autoIncrement;uniqueIndex:uq_portal_report_notification_scope,priority:3"`
 	TenantID   string     `gorm:"size:64;not null;uniqueIndex:uq_portal_report_notification_scope,priority:1"`
@@ -299,3 +310,14 @@ type Outbox struct {
 }
 
 func (Outbox) TableName() string { return "portal_report_outbox" }
+
+const (
+	// OutboxEventSubmitted 是投递 Worker 唯一消费的事件类型。
+	OutboxEventSubmitted = "PORTAL_REPORT_SUBMITTED"
+
+	OutboxPending    = "PENDING"
+	OutboxProcessing = "PROCESSING"
+	OutboxRetryWait  = "RETRY_WAIT"
+	OutboxSent       = "SENT"
+	OutboxDeadLetter = "DEAD_LETTER"
+)

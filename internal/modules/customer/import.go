@@ -531,6 +531,11 @@ func (s *Service) commitImportRow(ctx context.Context, principal auth.Principal,
 		}
 		return err
 	}
+	// 事务内最终防线：预览通过不代表提交时仍可分配，冻结可能在预览之后落库。
+	// 门闩行锁与交接侧 CreateFreeze 串行化，回滚整个行事务而不是写入半成品。
+	if guardErr := s.guardOwnerWrite(ctx, principal.TenantID, command.OwnerUserID); guardErr != nil {
+		return guardErr
+	}
 	// 预览到提交之间数据可能变化，因此必须在每行事务内重新检查重复项，不能把预览当写入授权。
 	duplicates, err := s.repo.FindDuplicates(ctx, principal.TenantID, normalizeName(command.Name), s.codec.HMAC(command.UnifiedCreditCode), 0)
 	if err != nil {

@@ -19,6 +19,9 @@ const (
 	loginTTL                   = 10 * time.Minute
 	authorizationCheckInterval = 15 * time.Second
 	authorizationMaxStale      = 60 * time.Second
+	// sessionTokenRefreshLead 在访问令牌临近到期前提前刷新，避免平台授权上下文对过期令牌返回 401；
+	// 实际刷新在会话行锁内串行化，多个并发请求不会同时消费同一个一次性 refresh token。
+	sessionTokenRefreshLead = 60 * time.Second
 )
 
 var (
@@ -36,8 +39,11 @@ func loginFailure(stage string, cause error) error {
 
 type Options struct {
 	TenantID, RoleConfigHash, EnvironmentCode string
-	SessionTTL                                time.Duration
-	MaxRoles                                  int
+	// SessionIdleTTL 与 SessionAbsoluteTTL 分别是浏览会话的空闲与绝对期限；
+	// 绝对期限不再被访问令牌有效期截短，访问令牌只用于在线重验授权并会提前刷新。
+	SessionIdleTTL     time.Duration
+	SessionAbsoluteTTL time.Duration
+	MaxRoles           int
 }
 
 type Service struct {
@@ -50,6 +56,9 @@ type Service struct {
 }
 
 func NewService(repo repository, oidc oidcClient, encryptionKey []byte, options Options, brokers ...brokerVerifier) (*Service, error) {
+	if options.SessionIdleTTL <= 0 || options.SessionAbsoluteTTL <= options.SessionIdleTTL {
+		return nil, errors.New("CRM session idle and absolute durations are invalid")
+	}
 	codec, err := newSecretCodec(encryptionKey)
 	if err != nil {
 		return nil, err
@@ -149,8 +158,14 @@ func (s *Service) CompleteLogin(ctx context.Context, state, code string, callbac
 			slog.Default().Warn("CRM Keycloak broker verification callback failed", "identity_id", claims.IdentityID, "application_code", "customer_and_opportunity", "error", err)
 		}
 	}
-	// 本地会话绝不能比上游 ID/访问令牌 或本地策略 TTL 活得更久。
-	expiresAt := earliestExpiry(claims.ExpiresAt, now.Add(s.options.SessionTTL))
+	// 本地会话按统一策略使用绝对期限，不再被短命访问令牌截短；服务端会用 refresh token 在
+	// 访问令牌到期前刷新。若提供方没有签发 refresh token（客户端未开启 refresh 授权），
+	// 只能回退到旧语义，以本次令牌到期时间封顶，避免产生无法在线重验却看似有效的长会话。
+	expiresAt := now.Add(s.options.SessionAbsoluteTTL)
+	if strings.TrimSpace(claims.RefreshToken) == "" {
+		expiresAt = earliestExpiry(claims.ExpiresAt, expiresAt)
+		slog.Default().Warn("CRM OIDC login has no refresh token; session is capped by access token expiry", "application_code", "customer_and_opportunity")
+	}
 	if !expiresAt.After(now) {
 		return LoginResult{}, loginFailure("session_expiry", errors.New("session expiry is not in the future"))
 	}
@@ -178,7 +193,16 @@ func (s *Service) CompleteLogin(ctx context.Context, state, code string, callbac
 	if err != nil {
 		return LoginResult{}, err
 	}
-	session := &Session{SessionIDHash: tokenHash(rawSession), TenantID: claims.TenantID, PlatformUserID: claims.IdentityID, OIDCSessionID: claims.OIDCSessionID, PersonID: claims.PersonID, DisplayName: claims.DisplayName, Username: claims.Username, LoginIP: claims.LoginIP, PrimaryOrgID: claims.PrimaryOrgID, OrganizationIDsJSON: organizationIDsJSON, RolesJSON: rolesJSON, PermissionsJSON: permissionsJSON, DataScopesJSON: dataScopesJSON, RoleConfigHash: claims.RoleConfigHash, AuthzRevision: claims.AuthzRevision, AccessTokenCipher: accessTokenCipher, ExpiresAt: expiresAt, AuthorizationCheckedAt: now, CreatedAt: now, LastSeenAt: now}
+	var refreshTokenCipher []byte
+	if strings.TrimSpace(claims.RefreshToken) != "" {
+		refreshTokenCipher, err = s.codec.encrypt(claims.RefreshToken)
+		if err != nil {
+			return LoginResult{}, err
+		}
+	}
+	accessTokenExpiresAt := claims.ExpiresAt.UTC()
+	lastInteractiveAt := now
+	session := &Session{SessionIDHash: tokenHash(rawSession), TenantID: claims.TenantID, PlatformUserID: claims.IdentityID, OIDCSessionID: claims.OIDCSessionID, PersonID: claims.PersonID, DisplayName: claims.DisplayName, Username: claims.Username, LoginIP: claims.LoginIP, PrimaryOrgID: claims.PrimaryOrgID, OrganizationIDsJSON: organizationIDsJSON, RolesJSON: rolesJSON, PermissionsJSON: permissionsJSON, DataScopesJSON: dataScopesJSON, RoleConfigHash: claims.RoleConfigHash, AuthzRevision: claims.AuthzRevision, AccessTokenCipher: accessTokenCipher, RefreshTokenCipher: refreshTokenCipher, AccessTokenExpiresAt: &accessTokenExpiresAt, ExpiresAt: expiresAt, AuthorizationCheckedAt: now, CreatedAt: now, LastSeenAt: now, LastInteractiveAt: &lastInteractiveAt}
 	if err := s.repo.CreateSession(ctx, session); err != nil {
 		return LoginResult{}, err
 	}
@@ -190,9 +214,18 @@ func (s *Service) Authenticate(ctx context.Context, rawSession string) (sharedau
 		return sharedauth.Principal{}, ErrUnauthenticated
 	}
 	now := s.now().UTC()
-	session, err := s.repo.FindSession(ctx, tokenHash(rawSession), now)
+	hash := tokenHash(rawSession)
+	session, err := s.repo.FindSession(ctx, hash, now, s.options.SessionIdleTTL)
 	if err != nil || session.TenantID != s.options.TenantID {
 		return sharedauth.Principal{}, ErrUnauthenticated
+	}
+	// 访问令牌只用于在线重验：临近到期时在会话行锁内刷新一次，会话本身仍由本地空闲与绝对期限判定。
+	if sessionNeedsTokenRefresh(session, now) {
+		refreshed, refreshErr := s.refreshSessionTokens(ctx, hash, now, "")
+		if refreshErr != nil {
+			return sharedauth.Principal{}, s.refreshFailure(ctx, hash, now, refreshErr)
+		}
+		session = refreshed
 	}
 	stored, err := claimsFromSession(session)
 	if err != nil {
@@ -208,17 +241,33 @@ func (s *Service) Authenticate(ctx context.Context, rawSession string) (sharedau
 			return sharedauth.Principal{}, ErrUnauthenticated
 		}
 		current, currentErr := s.oidc.UserInfo(ctx, accessToken)
+		if errors.Is(currentErr, sharedauthorization.ErrTokenRejected) {
+			// 访问令牌可能在两次重验之间过期：在会话行锁内确认未被其他请求刷新后再尝试一次。
+			if refreshed, refreshErr := s.refreshSessionTokens(ctx, session.SessionIDHash, now, accessToken); refreshErr == nil {
+				session = refreshed
+				if accessToken, decryptErr = s.codec.decrypt(session.AccessTokenCipher); decryptErr != nil {
+					_ = s.repo.RevokeSession(ctx, session.SessionIDHash, now)
+					return sharedauth.Principal{}, ErrUnauthenticated
+				}
+				current, currentErr = s.oidc.UserInfo(ctx, accessToken)
+			} else {
+				// 与预刷新一致：提供方明确拒绝则撤销本地会话，平台暂时不可用则保留会话。
+				currentErr = s.refreshFailure(ctx, session.SessionIDHash, now, refreshErr)
+			}
+		}
 		if errors.Is(currentErr, sharedauthorization.ErrUnavailable) {
 			if now.Sub(session.AuthorizationCheckedAt) > authorizationMaxStale {
 				return sharedauth.Principal{}, ErrAuthorizationUnavailable
 			}
-			if err := s.repo.TouchSession(ctx, session.SessionIDHash, now, time.Time{}); err != nil {
+			if err := s.repo.TouchSession(ctx, session.SessionIDHash, now, time.Time{}, s.options.SessionIdleTTL); err != nil {
 				return sharedauth.Principal{}, ErrUnauthenticated
 			}
-			return principalFromClaims(stored), nil
+			return s.sessionPrincipal(stored, session), nil
 		}
 		if currentErr != nil {
-			_ = s.repo.RevokeSession(ctx, session.SessionIDHash, now)
+			if !errors.Is(currentErr, ErrUnauthenticated) {
+				_ = s.repo.RevokeSession(ctx, session.SessionIDHash, now)
+			}
 			return sharedauth.Principal{}, ErrUnauthenticated
 		}
 		current, currentErr = normalizeAuthorization(current, s.options.TenantID, s.options.RoleConfigHash, s.options.EnvironmentCode, s.options.MaxRoles)
@@ -228,10 +277,129 @@ func (s *Service) Authenticate(ctx context.Context, rawSession string) (sharedau
 		}
 		checkedAt = now
 	}
-	if err := s.repo.TouchSession(ctx, session.SessionIDHash, now, checkedAt); err != nil {
+	if err := s.repo.TouchSession(ctx, session.SessionIDHash, now, checkedAt, s.options.SessionIdleTTL); err != nil {
 		return sharedauth.Principal{}, ErrUnauthenticated
 	}
-	return principalFromClaims(stored), nil
+	return s.sessionPrincipal(stored, session), nil
+}
+
+// SessionActivity 是显式活动接口返回的权威空闲窗口。Remaining 已按绝对期限收窄且不为负。
+type SessionActivity struct {
+	IdleTimeout time.Duration
+	Remaining   time.Duration
+}
+
+// RecordActivity 只在浏览器显式上报真实交互后推进 last_interactive_at；普通已认证请求
+// 只更新 last_seen_at，轮询或后台标签页不能为空闲会话续期。已过期/撤销会话返回未认证且不复活。
+func (s *Service) RecordActivity(ctx context.Context, rawSession string) (SessionActivity, error) {
+	if strings.TrimSpace(rawSession) == "" {
+		return SessionActivity{}, ErrUnauthenticated
+	}
+	now := s.now().UTC()
+	deadline, err := s.repo.RecordActivity(ctx, tokenHash(rawSession), now, s.options.SessionIdleTTL)
+	if err != nil {
+		if errors.Is(err, errNotFound) {
+			return SessionActivity{}, ErrUnauthenticated
+		}
+		return SessionActivity{}, fmt.Errorf("record CRM session activity: %w", ErrAuthorizationUnavailable)
+	}
+	remaining := deadline.Sub(now)
+	if remaining < 0 {
+		remaining = 0
+	}
+	return SessionActivity{IdleTimeout: s.options.SessionIdleTTL, Remaining: remaining}, nil
+}
+
+// sessionPrincipal 把权威空闲期限挂到认证主体上，供 /auth/me 与活动接口使用；
+// 业务授权仍只来自 principalFromClaims，空闲字段不参与任何权限判断。
+func (s *Service) sessionPrincipal(claims verifiedClaims, session *Session) sharedauth.Principal {
+	principal := principalFromClaims(claims)
+	principal.SessionIdleTimeout = s.options.SessionIdleTTL
+	lastInteractive := session.CreatedAt
+	if session.LastInteractiveAt != nil {
+		lastInteractive = *session.LastInteractiveAt
+	}
+	principal.SessionIdleDeadline = sessionIdleDeadlineAt(lastInteractive, s.options.SessionIdleTTL, session.ExpiresAt)
+	return principal
+}
+
+// sessionIdleDeadlineAt 取"最后交互 + 空闲策略"与绝对到期中的较早者，和 /auth/me 的剩余时间一致。
+func sessionIdleDeadlineAt(lastInteractive time.Time, idleTTL time.Duration, absolute time.Time) time.Time {
+	deadline := lastInteractive.UTC().Add(idleTTL)
+	if absolute.UTC().Before(deadline) {
+		return absolute.UTC()
+	}
+	return deadline
+}
+
+// sessionNeedsTokenRefresh 仅对已保存 refresh token 与令牌到期时间的会话提前刷新；
+// 升级前的存量行两列为 NULL，保持原有"重验失败即退出"的行为自然到期。
+func sessionNeedsTokenRefresh(session *Session, now time.Time) bool {
+	if session == nil || len(session.RefreshTokenCipher) == 0 || session.AccessTokenExpiresAt == nil {
+		return false
+	}
+	return !session.AccessTokenExpiresAt.After(now.Add(sessionTokenRefreshLead))
+}
+
+// refreshSessionTokens 在会话行锁内刷新访问令牌。staleAccessToken 非空表示在线重验刚被拒绝：
+// 只有持久化令牌仍是那枚被拒令牌时才强制刷新，避免并发请求重复消费一次性 refresh token。
+func (s *Service) refreshSessionTokens(ctx context.Context, hash string, now time.Time, staleAccessToken string) (*Session, error) {
+	return s.repo.RefreshSessionTokens(ctx, hash, now, s.options.SessionIdleTTL, func(current *Session) (SessionTokens, bool, error) {
+		stale := staleAccessToken != ""
+		if stale {
+			currentAccess, err := s.codec.decrypt(current.AccessTokenCipher)
+			if err != nil {
+				return SessionTokens{}, false, err
+			}
+			stale = currentAccess == staleAccessToken
+		}
+		if !stale && !sessionNeedsTokenRefresh(current, now) {
+			return SessionTokens{}, false, nil
+		}
+		return s.refreshTokens(ctx, current)
+	})
+}
+
+func (s *Service) refreshTokens(ctx context.Context, current *Session) (SessionTokens, bool, error) {
+	if len(current.RefreshTokenCipher) == 0 {
+		return SessionTokens{}, false, errOIDCRefreshRejected
+	}
+	refreshToken, err := s.codec.decrypt(current.RefreshTokenCipher)
+	if err != nil || strings.TrimSpace(refreshToken) == "" {
+		return SessionTokens{}, false, errOIDCRefreshRejected
+	}
+	refreshed, err := s.oidc.RefreshToken(ctx, refreshToken)
+	if err != nil {
+		return SessionTokens{}, false, err
+	}
+	accessCipher, err := s.codec.encrypt(refreshed.AccessToken)
+	if err != nil {
+		return SessionTokens{}, false, err
+	}
+	refreshCipher, err := s.codec.encrypt(refreshed.RefreshToken)
+	if err != nil {
+		return SessionTokens{}, false, err
+	}
+	expiresAt := refreshed.ExpiresAt.UTC()
+	if expiresAt.IsZero() || expiresAt.After(current.ExpiresAt) {
+		// 访问令牌期限不能越过本地绝对期限；提供方未返回到期时间时按会话绝对期限保证再次重验。
+		expiresAt = current.ExpiresAt.UTC()
+	}
+	return SessionTokens{AccessTokenCipher: accessCipher, RefreshTokenCipher: refreshCipher, AccessTokenExpiresAt: expiresAt}, true, nil
+}
+
+// refreshFailure 把刷新失败映射为不会放大权限的错误：提供方明确拒绝 refresh token 时撤销本地会话；
+// 会话已在行锁内消失按未认证；其余（网络、平台 5xx）保留会话并返回依赖不可用，等待下一次快速重试。
+func (s *Service) refreshFailure(ctx context.Context, hash string, now time.Time, refreshErr error) error {
+	if errors.Is(refreshErr, errNotFound) {
+		return ErrUnauthenticated
+	}
+	if errors.Is(refreshErr, errOIDCRefreshRejected) {
+		_ = s.repo.RevokeSession(ctx, hash, now)
+		return ErrUnauthenticated
+	}
+	slog.Default().Warn("CRM session access token refresh is temporarily unavailable", "application_code", "customer_and_opportunity")
+	return ErrAuthorizationUnavailable
 }
 
 func (s *Service) Logout(ctx context.Context, rawSession string) {

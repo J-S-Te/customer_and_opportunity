@@ -271,7 +271,7 @@ func TestReplaceAssignmentsCanonicalReplayAndCancelReplay(t *testing.T) {
 		engineers: []Engineer{{PersonID: "p1", PersonName: "P1", Role: "technician", ValidFlag: true}, {PersonID: "p2", PersonName: "P2", Role: "project_manager", ValidFlag: true}},
 		replays:   map[string]*MutationReplay{},
 	}
-	service := NewService(repo, nil, nil, fixedClock{at: time.Date(2026, 8, 1, 8, 0, 0, 0, time.UTC)}, fixedIDs{}).UseOwnerDirectory(assignmentOwnerCatalog{
+	service := NewService(repo, nil, nil, fixedClock{at: time.Date(2026, 8, 1, 8, 0, 0, 0, time.UTC)}, fixedIDs{}).UseFreezeChecker(allowAllFreezeChecker{}).UseOwnerDirectory(assignmentOwnerCatalog{
 		users: map[string]ownerdirectory.User{
 			"p1": {ID: "p1", DisplayName: "P1", Organizations: []ownerdirectory.Organization{{ID: "org-1", Name: "技术中心", IsPrimary: true}}},
 			"p2": {ID: "p2", DisplayName: "P2", Organizations: []ownerdirectory.Organization{{ID: "org-1", Name: "技术中心", IsPrimary: true}}},
