@@ -42,12 +42,9 @@ type App struct {
 	reportProviders *reportDownloadProviders
 }
 
-// New 装配当前应用的配置、存储、认证及服务入口。
-// 参数：ctx为调用上下文与取消边界。
-//
-//	config为当前应用运行配置。
-//
-// 返回值：装配后的应用或认证实例；配置与依赖装配失败时返回错误。
+// New 用途：装配 Portal 配置、存储、认证及限流治理日志。
+// 参数：ctx 为应用上下文；config 为已解析运行配置。
+// 返回值：应用实例；配置或依赖初始化失败返回错误。
 func New(ctx context.Context, config Config) (*App, error) {
 	licenseCtx, licenseCancel := context.WithCancel(ctx)
 	started := false
@@ -205,6 +202,19 @@ func New(ctx context.Context, config Config) (*App, error) {
 		defer cancel()
 		return sqlDB.PingContext(pingCtx) == nil
 	}, Logger: slog.Default()})
+	// M-10：限流额度与桶键依赖生效配置，启动时显式记录，便于部署核对"是否真的按客户端 IP 分桶"。
+	// 只记录前缀数量与额度，不输出客户端地址或密钥。
+	governanceLog := slog.Default()
+	governanceLog.Info("Portal anonymous entry rate limit",
+		"login_per_window", config.loginRateLimit(), "activate_per_window", config.activateRateLimit(),
+		"callback_per_window", config.callbackRateLimit(), "window", config.authRateLimitWindow().String(),
+		"trusted_proxy_prefixes", len(config.TrustedProxies))
+	if !hasNonLoopbackTrustedProxy(config.TrustedProxies) {
+		// 仅信任回环对端时，经网关转发的请求全部落在一个桶里：限流会退化为全站共享额度，
+		// 一次恶意突发即可让所有客户无法登录。部署必须通过 APP_TRUSTED_PROXIES 纳入网关/前端地址。
+		governanceLog.Warn("Portal trusted proxies cover loopback only; per-client login rate limiting will collapse into a single bucket behind a gateway",
+			"trusted_proxy_prefixes", len(config.TrustedProxies))
+	}
 	auditContext, auditCancel := context.WithCancel(context.Background())
 	auditDone := make(chan struct{})
 	go func() {

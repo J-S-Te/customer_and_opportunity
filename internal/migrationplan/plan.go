@@ -90,6 +90,7 @@ var baseFiles = map[Schema][]string{
 		"000119_add_ip_provenance_to_portal_request_audit_outbox.up.sql",
 		"000123_portal_session_username.up.sql",
 		"000125_portal_central_session_governance.up.sql",
+		"000126_portal_activation_expiry_index.up.sql",
 	},
 }
 

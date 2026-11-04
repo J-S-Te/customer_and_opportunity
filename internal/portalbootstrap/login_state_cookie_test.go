@@ -34,9 +34,9 @@ func (loginStateOIDC) AuthorizationURL(state, nonce, codeChallenge, returnPath s
 	return "https://idp.example/authorize?state=" + url.QueryEscape(state), nil
 }
 
-// TestPortalNormalLoginStateCookie 核验普通登录入口在中央模式下建立同浏览器state绑定。
-// 参数：t为使用真实账号服务随机状态与保护器的HTTP单测上下文。
-// 返回值：无；Cookie缺失、错误状态、属性变化或旧模式额外写入即失败。
+// TestPortalNormalLoginStateCookie 用途：验证普通及中央登录都建立浏览器 state 绑定。
+// 参数：t 为该行为的测试上下文。
+// 返回值：无；行为与预期不符时测试失败。
 func TestPortalNormalLoginStateCookie(t *testing.T) {
 	for _, enabled := range []bool{false, true} {
 		config := validPortalConfig()
@@ -47,22 +47,31 @@ func TestPortalNormalLoginStateCookie(t *testing.T) {
 		}
 		cookies := response.Result().Cookies()
 		if !enabled {
-			if len(cookies) != 0 {
-				t.Fatal("legacy login unexpectedly changed cookies")
+			// 普通登录必须把原始 state 绑定到当前浏览器；M-3 的登录 state Cookie 不能省略。
+			if len(cookies) != 1 || cookies[0].Name != loginStateCookieName {
+				t.Fatalf("legacy login must issue exactly one browser state cookie, got %#v", cookies)
 			}
 			continue
 		}
-		if len(cookies) != 1 {
-			t.Fatalf("central normal login needs one state cookie, got %d", len(cookies))
+		if len(cookies) != 2 {
+			t.Fatalf("central normal login needs browser and central state cookies, got %d", len(cookies))
 		}
-		cookie := cookies[0]
+		var cookie *http.Cookie
+		for _, candidate := range cookies {
+			if candidate.Name == config.SessionCookieName+"_oidc_state" {
+				cookie = candidate
+			}
+		}
+		if cookie == nil {
+			t.Fatalf("central state cookie missing: %#v", cookies)
+		}
 		target, _ := url.Parse(response.Header().Get("Location"))
-		if cookie.Name != config.SessionCookieName+"_oidc_state" || cookie.Value == "" ||
+		if cookie.Value == "" ||
 			cookie.Value != target.Query().Get("state") || cookie.Path != config.PathPrefix ||
 			!cookie.HttpOnly || !cookie.Secure || cookie.SameSite != http.SameSiteLaxMode ||
 			cookie.MaxAge != 600 || !cookie.Expires.After(time.Now()) ||
 			cookie.Expires.After(time.Now().Add(11*time.Minute)) {
-			t.Fatal("login state cookie does not match the protected browser transaction")
+			t.Fatal("central login state cookie does not match the protected browser transaction")
 		}
 	}
 }

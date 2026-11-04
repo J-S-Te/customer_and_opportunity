@@ -1,6 +1,7 @@
 package portalbootstrap
 
 import (
+	"crypto/subtle"
 	"net/http"
 	"net/url"
 	"strings"
@@ -134,6 +135,47 @@ func currentSession(c *gin.Context) *account.Session {
 
 func sessionCookie(config Config, value string, expires time.Time) *http.Cookie {
 	return &http.Cookie{Name: config.SessionCookieName, Value: value, Path: config.PathPrefix, Expires: expires, HttpOnly: true, Secure: config.SessionCookieSecure, SameSite: http.SameSiteLaxMode}
+}
+
+// loginStateCookieName 是 OIDC state 的浏览器绑定 Cookie（M-3）。原始 state 只下发到
+// 浏览器，服务端仍只持久化 sha256 摘要；路径收窄到 <prefix>/auth，使公开的激活入口和
+// SPA 页面路由都收不到该值。
+const loginStateCookieName = "customer_portal_login_state"
+
+// loginStateTTL 与 account.Service 建立 activation 的 10 分钟有效期一致，浏览器不会比
+// 服务端更早或更久地保留 state。
+const loginStateTTL = 10 * time.Minute
+
+// loginStateCookie 用途：生成作用域收窄到认证路径的浏览器绑定 Cookie。
+// 参数：config 为路径及安全配置；value 为原始 state；expires 为截止时间。
+// 返回值：HttpOnly、SameSite=Lax 的 state Cookie。
+func loginStateCookie(config Config, value string, expires time.Time) *http.Cookie {
+	return &http.Cookie{Name: loginStateCookieName, Value: value, Path: config.PathPrefix + "/auth", Expires: expires, HttpOnly: true, Secure: config.SessionCookieSecure, SameSite: http.SameSiteLaxMode}
+}
+
+// expiredLoginStateCookie 用途：以相同名称和路径清除已终止的浏览器登录状态。
+// 参数：config 为原 Cookie 的路径及安全配置。
+// 返回值：空值且 MaxAge=-1 的过期 Cookie。
+func expiredLoginStateCookie(config Config) *http.Cookie {
+	cookie := loginStateCookie(config, "", time.Unix(1, 0))
+	cookie.MaxAge = -1
+	return cookie
+}
+
+// verifyLoginState 用途：在消费激活上下文前常量时间比较浏览器与回调 state。
+// 参数：browserState 为 Cookie 值；queryState 为回调查询值。
+// 返回值：匹配时 nil；缺失、含空白或失配返回非法登录状态。
+func verifyLoginState(browserState, queryState string) error {
+	if browserState == "" || queryState == "" {
+		return account.ErrInvalidLoginState
+	}
+	if strings.ContainsAny(browserState, "\r\n\t ") || strings.ContainsAny(queryState, "\r\n\t ") {
+		return account.ErrInvalidLoginState
+	}
+	if subtle.ConstantTimeCompare([]byte(browserState), []byte(queryState)) != 1 {
+		return account.ErrInvalidLoginState
+	}
+	return nil
 }
 
 func safeLocalPath(value, prefix string) bool {

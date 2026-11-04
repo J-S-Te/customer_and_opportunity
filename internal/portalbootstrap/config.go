@@ -17,6 +17,19 @@ import (
 // Portal 本地会话最多缓存授权十五分钟，且不能超过上游令牌的实际有效期。
 const maxSessionTTL = 15 * time.Minute
 
+// 匿名登录入口限流的默认值与可用区间（M-10）。限流器是进程内固定窗口
+// （见 rate_limit.go）：只保证单副本额度，多副本部署必须由入口网关
+// limit_req 兜底，且桶键依赖可信代理配置才能还原真实客户端地址。
+const (
+	defaultLoginRateLimit      = 20
+	defaultActivateRateLimit   = 20
+	defaultCallbackRateLimit   = 30
+	defaultAuthRateLimitWindow = time.Minute
+	maxAuthRateLimit           = 600
+	minAuthRateLimitWindow     = time.Second
+	maxAuthRateLimitWindow     = time.Hour
+)
+
 type Config struct {
 	CentralSessionEnabled       bool
 	CentralSessionPublicBaseURL string
@@ -38,6 +51,12 @@ type Config struct {
 	SessionTTL                  time.Duration
 	BackchannelLogoutTTL        time.Duration
 	AccountSecurityCenterURL    string
+	// 匿名登录入口的进程内固定窗口限流额度（每 RateLimitWindow 每客户端地址）。
+	// 0 表示取默认值；不等于关闭限流。
+	LoginRateLimit    int
+	ActivateRateLimit int
+	CallbackRateLimit int
+	RateLimitWindow   time.Duration
 	// AllowInsecureHTTPSession 仅用于无 HTTPS 的测试服务器：显式开启后允许非回环 HTTP
 	// 源使用非 Secure 会话 Cookie 和非 HTTPS 安全中心链接。默认关闭，生产必须保持 false。
 	AllowInsecureHTTPSession  bool
@@ -157,6 +176,23 @@ func LoadConfig() (Config, error) {
 	if err != nil {
 		return Config{}, fmt.Errorf("APP_TRUSTED_PROXIES: %w", err)
 	}
+	// 登录入口限流额度：缺省使用内置默认值，解析失败直接退出，避免带病启动。
+	loginRateLimit, err := intValueOrDefault("PORTAL_LOGIN_RATE_LIMIT", defaultLoginRateLimit)
+	if err != nil {
+		return Config{}, fmt.Errorf("PORTAL_LOGIN_RATE_LIMIT: %w", err)
+	}
+	activateRateLimit, err := intValueOrDefault("PORTAL_ACTIVATE_RATE_LIMIT", defaultActivateRateLimit)
+	if err != nil {
+		return Config{}, fmt.Errorf("PORTAL_ACTIVATE_RATE_LIMIT: %w", err)
+	}
+	callbackRateLimit, err := intValueOrDefault("PORTAL_CALLBACK_RATE_LIMIT", defaultCallbackRateLimit)
+	if err != nil {
+		return Config{}, fmt.Errorf("PORTAL_CALLBACK_RATE_LIMIT: %w", err)
+	}
+	rateLimitWindow, err := time.ParseDuration(valueOrDefault("PORTAL_AUTH_RATE_LIMIT_WINDOW", defaultAuthRateLimitWindow.String()))
+	if err != nil {
+		return Config{}, fmt.Errorf("PORTAL_AUTH_RATE_LIMIT_WINDOW: %w", err)
+	}
 	config := Config{
 		CentralSessionEnabled:       centralEnabled,
 		CentralSessionPublicBaseURL: valueOrDefault("PORTAL_CENTRAL_SESSION_PUBLIC_BASE_URL", os.Getenv("PORTAL_PUBLIC_ORIGIN")),
@@ -170,7 +206,9 @@ func LoadConfig() (Config, error) {
 		SessionCookieName:        valueOrDefault("PORTAL_SESSION_COOKIE_NAME", "customer_portal_session"), SessionCookieSecure: secure, SessionTTL: ttl, BackchannelLogoutTTL: backchannelLogoutTTL,
 		AllowInsecureHTTPSession: allowInsecureHTTPSession,
 		AccountSecurityCenterURL: os.Getenv("PORTAL_ACCOUNT_SECURITY_CENTER_URL"),
-		MachineTokenIssuer:       os.Getenv("PORTAL_MACHINE_TOKEN_ISSUER"), MachineTokenAudience: os.Getenv("PORTAL_MACHINE_TOKEN_AUDIENCE"),
+		LoginRateLimit:           loginRateLimit, ActivateRateLimit: activateRateLimit,
+		CallbackRateLimit: callbackRateLimit, RateLimitWindow: rateLimitWindow,
+		MachineTokenIssuer: os.Getenv("PORTAL_MACHINE_TOKEN_ISSUER"), MachineTokenAudience: os.Getenv("PORTAL_MACHINE_TOKEN_AUDIENCE"),
 		MachineTokenPublicKeyPath: os.Getenv("PORTAL_MACHINE_TOKEN_PUBLIC_KEY_PATH"),
 		CRMProvisionClientSubject: os.Getenv("PORTAL_CRM_PROVISION_CLIENT_SUBJECT"), CRMDisableClientSubject: os.Getenv("PORTAL_CRM_DISABLE_CLIENT_SUBJECT"),
 		ProjectHistoryStaleAfter: projectHistoryStaleAfter, CRMInviteBaseURL: os.Getenv("PORTAL_CRM_INVITE_BASE_URL"),
@@ -296,6 +334,20 @@ func (c Config) validate() error {
 	if c.ProjectHistoryStaleAfter < 0 {
 		return fmt.Errorf("PORTAL_PROJECT_HISTORY_STALE_AFTER must be positive")
 	}
+	// 0 表示采用内置默认额度；显式配置必须落在可解释区间，防止把登录入口配成
+	// “无限制”（超大值）或“全站锁死”（极小值）而不被启动检查发现。
+	for key, value := range map[string]int{
+		"PORTAL_LOGIN_RATE_LIMIT":    c.LoginRateLimit,
+		"PORTAL_ACTIVATE_RATE_LIMIT": c.ActivateRateLimit,
+		"PORTAL_CALLBACK_RATE_LIMIT": c.CallbackRateLimit,
+	} {
+		if value < 0 || value > maxAuthRateLimit {
+			return fmt.Errorf("%s must be between 0 (default) and %d requests per window", key, maxAuthRateLimit)
+		}
+	}
+	if c.RateLimitWindow != 0 && (c.RateLimitWindow < minAuthRateLimitWindow || c.RateLimitWindow > maxAuthRateLimitWindow) {
+		return fmt.Errorf("PORTAL_AUTH_RATE_LIMIT_WINDOW must be between %s and %s", minAuthRateLimitWindow, maxAuthRateLimitWindow)
+	}
 	if c.CatalogSyncEnabled {
 		// 开启目录同步就必须完整提供发布客户端，不能把“同步失败”降级成继续使用未知版本目录。
 		for key, value := range map[string]string{
@@ -379,11 +431,63 @@ func valueOrDefault(key, fallback string) string {
 	}
 	return fallback
 }
+
+// intValueOrDefault 用途：解析整数环境配置，缺省时使用既定额度。
+// 参数：key 为环境变量名；fallback 为缺省额度。
+// 返回值：解析值；非整数配置返回错误。
+func intValueOrDefault(key string, fallback int) (int, error) {
+	value := os.Getenv(key)
+	if value == "" {
+		return fallback, nil
+	}
+	return strconv.Atoi(value)
+}
 func (c Config) projectHistoryStalenessThreshold() time.Duration {
 	if c.ProjectHistoryStaleAfter == 0 {
 		return 10 * time.Minute
 	}
 	return c.ProjectHistoryStaleAfter
+}
+
+// loginRateLimit 用途：读取登录额度，零值保持默认限流。
+// 参数：无。
+// 返回值：登录入口每窗口每客户端的有效额度。
+func (c Config) loginRateLimit() int {
+	return authRateLimitOrDefault(c.LoginRateLimit, defaultLoginRateLimit)
+}
+
+// activateRateLimit 用途：读取邀请额度，零值保持默认限流。
+// 参数：无。
+// 返回值：邀请入口每窗口每客户端的有效额度。
+func (c Config) activateRateLimit() int {
+	return authRateLimitOrDefault(c.ActivateRateLimit, defaultActivateRateLimit)
+}
+
+// callbackRateLimit 用途：读取回调额度，零值保持默认限流。
+// 参数：无。
+// 返回值：回调入口每窗口每客户端的有效额度。
+func (c Config) callbackRateLimit() int {
+	return authRateLimitOrDefault(c.CallbackRateLimit, defaultCallbackRateLimit)
+}
+
+// authRateLimitWindow 用途：读取有效固定窗口，零值使用默认窗口。
+// 参数：无。
+// 返回值：限流时间窗口。
+func (c Config) authRateLimitWindow() time.Duration {
+	if c.RateLimitWindow <= 0 {
+		return defaultAuthRateLimitWindow
+	}
+	return c.RateLimitWindow
+}
+
+// authRateLimitOrDefault 用途：让未指定额度仍按默认值限流。
+// 参数：value 为配置额度；fallback 为入口默认额度。
+// 返回值：正数配置值或默认额度。
+func authRateLimitOrDefault(value, fallback int) int {
+	if value <= 0 {
+		return fallback
+	}
+	return value
 }
 func fields(value string) []string {
 	return strings.FieldsFunc(value, func(r rune) bool { return r == ' ' || r == ',' })
