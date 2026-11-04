@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -231,8 +232,30 @@ func (r *GORMRepository) RevertActivation(ctx context.Context, tenantID string, 
 	return nil
 }
 
+// activationCleanupBatch 限制单次机会式清理的删除行数：既有无界 DELETE 会长时间持锁，
+// 并可能把登录请求拖进长事务。批量上限保证单次登录的最坏代价可预期。
+const activationCleanupBatch = 1000
+
+// CreateActivation 用途：写入登录激活上下文并有界清理过期记录。
+// 参数：ctx 为请求；value 为服务生成的激活上下文。
+// 返回值：插入错误；清理失败记录告警但不阻断本次登录。
 func (r *GORMRepository) CreateActivation(ctx context.Context, value *ActivationContext) error {
-	return r.tx(ctx).Create(value).Error
+	db := r.tx(ctx)
+	if err := db.Create(value).Error; err != nil {
+		return err
+	}
+	// 有界机会式清理（M-10）：每个登录/激活请求都会新增一行约 3~4KB 的 activation 上下文，
+	// 过期后既不能回溯（state 摘要已无查询价值），也不应无限增长。这里在写入成功后顺带删除
+	// 已过期（含已消费）的历史行，单次最多 activationCleanupBatch 行，依赖
+	// idx_portal_activation_expiry_scan 收敛扫描范围。
+	// 清理失败只记录，不影响本次登录：可用性优先，积压由后续请求继续分摊。
+	if err := db.Exec(
+		`DELETE FROM portal_activation_contexts WHERE expires_at <= ? ORDER BY expires_at LIMIT ?`,
+		time.Now().UTC(), activationCleanupBatch,
+	).Error; err != nil {
+		slog.WarnContext(ctx, "portal activation context cleanup failed", "module", "portal_account", "error", err)
+	}
+	return nil
 }
 
 // ConsumeActivation 原子消费未过期的门户登录或激活上下文。

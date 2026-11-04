@@ -143,27 +143,11 @@ func NewRouter(deps RouterDependencies) *gin.Engine {
 		}
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
-	base.GET("/auth/login", beginLogin(deps))
-	base.GET("/activate", func(c *gin.Context) {
-		token := strings.TrimSpace(c.Query("token"))
-		if token == "" {
-			response.Error(c, account.ErrInvalidLoginState)
-			return
-		}
-		result, err := deps.Account.BeginInvitationLogin(c.Request.Context(), token, deps.Config.PathPrefix+"/")
-		if err != nil {
-			response.Error(c, err)
-			return
-		}
-		if deps.Config.CentralSessionEnabled {
-			cookie := sessionCookie(deps.Config, result.State, time.Now().UTC().Add(10*time.Minute))
-			cookie.Name = deps.Config.SessionCookieName + "_oidc_state"
-			cookie.MaxAge = 600
-			http.SetCookie(c.Writer, cookie)
-		}
-		c.Redirect(http.StatusFound, result.AuthorizationURL)
-	})
-	base.GET("/auth/callback", completeLogin(deps))
+	// 三个匿名入口共用一套进程内固定窗口限流（M-10）：超限时直接 Abort，
+	// 不会创建 activation 上下文、不写 portal_auth_events，也不发起 OIDC 跳转。
+	base.GET("/auth/login", portalAuthRateLimit(deps.Config, deps.Config.loginRateLimit()), beginLogin(deps))
+	base.GET("/activate", portalAuthRateLimit(deps.Config, deps.Config.activateRateLimit()), beginActivationLogin(deps))
+	base.GET("/auth/callback", portalAuthRateLimit(deps.Config, deps.Config.callbackRateLimit()), completeLogin(deps))
 	base.GET("/auth/session", authenticate(deps), centralLifecycle(deps, false))
 	base.POST("/auth/activity", authenticate(deps), originAndCSRF(deps.Config), centralLifecycle(deps, true))
 	base.POST("/auth/logout", authenticate(deps), originAndCSRF(deps.Config), logout(deps))
@@ -409,24 +393,67 @@ func beginLogin(deps RouterDependencies) gin.HandlerFunc {
 			response.Error(c, err)
 			return
 		}
-		if deps.Config.CentralSessionEnabled {
-			cookie := sessionCookie(deps.Config, result.State, time.Now().UTC().Add(10*time.Minute))
-			cookie.Name = deps.Config.SessionCookieName + "_oidc_state"
-			cookie.MaxAge = 600
-			http.SetCookie(c.Writer, cookie)
-		}
-		c.Redirect(http.StatusFound, result.AuthorizationURL)
+		redirectWithLoginState(c, deps.Config, result)
 	}
 }
 
-// completeLogin 完成已核验门户登录并写入独立Cookie。
-// 参数：deps为既有应用装配依赖。
-// 返回值：与该调用匹配的核验或持久化结果；失败保留原有错误语义。
+// beginActivationLogin 用途：以统一 state 绑定逻辑启动邀请激活登录。
+// 参数：deps 为 Portal 配置与已装配账号服务。
+// 返回值：激活跳转处理器；非法邀请或依赖失败返回业务错误。
+func beginActivationLogin(deps RouterDependencies) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		token := strings.TrimSpace(c.Query("token"))
+		if token == "" {
+			response.Error(c, account.ErrInvalidLoginState)
+			return
+		}
+		result, err := deps.Account.BeginInvitationLogin(c.Request.Context(), token, deps.Config.PathPrefix+"/")
+		if err != nil {
+			response.Error(c, err)
+			return
+		}
+		redirectWithLoginState(c, deps.Config, result)
+	}
+}
+
+// redirectWithLoginState 用途：先绑定浏览器 state 再跳转，中央模式另发桥接 Cookie。
+// 参数：c 为响应上下文；config 为 Cookie 配置；start 为登录事务。
+// 返回值：无；缺失 state 时返回错误而不跳转。
+func redirectWithLoginState(c *gin.Context, config Config, start account.LoginStart) {
+	if start.State == "" {
+		// 缺失 state 的授权地址无法完成回调校验，宁可失败也不签发无绑定登录。
+		response.Error(c, account.ErrInvalidLoginState)
+		return
+	}
+	http.SetCookie(c.Writer, loginStateCookie(config, start.State, time.Now().Add(loginStateTTL)))
+	if config.CentralSessionEnabled {
+		cookie := sessionCookie(config, start.State, time.Now().UTC().Add(10*time.Minute))
+		cookie.Name = config.SessionCookieName + "_oidc_state"
+		cookie.MaxAge = 600
+		http.SetCookie(c.Writer, cookie)
+	}
+	c.Redirect(http.StatusFound, start.AuthorizationURL)
+}
+
+// completeLogin 用途：验证浏览器绑定后处理中央桥接或最终 OIDC 回调。
+// 参数：deps 为 Portal 配置及已装配账号服务。
+// 返回值：回调处理器；终止路径清 state，成功桥接保留第二阶段状态。
 func completeLogin(deps RouterDependencies) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		browserState := ""
+		if cookie, err := c.Request.Cookie(loginStateCookieName); err == nil {
+			browserState = cookie.Value
+		}
+		// 所有回调（包括中央桥接第一阶段）先校验浏览器绑定，失败不进入账号服务。
+		if err := verifyLoginState(browserState, c.Query("state")); err != nil {
+			http.SetCookie(c.Writer, expiredLoginStateCookie(deps.Config))
+			response.Error(c, err)
+			return
+		}
 		if deps.Config.CentralSessionEnabled {
 			cookie, err := c.Request.Cookie(deps.Config.SessionCookieName + "_oidc_state")
-			if err != nil || cookie.Value == "" || cookie.Value != c.Query("state") {
+			if err != nil || verifyLoginState(cookie.Value, c.Query("state")) != nil {
+				http.SetCookie(c.Writer, expiredLoginStateCookie(deps.Config))
 				response.Error(c, account.ErrInvalidLoginState)
 				return
 			}
@@ -434,14 +461,17 @@ func completeLogin(deps RouterDependencies) gin.HandlerFunc {
 			c.Header("Referrer-Policy", "no-referrer")
 			if ticket := c.Query("session_link_ticket"); ticket != "" {
 				if c.Query("code") != "" {
+					http.SetCookie(c.Writer, expiredLoginStateCookie(deps.Config))
 					response.Error(c, account.ErrInvalidLoginState)
 					return
 				}
 				target, err := deps.Account.AcceptSessionLink(c.Request.Context(), cookie.Value, ticket)
 				if err != nil {
+					http.SetCookie(c.Writer, expiredLoginStateCookie(deps.Config))
 					response.Error(c, err)
 					return
 				}
+				// 桥接成功只完成第一阶段；保留 state Cookie 供原 nonce/PKCE 的回调使用。
 				c.Redirect(http.StatusFound, target)
 				return
 			}
@@ -450,6 +480,8 @@ func completeLogin(deps RouterDependencies) gin.HandlerFunc {
 			expired.MaxAge = -1
 			http.SetCookie(c.Writer, expired)
 		}
+		// 终止回调先清理 Cookie，成功或依赖失败都不能重放旧的浏览器登录状态。
+		http.SetCookie(c.Writer, expiredLoginStateCookie(deps.Config))
 		if c.Query("error") != "" {
 			response.Error(c, account.ErrInvalidClaims)
 			return

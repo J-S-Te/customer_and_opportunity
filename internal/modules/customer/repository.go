@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/shopspring/decimal"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/opportunity"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/auth"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/businessclock"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/database"
@@ -30,7 +31,7 @@ type Repository interface {
 	LockActiveForWrite(context.Context, auth.Principal, uint64) (*Customer, error)
 	ListFollowups(context.Context, string, uint64, int, int) (pagination.Page[FollowupResponse], error)
 	ListChangeLogs(context.Context, string, uint64, int, int) (pagination.Page[ChangeLogResponse], error)
-	ListOpportunityHistory(context.Context, string, uint64, int, int) (pagination.Page[OpportunitySummary], error)
+	ListOpportunityHistory(context.Context, auth.Principal, uint64, int, int) (pagination.Page[OpportunitySummary], error)
 }
 
 // ScopedDuplicateRepository 是客户重复检查的可见性扩展点。
@@ -194,10 +195,13 @@ func (r *GORMRepository) ListChangeLogs(ctx context.Context, tenantID string, cu
 	return pagination.Page[ChangeLogResponse]{Items: items, Page: page, PageSize: pageSize, Total: total}, nil
 }
 
-func (r *GORMRepository) ListOpportunityHistory(ctx context.Context, tenantID string, customerID uint64, page, pageSize int) (pagination.Page[OpportunitySummary], error) {
+// ListOpportunityHistory 用途：在父客户校验后按商机唯一范围谓词读取历史。
+// 参数：ctx 为请求；principal 为主体；customerID 为父客户；page、pageSize 为分页。
+// 返回值：可见商机分页；客户不可见或查询失败返回错误。
+func (r *GORMRepository) ListOpportunityHistory(ctx context.Context, principal auth.Principal, customerID uint64, page, pageSize int) (pagination.Page[OpportunitySummary], error) {
 	page, pageSize = pagination.Normalize(page, pageSize)
-	db := database.FromContext(ctx, r.db).Table("crm_opportunities").
-		Where("tenant_id = ? AND customer_id = ? AND deleted_at IS NULL", tenantID, customerID)
+	db := opportunity.ApplyDataScope(database.FromContext(ctx, r.db).Table("crm_opportunities"), principal).
+		Where("crm_opportunities.customer_id = ?", customerID)
 	var total int64
 	if err := db.Count(&total).Error; err != nil {
 		return pagination.Page[OpportunitySummary]{}, err

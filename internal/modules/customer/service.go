@@ -800,15 +800,20 @@ func (s *Service) ListChangeLogs(ctx context.Context, id uint64, page, pageSize 
 	return s.repo.ListChangeLogs(ctx, principal.TenantID, id, page, pageSize)
 }
 
+// ListOpportunityHistory 用途：先验证父客户可见性，再传递完整主体查询商机历史。
+// 参数：ctx 为请求；id 为父客户；page、pageSize 为分页。
+// 返回值：可见商机分页；客户不可见或查询失败返回错误。
 func (s *Service) ListOpportunityHistory(ctx context.Context, id uint64, page, pageSize int) (pagination.Page[OpportunitySummary], error) {
 	principal, err := principalFromContext(ctx)
 	if err != nil {
 		return pagination.Page[OpportunitySummary]{}, err
 	}
+	// 父客户可见只证明客户本身可见；商机历史的条目范围必须由商机数据范围再收窄一次，
+	// 因此 principal 必须继续下传到仓储，不能只传租户。
 	if _, err = s.repo.FindByID(ctx, principal, id, false); err != nil {
 		return pagination.Page[OpportunitySummary]{}, err
 	}
-	return s.repo.ListOpportunityHistory(ctx, principal.TenantID, id, page, pageSize)
+	return s.repo.ListOpportunityHistory(ctx, principal, id, page, pageSize)
 }
 
 func (s *Service) ProjectHistory(ctx context.Context, id uint64, page, pageSize int) (ProjectHistoryPage, error) {

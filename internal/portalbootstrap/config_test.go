@@ -206,3 +206,56 @@ func TestPortalConfigCatalogSynchronizationIsOptionalButCompleteWhenEnabled(t *t
 		t.Fatal("catalog platform URL containing credentials was accepted")
 	}
 }
+
+// TestPortalAuthRateLimitConfigurationIsBounded 用途：验证登录限流配置的默认值及合法区间。
+// 参数：t 为该行为的测试上下文。
+// 返回值：无；行为与预期不符时测试失败。
+func TestPortalAuthRateLimitConfigurationIsBounded(t *testing.T) {
+	if err := validPortalConfig().validate(); err != nil {
+		t.Fatalf("zero-value rate limits rejected: %v", err)
+	}
+	config := validPortalConfig()
+	config.LoginRateLimit = 20
+	config.ActivateRateLimit = 20
+	config.CallbackRateLimit = 30
+	config.RateLimitWindow = time.Minute
+	if err := config.validate(); err != nil {
+		t.Fatalf("valid rate limits rejected: %v", err)
+	}
+	for name, mutate := range map[string]func(*Config){
+		"登录额度为负": func(value *Config) { value.LoginRateLimit = -1 },
+		"激活额度过大": func(value *Config) { value.ActivateRateLimit = maxAuthRateLimit + 1 },
+		"回调额度过大": func(value *Config) { value.CallbackRateLimit = maxAuthRateLimit + 1 },
+		"窗口过短":   func(value *Config) { value.RateLimitWindow = time.Millisecond },
+		"窗口过长":   func(value *Config) { value.RateLimitWindow = 2 * time.Hour },
+	} {
+		t.Run(name, func(t *testing.T) {
+			invalid := validPortalConfig()
+			mutate(&invalid)
+			err := invalid.validate()
+			if err == nil {
+				t.Fatal("invalid rate limit configuration accepted")
+			}
+			if !strings.Contains(err.Error(), "RATE_LIMIT") {
+				t.Fatalf("error must name the offending key: %v", err)
+			}
+		})
+	}
+}
+
+// TestPortalAuthRateLimitEnvironmentOverrides 用途：验证限流环境配置解析及非法值报错。
+// 参数：t 为该行为的测试上下文。
+// 返回值：无；行为与预期不符时测试失败。
+func TestPortalAuthRateLimitEnvironmentOverrides(t *testing.T) {
+	for name, want := range map[string]int{"3": 3, "0": 0} {
+		t.Setenv("PORTAL_LOGIN_RATE_LIMIT", name)
+		got, err := intValueOrDefault("PORTAL_LOGIN_RATE_LIMIT", defaultLoginRateLimit)
+		if err != nil || got != want {
+			t.Fatalf("override %q -> %d (%v)", name, got, err)
+		}
+	}
+	t.Setenv("PORTAL_LOGIN_RATE_LIMIT", "not-a-number")
+	if _, err := intValueOrDefault("PORTAL_LOGIN_RATE_LIMIT", defaultLoginRateLimit); err == nil {
+		t.Fatal("malformed rate limit must fail fast instead of silently defaulting")
+	}
+}
