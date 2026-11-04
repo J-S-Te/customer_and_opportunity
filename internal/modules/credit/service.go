@@ -131,6 +131,39 @@ func ensureCreditCustomerVisible(db *gorm.DB, principal auth.Principal, customer
 	return err
 }
 
+// creditApplicationNotFound 用途：统一不存在与范围外申请的 404，避免存在性探测。
+// 参数：无。
+// 返回值：申请不存在业务错误。
+func creditApplicationNotFound() error {
+	return apperror.New(404, "CRM_CREDIT_APPLICATION_NOT_FOUND", "credit application not found")
+}
+
+// ensureCreditApplicationCustomerVisible 用途：按客户范围验证申请可见性，不可见折叠为申请 404。
+// 参数：db 为查询会话；principal 为审批主体；customerID 为申请客户。
+// 返回值：可见时 nil；不可见为 404；数据库故障保留原错误。
+func ensureCreditApplicationCustomerVisible(db *gorm.DB, principal auth.Principal, customerID uint64) error {
+	err := ensureCreditCustomerVisible(db, principal, customerID)
+	if err == nil {
+		return nil
+	}
+	var appErr *apperror.Error
+	if errors.As(err, &appErr) && appErr.HTTPStatus == 404 {
+		return creditApplicationNotFound()
+	}
+	return err
+}
+
+// lockScopedCreditCustomer 用途：在已锁申请的事务中按范围锁定可用客户，保持申请到客户锁序。
+// 参数：tx 为事务；principal 为审批主体；customerID 为客户；dest 接收锁定行。
+// 返回值：查询错误；无可见可用客户时返回记录不存在。
+func lockScopedCreditCustomer(tx *gorm.DB, principal auth.Principal, customerID uint64, dest any) error {
+	return scopedCreditCustomers(tx, principal).
+		Clauses(clause.Locking{Strength: "UPDATE"}).
+		Select("crm_customers.id,crm_customers.credit_level").
+		Where("crm_customers.id=? AND crm_customers.status='ACTIVE' AND crm_customers.merged_into_id IS NULL", customerID).
+		Take(dest).Error
+}
+
 func defaultRuleSettings(tenant string, now time.Time) RuleSettings {
 	return RuleSettings{TenantID: tenant, GraceDays: 7, OnTimeThreshold: 2, LateThreshold: 2, LevelStep: 1, Enabled: true, UpdatedAt: now}
 }
@@ -626,6 +659,9 @@ func (s *Service) Apply(ctx context.Context, customerID uint64, in ApplyRequest)
 	return &out, nil
 }
 
+// Decide 用途：在申请和客户锁内按数据范围审批客户信用调整。
+// 参数：ctx 为请求；applicationID 为申请；approve 为决定；in 为意见与版本。
+// 返回值：审批结果；无权限、不可见、状态冲突或存储失败返回错误。
 func (s *Service) Decide(ctx context.Context, applicationID uint64, approve bool, in DecisionRequest) (*Application, error) {
 	p, ok := auth.FromContext(ctx)
 	if !ok {
@@ -644,9 +680,23 @@ func (s *Service) Decide(ctx context.Context, applicationID uint64, approve bool
 	now := s.now()
 	var out Application
 	err := database.FromContext(ctx, s.db).Transaction(func(tx *gorm.DB) error {
+		// 申请行本身没有归属列，范围在客户上。先做一次非锁定读取拿到 customer_id，
+		// 按客户数据范围判定可见性（与 Apply 的客户范围同口径）；不可见时统一回
+		// "申请不存在"，避免审批人通过错误码探测范围外客户/申请是否存在。
+		var target struct{ CustomerID uint64 }
+		if err := tx.Table("crm_customer_credit_applications").Select("customer_id").Where("tenant_id=? AND id=?", p.TenantID, applicationID).Take(&target).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return creditApplicationNotFound()
+			}
+			return err
+		}
+		if err := ensureCreditApplicationCustomerVisible(tx, p, target.CustomerID); err != nil {
+			return err
+		}
+		// 取得可见性结论后才锁定申请行，锁序仍保持“申请→客户”，与 Apply 一致。
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("tenant_id=? AND id=?", p.TenantID, applicationID).Take(&out).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return apperror.New(404, "CRM_CREDIT_APPLICATION_NOT_FOUND", "credit application not found")
+				return creditApplicationNotFound()
 			}
 			return err
 		}
@@ -660,7 +710,10 @@ func (s *Service) Decide(ctx context.Context, applicationID uint64, approve bool
 			ID          uint64
 			CreditLevel string
 		}
-		if err := tx.Table("crm_customers").Clauses(clause.Locking{Strength: "UPDATE"}).Select("id,credit_level").Where("tenant_id=? AND id=? AND status='ACTIVE' AND merged_into_id IS NULL AND deleted_at IS NULL", p.TenantID, out.CustomerID).Take(&customer).Error; err != nil {
+		// 客户锁同样必须落在主体可见范围内：范围在可见性校验与加锁之间发生变化时，
+		// 锁查询会失败而不是继续审批范围外客户的信用等级。失败按既有契约回 409
+		// （客户已失效/不可用）：调用方此前已通过 404 可见性闸门，失败不额外泄露存在性。
+		if err := lockScopedCreditCustomer(tx, p, out.CustomerID, &customer); err != nil {
 			return apperror.New(409, "CRM_CREDIT_APPLICATION_INVALIDATED", "customer is unavailable")
 		}
 		status := "REJECTED"
@@ -751,6 +804,9 @@ func (s *Service) Withdraw(ctx context.Context, customerID, applicationID uint64
 	return &out, nil
 }
 
+// Pending 用途：通过客户可见性子查询读取当前审批人的信用待办。
+// 参数：ctx 为携带认证主体的请求上下文。
+// 返回值：可见待办列表；认证、权限或查询失败返回错误。
 func (s *Service) Pending(ctx context.Context) ([]PendingApplication, error) {
 	p, ok := auth.FromContext(ctx)
 	if !ok {
@@ -763,11 +819,17 @@ func (s *Service) Pending(ctx context.Context) ([]PendingApplication, error) {
 	// 序列化为 JSON null，导致客户端在全部待办处理完毕时
 	// 将响应对象误认为条目列表。
 	items := make([]PendingApplication, 0)
-	err := database.FromContext(ctx, s.db).
+	db := database.FromContext(ctx, s.db)
+	// 审批待办必须与客户主数据同口径：只返回当前主体可见客户的申请，否则审批人能通过
+	// 待办事由、客户名称读到数据范围外的客户。join 已把 crm_customers 命名为 customer 别名，
+	// 而范围谓词使用 crm_customers 全限定列名，因此必须用独立子查询，不能直接套在 join 上。
+	visibleCustomers := scopedCreditCustomers(db.Session(&gorm.Session{NewDB: true}), p).Select("crm_customers.id")
+	err := db.
 		Table("crm_customer_credit_applications AS application").
 		Select("application.id, application.customer_id, customer.customer_no, customer.name AS customer_name, application.applicant_id, application.from_level, application.target_level, application.reason, application.status, application.approval_instance_id, application.created_at, application.updated_at, application.version").
 		Joins("LEFT JOIN crm_customers AS customer ON customer.tenant_id = application.tenant_id AND customer.id = application.customer_id").
 		Where("application.tenant_id=? AND application.status='PENDING'", p.TenantID).
+		Where("application.customer_id IN (?)", visibleCustomers).
 		Order("application.created_at ASC").
 		Scan(&items).Error
 	return items, err

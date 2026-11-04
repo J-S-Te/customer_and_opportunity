@@ -473,19 +473,31 @@ func (r *GORMRepository) VoidBlockers(ctx context.Context, tenantID string, oppo
 	return blockers, nil
 }
 
-func scoped(db *gorm.DB, principal auth.Principal) *gorm.DB {
+// ApplyDataScope 用途：统一商机查询的租户、删除及个人或组织范围谓词。
+// 参数：db 已绑定 crm_opportunities；principal 为已认证主体及有效范围。
+// 返回值：追加数据范围的查询；空组织失败收窄。
+func ApplyDataScope(db *gorm.DB, principal auth.Principal) *gorm.DB {
 	db = db.Where("crm_opportunities.tenant_id=? AND crm_opportunities.deleted_at IS NULL", principal.TenantID)
 	switch principal.ScopeMode {
 	case auth.ScopeAll:
 		return db
 	case auth.ScopeOrg:
+		// 组织范围只能使用平台确认的组织集合；空集合按无权限处理，不能退化为租户全量。
 		if len(principal.OrganizationIDs) == 0 {
 			return db.Where("1=0")
 		}
 		return db.Where("crm_opportunities.owner_org_id IN ?", principal.OrganizationIDs)
 	default:
+		// 交接后旧负责人必须立即失去访问，因此只认当前负责人。
 		return db.Where("crm_opportunities.owner_user_id=?", principal.UserID)
 	}
+}
+
+// scoped 用途：保持商机包内调用兼容并复用唯一数据范围实现。
+// 参数：db 为商机查询；principal 为已认证主体及有效范围。
+// 返回值：追加 ApplyDataScope 谓词后的查询。
+func scoped(db *gorm.DB, principal auth.Principal) *gorm.DB {
+	return ApplyDataScope(db, principal)
 }
 
 func (r *GORMRepository) FindByID(ctx context.Context, principal auth.Principal, id uint64) (*Opportunity, error) {
