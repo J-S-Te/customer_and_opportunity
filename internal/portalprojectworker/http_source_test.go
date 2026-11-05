@@ -38,8 +38,12 @@ func TestHTTPSourceUsesPlatformOAuthContractAndCustomerScope(t *testing.T) {
 			}
 			return jsonResponse(http.StatusOK, map[string]any{"access_token": accessToken, "token_type": "Bearer", "expires_in": 300, "scope": requiredProjectScope}), nil
 		case "/api/v1/projects/snapshots":
-			if request.Header.Get("Authorization") != "Bearer "+accessToken || request.Header.Get("X-Tenant-ID") != "tenant-a" || request.Header.Get("X-Integration-Timestamp") != now.Format(time.RFC3339Nano) || request.Header.Get("X-Integration-Nonce") == "" {
+			if request.Header.Get("Authorization") != "Bearer "+accessToken || request.Header.Get("X-Integration-Timestamp") != now.Format(time.RFC3339Nano) || request.Header.Get("X-Integration-Nonce") == "" {
 				t.Errorf("missing machine headers: %v", request.Header)
+			}
+			// 租户只能由接收方从已验签机器令牌推导，出站请求不得携带未验签的租户头。
+			if got := request.Header.Get("X-Tenant-ID"); got != "" {
+				t.Errorf("X-Tenant-ID must not be sent, got %q", got)
 			}
 			if request.URL.Query().Get("customerId") != "77" || request.URL.Query().Get("cursor") != "cursor-1" || request.URL.Query().Get("limit") != "100" {
 				t.Errorf("unexpected query: %v", request.URL.Query())

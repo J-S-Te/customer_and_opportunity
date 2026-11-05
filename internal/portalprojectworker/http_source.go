@@ -67,7 +67,8 @@ func (s *httpSource) changed(ctx context.Context, tenantID string, customerID ui
 		return sourcePage{}, errors.New("create project snapshot request failed")
 	}
 	request.Header.Set("Accept", "application/json")
-	request.Header.Set("X-Tenant-ID", tenantID)
+	// 租户只来自已验签机器令牌，不出站传递：接收方一律从验签后的令牌推导租户，
+	// 不读取 X-Tenant-ID。tenantID 形参仅为满足 source 契约保留，不参与出站请求。
 	request.Header.Set("X-Integration-Timestamp", s.now().UTC().Format(time.RFC3339Nano))
 	nonce, err := randomNonce(s.nonceReader)
 	if err != nil {
