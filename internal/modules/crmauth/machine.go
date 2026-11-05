@@ -112,7 +112,10 @@ func validMachinePermission(scope string) bool {
 	// internal/opportunities/:id/contract-link 依赖它完成认证，缺了会让回链在验签层直接 401。
 	// handover.machine 是平台为人员离职交接签发的专用 scope；交接五类端点除 MachineAuth
 	// 外还要求该 scope，避免其它机器凭据复用交接协议。
-	case "portal.report.download_identity.read", "portal.invite.verify", "customer.summary.read", "customer.contract_reference.read", "approval.callback.write", "opportunity.status.write", "opportunity.signed.write", "opportunity.attachment.scan.write", "customer.credit.payment.ingest", "customer.credit.internal.read", "handover.machine":
+	// customer.import_provision / opportunity.import_provision 只服务历史合同批量导入时的
+	// CRM 开立通道（/api/v1/internal/import-provision/*）；它们不授予普通创建接口所需的
+	// customer.create / opportunity.create，普通写路径的权限与校验强度保持不变。
+	case "portal.report.download_identity.read", "portal.invite.verify", "customer.summary.read", "customer.contract_reference.read", "approval.callback.write", "opportunity.status.write", "opportunity.signed.write", "opportunity.attachment.scan.write", "customer.credit.payment.ingest", "customer.credit.internal.read", "handover.machine", "customer.import_provision", "opportunity.import_provision":
 		return true
 	default:
 		return false

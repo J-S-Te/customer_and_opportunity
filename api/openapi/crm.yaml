@@ -179,6 +179,14 @@ paths:
     post: {$ref: '#/components/x-operations/receiveOpportunityContractLink'}
   /api/v1/internal/contract-references/customers/{customerID}:
     get: {$ref: '#/components/x-operations/resolveContractReference'}
+  /api/v1/internal/import-provision/customers/lookup:
+    post: {$ref: '#/components/x-operations/lookupImportProvisionCustomer'}
+  /api/v1/internal/import-provision/customers:
+    post: {$ref: '#/components/x-operations/provisionImportCustomer'}
+  /api/v1/internal/import-provision/opportunities:
+    post: {$ref: '#/components/x-operations/provisionImportOpportunity'}
+  /api/v1/internal/import-provision/opportunities/{id}/sign:
+    post: {$ref: '#/components/x-operations/signImportProvisionOpportunity'}
   /api/v1/opportunities/{id}/attachment-capabilities:
     get: {$ref: '#/components/x-operations/getOpportunityAttachmentCapabilities'}
   /api/v1/opportunities/{id}/attachments:
@@ -843,3 +851,160 @@ components:
         '401': {$ref: '#/components/responses/Error'}
         '403': {$ref: '#/components/responses/Error'}
         '422': {$ref: '#/components/responses/Error'}
+
+    lookupImportProvisionCustomer:
+      operationId: lookupImportProvisionCustomer
+      tags: [Machine integration]
+      security: [{machineJWT: [customer.import_provision]}]
+      x-scope: customer.import_provision
+      description: |-
+        Historical-contract import provisioning channel. Resolves candidates by
+        normalized customer name (trim, whitespace removal, lower case). `unique`
+        is true only for exactly one candidate that is still enabled; disabled or
+        merged hits stay in `candidates` so Contract Management can block the row.
+      parameters:
+        - {name: X-Integration-Timestamp, in: header, required: true, schema: {type: string, format: date-time}}
+        - {name: X-Integration-Nonce, in: header, required: true, schema: {type: string, minLength: 1, maxLength: 200}}
+        - {name: X-Actor-Identity-ID, in: header, required: true, description: Operator identity used for audit attribution only; never used as the customer owner., schema: {type: string, minLength: 1, maxLength: 64}}
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [name], additionalProperties: false, properties: {name: {type: string, minLength: 1, maxLength: 200}}}}}}
+      responses:
+        '200': {$ref: '#/components/responses/OK'}
+        '401': {$ref: '#/components/responses/Error'}
+        '403': {$ref: '#/components/responses/Error'}
+        '422': {$ref: '#/components/responses/Error'}
+        '503': {$ref: '#/components/responses/Error'}
+    provisionImportCustomer:
+      operationId: provisionImportCustomer
+      tags: [Machine integration]
+      security: [{machineJWT: [customer.import_provision]}]
+      x-scope: customer.import_provision
+      description: |-
+        Creates a customer on the historical-contract provisioning channel.
+        `owner_identity_id` is mandatory and revalidated against the platform
+        owner directory (machine identities are rejected). Empty
+        customer_type/industry/region fall back to 企业/其他/未填写 and the audit
+        record carries origin=IMPORT_PROVISION plus external_record_id.
+      parameters:
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+        - {name: X-Integration-Timestamp, in: header, required: true, schema: {type: string, format: date-time}}
+        - {name: X-Integration-Nonce, in: header, required: true, schema: {type: string, minLength: 1, maxLength: 200}}
+        - {name: X-Actor-Identity-ID, in: header, required: true, description: Operator identity recorded as the business record author and audit actor., schema: {type: string, minLength: 1, maxLength: 64}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, owner_identity_id, contacts]
+              additionalProperties: false
+              properties:
+                name: {type: string, minLength: 1, maxLength: 200}
+                owner_identity_id: {type: string, minLength: 1, maxLength: 64}
+                customer_type: {type: string, maxLength: 64}
+                industry: {type: string, maxLength: 64}
+                region: {type: string, maxLength: 64}
+                contacts:
+                  type: array
+                  minItems: 1
+                  maxItems: 20
+                  items:
+                    type: object
+                    required: [name, phone]
+                    additionalProperties: false
+                    properties:
+                      name: {type: string, minLength: 1, maxLength: 100}
+                      phone: {type: string, minLength: 1, maxLength: 32}
+                      email: {type: string, format: email, maxLength: 200}
+                      is_registration: {type: boolean}
+                external_record_id: {type: string, maxLength: 128}
+                reason: {type: string, maxLength: 500}
+      responses:
+        '201': {$ref: '#/components/responses/OK'}
+        '401': {$ref: '#/components/responses/Error'}
+        '403': {$ref: '#/components/responses/Error'}
+        '409': {$ref: '#/components/responses/Error'}
+        '422': {$ref: '#/components/responses/Error'}
+        '503': {$ref: '#/components/responses/Error'}
+    provisionImportOpportunity:
+      operationId: provisionImportOpportunity
+      tags: [Machine integration]
+      security: [{machineJWT: [opportunity.import_provision]}]
+      x-scope: opportunity.import_provision
+      description: |-
+        Creates an opportunity on the historical-contract provisioning channel.
+        Unlike the ordinary create endpoint, `expected_sign_date` may be in the
+        past (historical contract start date); amount must still be greater than
+        zero and the new opportunity always starts at 初步接触 + FOLLOWING.
+      parameters:
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+        - {name: X-Integration-Timestamp, in: header, required: true, schema: {type: string, format: date-time}}
+        - {name: X-Integration-Nonce, in: header, required: true, schema: {type: string, minLength: 1, maxLength: 200}}
+        - {name: X-Actor-Identity-ID, in: header, required: true, description: Operator identity recorded as the business record author and audit actor., schema: {type: string, minLength: 1, maxLength: 64}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, customer_id, owner_identity_id, expected_amount, expected_sign_date, requirement_summary]
+              additionalProperties: false
+              properties:
+                name: {type: string, minLength: 1, maxLength: 200}
+                customer_id: {type: integer, format: uint64, minimum: 1}
+                owner_identity_id: {type: string, minLength: 1, maxLength: 64}
+                type: {type: string, maxLength: 2000}
+                source: {type: string, maxLength: 2000}
+                expected_amount: {type: string, pattern: '^[0-9]{1,16}(\.[0-9]{1,2})?$'}
+                expected_sign_date: {type: string, format: date}
+                requirement_summary: {type: string, minLength: 1, maxLength: 10000}
+                system_count: {type: integer, minimum: 0}
+                pain_points: {type: string, maxLength: 10000}
+                competitor_info: {type: string, maxLength: 10000}
+                external_record_id: {type: string, maxLength: 128}
+                reason: {type: string, maxLength: 500}
+      responses:
+        '201': {$ref: '#/components/responses/OK'}
+        '401': {$ref: '#/components/responses/Error'}
+        '403': {$ref: '#/components/responses/Error'}
+        '409': {$ref: '#/components/responses/Error'}
+        '422': {$ref: '#/components/responses/Error'}
+        '503': {$ref: '#/components/responses/Error'}
+    signImportProvisionOpportunity:
+      operationId: signImportProvisionOpportunity
+      tags: [Machine integration]
+      security: [{machineJWT: [opportunity.import_provision]}]
+      x-scope: opportunity.import_provision
+      description: |-
+        Advances a historical-contract opportunity to 已签约 + CLOSED through the
+        existing stage state machine and contract verification gate (a
+        verifiable contract_ref is mandatory; an unconfigured or unavailable
+        verifier returns 503 CRM_IMPORT_PROVISION_CONTRACT_NOT_VERIFIED). Repeated calls
+        with the same contract_ref replay the stored result without writing a
+        second stage log, and no OPPORTUNITY_SIGNED event is emitted.
+      parameters:
+        - {$ref: '#/components/parameters/NumericID'}
+        - {name: X-Integration-Timestamp, in: header, required: true, schema: {type: string, format: date-time}}
+        - {name: X-Integration-Nonce, in: header, required: true, schema: {type: string, minLength: 1, maxLength: 200}}
+        - {name: X-Actor-Identity-ID, in: header, required: true, description: Operator identity recorded as the stage-log operator and audit actor., schema: {type: string, minLength: 1, maxLength: 64}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [contract_ref, expected_version, reason]
+              additionalProperties: false
+              properties:
+                contract_ref: {type: string, minLength: 1, maxLength: 64}
+                contract_id: {type: string, maxLength: 26}
+                expected_version: {type: integer, format: uint64, minimum: 1}
+                reason: {type: string, minLength: 1, maxLength: 500}
+                external_record_id: {type: string, maxLength: 128}
+      responses:
+        '200': {$ref: '#/components/responses/OK'}
+        '401': {$ref: '#/components/responses/Error'}
+        '403': {$ref: '#/components/responses/Error'}
+        '404': {$ref: '#/components/responses/Error'}
+        '409': {$ref: '#/components/responses/Error'}
+        '422': {$ref: '#/components/responses/Error'}
+        '503': {$ref: '#/components/responses/Error'}

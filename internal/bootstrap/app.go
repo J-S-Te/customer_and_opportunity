@@ -19,6 +19,7 @@ import (
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/crmauth"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/customer"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/handover"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/importprovision"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/notification"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/opportunity"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/ownerdirectory"
@@ -461,6 +462,9 @@ func New(config Config) (*App, error) {
 	}
 	portalreportreference.RegisterRoutes(internal, portalreportreference.GORMReader{DB: db})
 	contractreference.RegisterInternalRoutes(internal, contractreference.NewHandler(contractreference.NewService(contractreference.NewGORMRepository(db))))
+	// 历史合同导入开立通道：客户与商机分别复用各自服务的 provision 入口
+	//（负责人目录校验、阶段状态机与合同验真闸门仍由领域服务执行），此处只装配机器端点。
+	importprovision.RegisterInternalRoutes(internal, importprovision.NewHandler(importprovision.NewService(customerService, opportunityService)))
 	opportunity.RegisterIntegrationRoutes(internal, opportunityHandler)
 	presale.RegisterInternalRoutes(internal, presaleHandler)
 	credit.RegisterInternalRoutes(internal, creditHandler)
