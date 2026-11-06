@@ -8,10 +8,10 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/bootstrap"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/platformcatalog"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shutdown"
 )
 
 func main() {
@@ -58,10 +58,27 @@ func main() {
 			logger.Error("CRM server failed", "error", err)
 		}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	// 先停止接收新请求并等待在途请求，再关闭数据库连接；超时后由进程退出兜底。
-	if err = app.Close(ctx); err != nil {
-		logger.Error("CRM shutdown failed", "error", err)
+	// 统一有界 join：整体停机预算默认 20s（CUSTOMER_OPPORTUNITY_SHUTDOWN_DRAIN_SECONDS 可覆盖）。
+	// App.Close 内部按既有顺序先收敛 HTTP（10s），再取消后台并在既有 10s 内 join 审计投递器、
+	// 导入源与预检；审计投递器只由 App.Close 取消，这里不另行 cancel，避免两处争抢关闭。
+	budget := shutdown.DrainTimeout()
+	drainCtx, cancelDrain := context.WithTimeout(context.Background(), budget)
+	group := shutdown.NewGroup()
+	var closeErr error
+	group.Go("app-close", func() { closeErr = app.Close(drainCtx) })
+	stuck := group.Join(drainCtx)
+	cancelDrain()
+	if len(stuck) > 0 {
+		// 超预算不 panic：打印未退出组件名并以非零码退出，交由编排器重启并排查。
+		logger.Error("CRM shutdown exceeded drain budget", "budget", budget.String(), "still_running", stuck)
+		os.Exit(1)
+	}
+	var componentErr *shutdown.StuckError
+	if errors.As(closeErr, &componentErr) {
+		logger.Error("CRM shutdown exceeded component drain budget", "budget", componentErr.Budget.String(), "still_running", componentErr.Components)
+		os.Exit(1)
+	}
+	if closeErr != nil {
+		logger.Error("CRM shutdown failed", "error", closeErr)
 	}
 }

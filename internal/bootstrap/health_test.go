@@ -12,7 +12,7 @@ import (
 func TestHealthHandlersSeparateLivenessAndReadiness(t *testing.T) {
 	router := gin.New()
 	router.GET("/livez", livenessHandler)
-	router.GET("/readyz", readinessHandler(func(context.Context) bool { return false }))
+	router.GET("/readyz", readinessHandler(Config{}, func(context.Context) bool { return false }, nil))
 
 	live := httptest.NewRecorder()
 	router.ServeHTTP(live, httptest.NewRequest(http.MethodGet, "/livez", nil))

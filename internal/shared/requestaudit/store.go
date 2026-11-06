@@ -185,6 +185,19 @@ func (s *Store) Retry(ctx context.Context, workerID string, values []Record, cod
 		}).Error
 }
 
+// PendingCount 返回整表尚未开始投递（PENDING）的积压量，供就绪端点观测投递器是否在推进积压。
+// 只返回聚合计数，不返回审计载荷、租户内容或原始数据库错误。
+// 参数：ctx 为查询上下文。
+// 返回值：积压计数；查询失败时返回错误。
+func (s *Store) PendingCount(ctx context.Context) (int64, error) {
+	var count int64
+	if err := s.db.WithContext(ctx).Table(s.tableName).
+		Where("delivery_status=?", StatusPending).Count(&count).Error; err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
 // Status 返回仅含聚合信息的租户范围运维监控
 // 视图，绝不返回审计载荷、令牌或请求内容。
 func (s *Store) Status(ctx context.Context, tenantID string) (OutboxStatus, error) {

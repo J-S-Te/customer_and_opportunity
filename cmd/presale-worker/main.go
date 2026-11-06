@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shutdown"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/workerlicense"
 	"log"
 	"os/signal"
@@ -32,7 +33,8 @@ func main() {
 		log.Fatal("commercial license runtime configuration failed")
 	}
 	// 取消信号让执行器停止领取新任务并释放租约；正常取消不以非零状态退出，避免编排器误判故障。
-	if err = app.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+	// 停机顺序：信号取消后台循环 → 按预算 join；超预算时列出未退出组件并以非零码退出（不 panic）。
+	if err = shutdown.RunWorker(ctx, "presale-worker-loop", app.Run); err != nil && !errors.Is(err, context.Canceled) {
 		log.Fatal(err)
 	}
 }

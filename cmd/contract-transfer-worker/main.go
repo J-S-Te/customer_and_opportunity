@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shutdown"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/workerlicense"
 	"log/slog"
 	"os"
@@ -37,7 +38,8 @@ func main() {
 		os.Exit(1)
 	}
 	// Run 以取消上下文结束领取循环；context.Canceled 是正常停机，不应被容器判定为任务失败。
-	if err = app.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+	// 停机顺序：信号取消后台循环 → 按预算 join；超预算时列出未退出组件并以非零码退出（不 panic）。
+	if err = shutdown.RunWorker(ctx, "contract-transfer-worker-loop", app.Run); err != nil && !errors.Is(err, context.Canceled) {
 		logger.Error("worker stopped", "error", err)
 		os.Exit(1)
 	}

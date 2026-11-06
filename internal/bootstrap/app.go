@@ -33,19 +33,20 @@ import (
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/response"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/security"
 	central "github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/sessiongovernance"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shutdown"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
 )
 
 type App struct {
-	licenseCancel    context.CancelFunc
-	Config           Config
-	DB               *gorm.DB
-	Router           *gin.Engine
-	Server           *http.Server
-	auditCancel      context.CancelFunc
-	auditDone        chan struct{}
-	importSourceDone chan struct{}
+	licenseCancel context.CancelFunc
+	Config        Config
+	DB            *gorm.DB
+	Router        *gin.Engine
+	Server        *http.Server
+	auditCancel   context.CancelFunc
+	// background 统一登记本进程启动的中后台 goroutine，停机时按预算 join。
+	background *shutdown.Group
 }
 
 // New 装配当前应用的配置、存储、认证及服务入口。
@@ -77,6 +78,9 @@ func New(config Config) (*App, error) {
 		return nil, err
 	}
 	auditStore := requestaudit.NewStore(db)
+	// 审计 Outbox 观测状态：投递器运行态与积压计数只用于运维中间态展示与告警，
+	// 不参与就绪判定，也不新增指标端口。
+	auditOutbox := newAuditOutboxState(auditStore, slog.Default())
 	auditDispatcher, err := requestaudit.NewDispatcher(auditStore, requestaudit.DispatcherOptions{
 		PlatformBaseURL: config.PlatformBaseURL, ClientID: config.PlatformAuditClientID,
 		ClientSecret: config.PlatformAuditClientSecret, ApplicationCode: config.PlatformApplicationCode,
@@ -107,21 +111,8 @@ func New(config Config) (*App, error) {
 	base.GET("/livez", livenessHandler)
 	// C14：能力维度快照；赢单确认模式、合同验真与转合同订阅是模式/开关事实，
 	// 可选未启用只反映在 state=disabled，不影响整体就绪判定。
-	base.GET("/readyz", func(c *gin.Context) {
-		if !databaseHealthy(c.Request.Context()) {
-			c.JSON(http.StatusServiceUnavailable, gin.H{"status": "not_ready"})
-			return
-		}
-		winReady := config.WinConfirmationMode == "contract" || config.WinConfirmationMode == "local_evidence"
-		c.JSON(http.StatusOK, gin.H{
-			"status": "ready",
-			"capabilities": gin.H{
-				"win_confirmation":      gin.H{"mode": config.WinConfirmationMode, "state": winReadyState(winReady)},
-				"contract_verification": gin.H{"enabled": config.ContractVerificationEnabled, "state": capabilityState(config.ContractVerificationEnabled)},
-				"contract_transfer":     gin.H{"subscribed": config.ContractTransferSubscribed, "state": capabilityState(config.ContractTransferSubscribed)},
-			},
-		})
-	})
+	// C2：audit_outbox 只暴露投递器运行态与积压计数，查询失败标 query_error，不改变就绪结论。
+	base.GET("/readyz", readinessHandler(config, databaseHealthy, auditOutbox))
 	base.GET("/healthz", func(c *gin.Context) {
 		if !databaseHealthy(c.Request.Context()) {
 			c.JSON(503, gin.H{"status": "unhealthy"})
@@ -521,33 +512,33 @@ func New(config Config) (*App, error) {
 		return nil, wiringErr
 	}
 	server := &http.Server{Addr: config.Address, Handler: router, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second}
+	// 中后台 goroutine 统一登记，停机时由 App.Close 取消并按预算 join：
+	// 任何组件超预算未退出都会以组件名回报，而不是让进程无限期挂住。
+	background := shutdown.NewGroup()
 	auditContext, auditCancel := context.WithCancel(context.Background())
-	auditDone := make(chan struct{})
-	go func() {
-		defer close(auditDone)
+	auditOutbox.MarkRunning()
+	background.Go("request-audit-dispatcher", func() {
+		defer auditOutbox.MarkStopped()
 		auditDispatcher.Run(auditContext)
-	}()
-	var importSourceDone chan struct{}
+	})
 	if config.AttachmentFileGatewayMode != "legacy" {
-		importSourceDone = make(chan struct{})
-		go func() {
-			defer close(importSourceDone)
+		background.Go("customer-import-sources", func() {
 			runCustomerImportSources(auditContext, config.OIDCTenantID, customerService, licenseCheck)
-		}()
+		})
 	}
 	// 预检采用异步只读方式。平台
 	// 不可用或审计发布者绑定错误必须在日志中明确呈现，
 	// 但不得阻止 CRM 处理业务流量；本地 Outbox
 	// 会保留事件，直至投递恢复。
-	go func() {
+	background.Go("audit-publisher-preflight", func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 		defer cancel()
 		if err := auditDispatcher.ValidateConfiguration(ctx); err != nil {
 			slog.Default().Warn("platform audit publisher preflight failed", "error_code", requestaudit.DeliveryErrorCode(err))
 		}
-	}()
+	})
 	started = true
-	return &App{Config: config, DB: db, Router: router, Server: server, auditCancel: auditCancel, auditDone: auditDone, licenseCancel: licenseCancel, importSourceDone: importSourceDone}, nil
+	return &App{Config: config, DB: db, Router: router, Server: server, auditCancel: auditCancel, background: background, licenseCancel: licenseCancel}, nil
 }
 
 // handoverFreezeSource 是交接仓储向三条责任写入路径暴露的最小冻结查询能力。
@@ -581,27 +572,30 @@ func wireHandoverFreezeEnforcement(customerService *customer.Service, opportunit
 	return nil
 }
 
+// Close 的停机顺序固定为：许可运行时取消 → HTTP 在途请求收敛（既有 10s）→ 取消后台组件
+// → 后台组件在既有 10s 内 join → 关闭共享连接池。
+// 参数 ctx 为调用方的整体停机预算（默认 20s，可用 CUSTOMER_OPPORTUNITY_SHUTDOWN_DRAIN_SECONDS 覆盖），
+// 它只作为整段停机的兜底上限；超预算仍未退出的组件以 *shutdown.StuckError 返回组件名，
+// 由进程打印后以非零码退出，不 panic。
 func (a *App) Close(ctx context.Context) error {
 	if a.licenseCancel != nil {
 		a.licenseCancel()
 	}
 	// 先让 HTTP 在途请求收敛，再关闭共享连接池，避免请求持有的事务在优雅停机期间被截断。
-	shutdownErr := a.Server.Shutdown(ctx)
+	httpCtx, cancelHTTP := context.WithTimeout(ctx, shutdown.HTTPServeTimeout)
+	shutdownErr := a.Server.Shutdown(httpCtx)
+	cancelHTTP()
 	if a.auditCancel != nil {
 		a.auditCancel()
 	}
-	if a.auditDone != nil {
-		select {
-		case <-a.auditDone:
-		case <-ctx.Done():
-			shutdownErr = errors.Join(shutdownErr, ctx.Err())
-		}
-	}
-	if a.importSourceDone != nil {
-		select {
-		case <-a.importSourceDone:
-		case <-ctx.Done():
-			shutdownErr = errors.Join(shutdownErr, ctx.Err())
+	// 审计投递器与导入源仍走既有 10s 预算，不随整体停机预算放大；
+	// 这里不额外触发取消，避免与 App.Close 自身争抢关闭同一批组件。
+	if a.background != nil {
+		joinCtx, cancelJoin := context.WithTimeout(ctx, shutdown.BackgroundJoinTimeout)
+		stuck := a.background.Join(joinCtx)
+		cancelJoin()
+		if len(stuck) > 0 {
+			shutdownErr = errors.Join(shutdownErr, &shutdown.StuckError{Budget: shutdown.BackgroundJoinTimeout, Components: stuck})
 		}
 	}
 	sqlDB, dbErr := a.DB.DB()
