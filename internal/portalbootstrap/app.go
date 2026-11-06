@@ -44,12 +44,9 @@ type App struct {
 	reportProviders *reportDownloadProviders
 }
 
-// New 装配当前应用的配置、存储、认证及服务入口。
-// 参数：ctx为调用上下文与取消边界。
-//
-//	config为当前应用运行配置。
-//
-// 返回值：装配后的应用或认证实例；配置与依赖装配失败时返回错误。
+// New 用途：装配 Portal 配置、存储、认证及限流治理日志。
+// 参数：ctx 为应用上下文；config 为已解析运行配置。
+// 返回值：应用实例；配置或依赖初始化失败返回错误。
 func New(ctx context.Context, config Config) (*App, error) {
 	if err := config.validate(); err != nil {
 		return nil, err

@@ -7,8 +7,9 @@ import (
 	"testing"
 )
 
-// 连打 N+1 次：前 N 次进入 handler（创建 activation），第 N+1 次在中间件被 Abort，
-// 既不创建 activation、也不写 auth event，符合"M-10 不产生副作用"的要求。
+// TestPortalLoginRateLimitBlocksBurstPerClient 用途：验证同客户端超额登录返回 429 且不创建激活上下文。
+// 参数：t 为该行为的测试上下文。
+// 返回值：无；行为与预期不符时测试失败。
 func TestPortalLoginRateLimitBlocksBurstPerClient(t *testing.T) {
 	fixture := newAuthEntryFixture(t, Config{LoginRateLimit: 3})
 	for attempt := 1; attempt <= 3; attempt++ {
@@ -39,6 +40,9 @@ func TestPortalLoginRateLimitBlocksBurstPerClient(t *testing.T) {
 	}
 }
 
+// TestPortalLoginRateLimitIsolatesClients 用途：验证限流按客户端地址分桶且不受源端口影响。
+// 参数：t 为该行为的测试上下文。
+// 返回值：无；行为与预期不符时测试失败。
 func TestPortalLoginRateLimitIsolatesClients(t *testing.T) {
 	fixture := newAuthEntryFixture(t, Config{LoginRateLimit: 1})
 	send := func(remoteAddr string) *httptest.ResponseRecorder {
@@ -60,6 +64,9 @@ func TestPortalLoginRateLimitIsolatesClients(t *testing.T) {
 	}
 }
 
+// TestPortalRateLimitUsesTrustedProxyHeader 用途：验证受信代理后的真实客户端独立计数。
+// 参数：t 为该行为的测试上下文。
+// 返回值：无；行为与预期不符时测试失败。
 func TestPortalRateLimitUsesTrustedProxyHeader(t *testing.T) {
 	trusted := trustedPrefixes(t, "172.31.255.250/32")
 	fixture := newAuthEntryFixture(t, Config{LoginRateLimit: 1, TrustedProxies: trusted})
@@ -83,6 +90,9 @@ func TestPortalRateLimitUsesTrustedProxyHeader(t *testing.T) {
 	}
 }
 
+// TestPortalRateLimitIgnoresForwardedHeaderFromUntrustedPeer 用途：验证非受信对端伪造转发头无法绕过额度。
+// 参数：t 为该行为的测试上下文。
+// 返回值：无；行为与预期不符时测试失败。
 func TestPortalRateLimitIgnoresForwardedHeaderFromUntrustedPeer(t *testing.T) {
 	fixture := newAuthEntryFixture(t, Config{LoginRateLimit: 1, TrustedProxies: trustedPrefixes(t, "172.31.255.250/32")})
 	send := func(remoteAddr, realIP string) *httptest.ResponseRecorder {
@@ -102,6 +112,9 @@ func TestPortalRateLimitIgnoresForwardedHeaderFromUntrustedPeer(t *testing.T) {
 	}
 }
 
+// TestPortalActivateRateLimitAppliesToInvitationEntry 用途：验证邀请激活入口超额不产生激活写入。
+// 参数：t 为该行为的测试上下文。
+// 返回值：无；行为与预期不符时测试失败。
 func TestPortalActivateRateLimitAppliesToInvitationEntry(t *testing.T) {
 	fixture := newAuthEntryFixture(t, Config{ActivateRateLimit: 2})
 	for attempt := 1; attempt <= 2; attempt++ {
@@ -117,6 +130,9 @@ func TestPortalActivateRateLimitAppliesToInvitationEntry(t *testing.T) {
 	}
 }
 
+// TestPortalCallbackRateLimitDoesNotConsumeActivation 用途：验证超额回调返回 429 且不消费激活上下文。
+// 参数：t 为该行为的测试上下文。
+// 返回值：无；行为与预期不符时测试失败。
 func TestPortalCallbackRateLimitDoesNotConsumeActivation(t *testing.T) {
 	fixture := newAuthEntryFixture(t, Config{CallbackRateLimit: 2})
 	request := func() *httptest.ResponseRecorder {
@@ -138,7 +154,9 @@ func TestPortalCallbackRateLimitDoesNotConsumeActivation(t *testing.T) {
 	}
 }
 
-// 默认额度直接来自 Config 零值：忘记配置不能变成"完全不限流"。
+// TestPortalRateLimitDefaultsKeepAnonymousEntriesBounded 用途：验证零值配置仍启用匿名入口限流。
+// 参数：t 为该行为的测试上下文。
+// 返回值：无；行为与预期不符时测试失败。
 func TestPortalRateLimitDefaultsKeepAnonymousEntriesBounded(t *testing.T) {
 	config := Config{}
 	if config.loginRateLimit() != defaultLoginRateLimit || config.activateRateLimit() != defaultActivateRateLimit || config.callbackRateLimit() != defaultCallbackRateLimit {
@@ -149,6 +167,9 @@ func TestPortalRateLimitDefaultsKeepAnonymousEntriesBounded(t *testing.T) {
 	}
 }
 
+// TestTrustedProxyCoverageWarningOnlySilencedByNonLoopbackPrefix 用途：验证只有非回环可信代理才能消除退化告警。
+// 参数：t 为该行为的测试上下文。
+// 返回值：无；行为与预期不符时测试失败。
 func TestTrustedProxyCoverageWarningOnlySilencedByNonLoopbackPrefix(t *testing.T) {
 	if hasNonLoopbackTrustedProxy(trustedPrefixes(t, "127.0.0.1/32", "::1/128")) {
 		t.Fatal("loopback-only trusted proxies must keep the deployment warning")

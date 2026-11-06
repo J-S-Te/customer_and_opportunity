@@ -23,6 +23,9 @@ import (
 // MySQL DryRun 基建（GORM 只编译 SQL、不建立连接），断言仓储真正下发的范围谓词。
 const opportunityHistoryDryRunDSN = "gorm:gorm@tcp(127.0.0.1:9910)/gorm?charset=utf8mb4&parseTime=True&loc=Local"
 
+// opportunityHistoryDryRunDB 用途：构造只编译商机历史 SQL、不建立连接的测试数据库。
+// 参数：t 为测试上下文；log 为捕获 SQL 的记录器。
+// 返回值：DryRun 数据库；构造失败时终止测试。
 func opportunityHistoryDryRunDB(t *testing.T, log logger.Interface) *gorm.DB {
 	t.Helper()
 	db, err := gorm.Open(mysql.New(mysql.Config{
@@ -42,10 +45,16 @@ type opportunityHistorySQLRecorder struct {
 	queries []string
 }
 
+// newOpportunityHistorySQLRecorder 用途：创建商机历史 SQL 捕获器以核对范围谓词。
+// 参数：无。
+// 返回值：初始为空的 SQL 记录器。
 func newOpportunityHistorySQLRecorder() *opportunityHistorySQLRecorder {
 	return &opportunityHistorySQLRecorder{Interface: logger.Default.LogMode(logger.Silent)}
 }
 
+// Trace 用途：捕获 DryRun 查询，核对计数和条目的范围谓词。
+// 参数：忽略日志上下文、耗时和错误；fc 提供 SQL 与行数。
+// 返回值：无。
 func (r *opportunityHistorySQLRecorder) Trace(_ context.Context, _ time.Time, fc func() (string, int64), _ error) {
 	if fc == nil {
 		return
@@ -55,6 +64,9 @@ func (r *opportunityHistorySQLRecorder) Trace(_ context.Context, _ time.Time, fc
 	}
 }
 
+// queriesContaining 用途：检索同时含有指定范围条件的已捕获查询。
+// 参数：t 为测试上下文；substrings 为所有必须出现的 SQL 片段。
+// 返回值：匹配语句；未命中时终止测试。
 func (r *opportunityHistorySQLRecorder) queriesContaining(t *testing.T, substrings ...string) []string {
 	t.Helper()
 	matched := make([]string, 0, len(r.queries))
@@ -76,9 +88,9 @@ func (r *opportunityHistorySQLRecorder) queriesContaining(t *testing.T, substrin
 	return matched
 }
 
-// TestOpportunityHistoryAppliesOpportunityDataScope 断言商机历史子资源的范围谓词与
-// opportunity.ApplyDataScope 完全一致：SELF 按当前负责人、ORG 按组织集合、空组织集合
-// 失败收窄（1=0）、ALL 不收窄到任何归属列。
+// TestOpportunityHistoryAppliesOpportunityDataScope 用途：验证商机历史计数与条目同时遵循商机范围。
+// 参数：t 为该行为的测试上下文。
+// 返回值：无；行为与预期不符时测试失败。
 func TestOpportunityHistoryAppliesOpportunityDataScope(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -149,6 +161,9 @@ type opportunityHistorySpyRepository struct {
 	historyCustomer  uint64
 }
 
+// FindByID 用途：模拟父客户是否可见以验证子资源前置闸门。
+// 参数：忽略请求、主体、客户 ID 和锁标记；可见性由夹具决定。
+// 返回值：合成客户；不可见返回客户不存在。
 func (r *opportunityHistorySpyRepository) FindByID(_ context.Context, _ auth.Principal, _ uint64, _ bool) (*Customer, error) {
 	if !r.customerVisible {
 		return nil, ErrNotFound
@@ -156,6 +171,9 @@ func (r *opportunityHistorySpyRepository) FindByID(_ context.Context, _ auth.Pri
 	return &Customer{}, nil
 }
 
+// ListOpportunityHistory 用途：记录传递到商机历史仓储的主体和客户。
+// 参数：忽略上下文和分页；principal 为主体；customerID 为父客户。
+// 返回值：空测试分页及 nil 错误。
 func (r *opportunityHistorySpyRepository) ListOpportunityHistory(_ context.Context, principal auth.Principal, customerID uint64, _, _ int) (pagination.Page[OpportunitySummary], error) {
 	r.historyCalls++
 	r.historyPrincipal = principal
@@ -163,9 +181,9 @@ func (r *opportunityHistorySpyRepository) ListOpportunityHistory(_ context.Conte
 	return pagination.Page[OpportunitySummary]{Items: []OpportunitySummary{}, Page: 1, PageSize: 20}, nil
 }
 
-// TestListOpportunityHistoryKeepsParentCheckAndForwardsPrincipal 守住两点：父客户可见性
-// 校验必须保留（父客户不可见时不得再查子表），以及 principal 必须原样下传到仓储，
-// 否则仓储又只能按租户过滤。
+// TestListOpportunityHistoryKeepsParentCheckAndForwardsPrincipal 用途：验证父客户可见性闸门及主体原样传递。
+// 参数：t 为该行为的测试上下文。
+// 返回值：无；行为与预期不符时测试失败。
 func TestListOpportunityHistoryKeepsParentCheckAndForwardsPrincipal(t *testing.T) {
 	principal := auth.Principal{TenantID: "tenant-a", UserID: "sales-a", ScopeMode: auth.ScopeSelf}
 	ctx := auth.WithPrincipal(context.Background(), principal)
@@ -193,10 +211,9 @@ func TestListOpportunityHistoryKeepsParentCheckAndForwardsPrincipal(t *testing.T
 	}
 }
 
-// TestCustomerOpportunityHistoryExcludesOutOfScopeOpportunitiesOnMySQL 是真实 MySQL 反例：
-// 客户 C 归销售 A，客户 C 下的商机 O 归销售 B。A 能看见客户 C（父客户校验通过），
-// 但历史条目里不得出现 O；B 只能看见 O；组织范围只见本组织商机。
-// 未配置隔离测试 DSN 时跳过，绝不连接业务库。
+// TestCustomerOpportunityHistoryExcludesOutOfScopeOpportunitiesOnMySQL 用途：在显式隔离 MySQL 上验证商机历史不泄露范围外商机。
+// 参数：t 为该行为的测试上下文。
+// 返回值：无；行为与预期不符时测试失败。
 func TestCustomerOpportunityHistoryExcludesOutOfScopeOpportunitiesOnMySQL(t *testing.T) {
 	dsn := strings.TrimSpace(os.Getenv("CRM_INTEGRATION_MYSQL_DSN"))
 	if dsn == "" {

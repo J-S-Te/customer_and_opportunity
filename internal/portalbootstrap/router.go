@@ -443,9 +443,11 @@ func beginLogin(deps RouterDependencies) gin.HandlerFunc {
 	}
 }
 
-// beginActivationLogin 是 /activate 的第二条 begin 入口。它和 /auth/login 共用
-// redirectWithLoginState，保证邀请激活链路同样把 state 绑定到当前浏览器（M-3）；
-// 只保留一个实现是防止两个入口再次出现安全语义漂移。
+// beginActivationLogin 用途：以统一 state 绑定逻辑启动邀请激活登录。
+// 参数：deps 为 Portal 配置与已装配账号服务。
+// 返回值：激活跳转处理器；非法邀请或依赖失败返回业务错误。
+// 它和 /auth/login 共用 redirectWithLoginState，保证邀请激活链路同样把 state 绑定到
+// 当前浏览器（M-3）；只保留一个实现是防止两个入口再次出现安全语义漂移。
 func beginActivationLogin(deps RouterDependencies) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		token := strings.TrimSpace(c.Query("token"))
@@ -462,8 +464,10 @@ func beginActivationLogin(deps RouterDependencies) gin.HandlerFunc {
 	}
 }
 
-// redirectWithLoginState 先下发绑定当前浏览器的 state Cookie，再跳转 OIDC 授权端点。
-// 中央会话开启时同时下发中央桥接 state Cookie，两条回调校验链都不可省略。
+// redirectWithLoginState 用途：先绑定浏览器 state 再跳转，中央模式另发桥接 Cookie。
+// 参数：c 为响应上下文；config 为 Cookie 配置；start 为登录事务。
+// 返回值：无；缺失 state 时返回错误而不跳转。
+// 中央会话开启时两条回调校验链都不可省略。
 func redirectWithLoginState(c *gin.Context, config Config, start account.LoginStart) {
 	if start.State == "" {
 		// 缺失 state 的授权地址无法完成回调校验，宁可失败也不签发无绑定登录。
@@ -480,11 +484,25 @@ func redirectWithLoginState(c *gin.Context, config Config, start account.LoginSt
 	c.Redirect(http.StatusFound, start.AuthorizationURL)
 }
 
+// completeLogin 用途：验证浏览器绑定后处理中央桥接或最终 OIDC 回调。
+// 参数：deps 为 Portal 配置及已装配账号服务。
+// 返回值：回调处理器；终止路径清 state，成功桥接保留第二阶段状态。
 func completeLogin(deps RouterDependencies) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		browserState := ""
+		if cookie, err := c.Request.Cookie(loginStateCookieName); err == nil {
+			browserState = cookie.Value
+		}
+		// 所有回调（包括中央桥接第一阶段）先校验浏览器绑定，失败不进入账号服务。
+		if err := verifyLoginState(browserState, c.Query("state")); err != nil {
+			http.SetCookie(c.Writer, expiredLoginStateCookie(deps.Config))
+			response.Error(c, err)
+			return
+		}
 		if deps.Config.CentralSessionEnabled {
 			cookie, err := c.Request.Cookie(deps.Config.SessionCookieName + "_oidc_state")
-			if err != nil || cookie.Value == "" || cookie.Value != c.Query("state") {
+			if err != nil || verifyLoginState(cookie.Value, c.Query("state")) != nil {
+				http.SetCookie(c.Writer, expiredLoginStateCookie(deps.Config))
 				response.Error(c, account.ErrInvalidLoginState)
 				return
 			}
@@ -492,14 +510,17 @@ func completeLogin(deps RouterDependencies) gin.HandlerFunc {
 			c.Header("Referrer-Policy", "no-referrer")
 			if ticket := c.Query("session_link_ticket"); ticket != "" {
 				if c.Query("code") != "" {
+					http.SetCookie(c.Writer, expiredLoginStateCookie(deps.Config))
 					response.Error(c, account.ErrInvalidLoginState)
 					return
 				}
 				target, err := deps.Account.AcceptSessionLink(c.Request.Context(), cookie.Value, ticket)
 				if err != nil {
+					http.SetCookie(c.Writer, expiredLoginStateCookie(deps.Config))
 					response.Error(c, err)
 					return
 				}
+				// 桥接成功只完成第一阶段；保留 state Cookie 供原 nonce/PKCE 的回调使用。
 				c.Redirect(http.StatusFound, target)
 				return
 			}
@@ -507,10 +528,6 @@ func completeLogin(deps RouterDependencies) gin.HandlerFunc {
 			expired.Name = deps.Config.SessionCookieName + "_oidc_state"
 			expired.MaxAge = -1
 			http.SetCookie(c.Writer, expired)
-		}
-		browserState := ""
-		if cookie, err := c.Request.Cookie(loginStateCookieName); err == nil {
-			browserState = cookie.Value
 		}
 		// 任何路径（含错误、state 不匹配、成功）都先清理 Cookie：回调只能用一次，
 		// 且失败后不允许重放同一浏览器会话里的旧 state。

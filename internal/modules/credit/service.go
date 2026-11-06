@@ -131,15 +131,18 @@ func ensureCreditCustomerVisible(db *gorm.DB, principal auth.Principal, customer
 	return err
 }
 
-// creditApplicationNotFound 是审批接口统一的不可见错误：申请不存在，与申请指向的客户
-// 不在当前主体的数据范围内，都回同一个 404，避免审批人据此探测范围外客户/申请的存在性。
+// creditApplicationNotFound 用途：统一不存在与范围外申请的 404，避免存在性探测。
+// 参数：无。
+// 返回值：申请不存在业务错误。
+// 不变量：申请不存在与申请指向的客户不在当前主体数据范围内共用同一 404。
 func creditApplicationNotFound() error {
 	return apperror.New(404, "CRM_CREDIT_APPLICATION_NOT_FOUND", "credit application not found")
 }
 
-// ensureCreditApplicationCustomerVisible 用客户可见性谓词校验申请指向的客户是否在
-// 当前主体数据范围内，并按审批接口的错误契约把不可见折叠成“申请不存在”。
-// 数据库错误原样上抛，不能折叠成 404，否则真实故障会被误报成资源缺失。
+// ensureCreditApplicationCustomerVisible 用途：按客户范围验证申请可见性，不可见折叠为申请 404。
+// 参数：db 为查询会话；principal 为审批主体；customerID 为申请客户。
+// 返回值：可见时 nil；不可见为 404；数据库故障保留原错误。
+// 不变量：数据库错误不得折叠成 404，否则真实故障会被误报成资源缺失。
 func ensureCreditApplicationCustomerVisible(db *gorm.DB, principal auth.Principal, customerID uint64) error {
 	err := ensureCreditCustomerVisible(db, principal, customerID)
 	if err == nil {
@@ -152,9 +155,11 @@ func ensureCreditApplicationCustomerVisible(db *gorm.DB, principal auth.Principa
 	return err
 }
 
-// lockScopedCreditCustomer 在事务内按客户数据范围对客户行加排他锁，同时要求客户仍为
-// ACTIVE 且未合并。谓词复用 scopedCreditCustomers（customer.ApplyDataScope），与信用申请
-// 创建时的客户锁同形；调用方必须已经锁定申请行，保持“申请→客户”的锁序。
+// lockScopedCreditCustomer 用途：在已锁申请的事务中按范围锁定可用客户，保持申请到客户锁序。
+// 参数：tx 为事务；principal 为审批主体；customerID 为客户；dest 接收锁定行。
+// 返回值：查询错误；无可见可用客户时返回记录不存在。
+// 不变量：复用 scopedCreditCustomers（customer.ApplyDataScope）与申请创建时客户锁同形，
+// 并要求客户仍为 ACTIVE 且未合并；调用方必须已锁定申请行，保持“申请→客户”锁序。
 func lockScopedCreditCustomer(tx *gorm.DB, principal auth.Principal, customerID uint64, dest any) error {
 	return scopedCreditCustomers(tx, principal).
 		Clauses(clause.Locking{Strength: "UPDATE"}).
@@ -685,6 +690,9 @@ func (s *Service) Apply(ctx context.Context, customerID uint64, in ApplyRequest)
 	return &out, nil
 }
 
+// Decide 用途：在申请和客户锁内按数据范围审批客户信用调整。
+// 参数：ctx 为请求；applicationID 为申请；approve 为决定；in 为意见与版本。
+// 返回值：审批结果；无权限、不可见、状态冲突或存储失败返回错误。
 func (s *Service) Decide(ctx context.Context, applicationID uint64, approve bool, in DecisionRequest) (*Application, error) {
 	p, ok := auth.FromContext(ctx)
 	if !ok {
@@ -827,6 +835,9 @@ func (s *Service) Withdraw(ctx context.Context, customerID, applicationID uint64
 	return &out, nil
 }
 
+// Pending 用途：通过客户可见性子查询读取当前审批人的信用待办。
+// 参数：ctx 为携带认证主体的请求上下文。
+// 返回值：可见待办列表；认证、权限或查询失败返回错误。
 func (s *Service) Pending(ctx context.Context) ([]PendingApplication, error) {
 	p, ok := auth.FromContext(ctx)
 	if !ok {

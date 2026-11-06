@@ -452,6 +452,10 @@ func valueOrDefault(key, fallback string) string {
 	}
 	return fallback
 }
+
+// intValueOrDefault 用途：解析整数环境配置，缺省时使用既定额度。
+// 参数：key 为环境变量名；fallback 为缺省额度。
+// 返回值：解析值；非整数配置返回错误。
 func intValueOrDefault(key string, fallback int) (int, error) {
 	value := os.Getenv(key)
 	if value == "" {
@@ -468,21 +472,41 @@ func (c Config) projectHistoryStalenessThreshold() time.Duration {
 
 // 登录入口限流参数：Config 零值直接构造（测试、嵌入方）时仍按内置默认额度生效，
 // 避免“忘记配置”变成“完全不限流”。
+
+// loginRateLimit 用途：读取登录额度，零值保持默认限流。
+// 参数：无。
+// 返回值：登录入口每窗口每客户端的有效额度。
 func (c Config) loginRateLimit() int {
 	return authRateLimitOrDefault(c.LoginRateLimit, defaultLoginRateLimit)
 }
+
+// activateRateLimit 用途：读取邀请额度，零值保持默认限流。
+// 参数：无。
+// 返回值：邀请入口每窗口每客户端的有效额度。
 func (c Config) activateRateLimit() int {
 	return authRateLimitOrDefault(c.ActivateRateLimit, defaultActivateRateLimit)
 }
+
+// callbackRateLimit 用途：读取回调额度，零值保持默认限流。
+// 参数：无。
+// 返回值：回调入口每窗口每客户端的有效额度。
 func (c Config) callbackRateLimit() int {
 	return authRateLimitOrDefault(c.CallbackRateLimit, defaultCallbackRateLimit)
 }
+
+// authRateLimitWindow 用途：读取有效固定窗口，零值使用默认窗口。
+// 参数：无。
+// 返回值：限流时间窗口。
 func (c Config) authRateLimitWindow() time.Duration {
 	if c.RateLimitWindow <= 0 {
 		return defaultAuthRateLimitWindow
 	}
 	return c.RateLimitWindow
 }
+
+// authRateLimitOrDefault 用途：让未指定额度仍按默认值限流。
+// 参数：value 为配置额度；fallback 为入口默认额度。
+// 返回值：正数配置值或默认额度。
 func authRateLimitOrDefault(value, fallback int) int {
 	if value <= 0 {
 		return fallback

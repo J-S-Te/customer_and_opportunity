@@ -16,7 +16,9 @@ import (
 // ErrPortalRateLimited 是登录入口限流的稳定错误契约，前端与网关共用 429 语义。
 var ErrPortalRateLimited = apperror.New(http.StatusTooManyRequests, "PORTAL_RATE_LIMITED", "too many login attempts, retry later")
 
-// portalAuthRateLimit 按客户端地址为匿名登录入口做进程内固定窗口限流（M-10）。
+// portalAuthRateLimit 用途：在业务处理前按真实客户端限制匿名登录请求。
+// 参数：config 为含受信代理的配置；limit 为入口每窗口额度。
+// 返回值：单进程限流中间件；超额返回 429 且不进入业务处理。
 //
 // 语义与限制（与平台 FixedWindowRateLimit 保持一致）：
 //   - 桶键取 loginip.Client 的结果，只有直接对端命中 Config.TrustedProxies 时才采信
@@ -35,8 +37,10 @@ func portalAuthRateLimit(config Config, limit int) gin.HandlerFunc {
 	return fixedWindowRateLimit(limit, window, clientKey)
 }
 
-// portalRateLimitClientKey 返回稳定、可用于日志关联的桶键。空地址统一落到 unknown，
-// 避免未采集地址的请求绕过额度。
+// portalRateLimitClientKey 用途：仅采信受信代理的客户端地址，空地址统一归桶。
+// 参数：trusted 为允许采信转发头的直接对端范围。
+// 返回值：请求到客户端桶键的映射函数。
+// 桶键稳定且可用于日志关联；空地址统一落到 unknown，避免未采集地址的请求绕过额度。
 func portalRateLimitClientKey(trusted []netip.Prefix) func(*http.Request) string {
 	return func(request *http.Request) string {
 		client, _ := loginip.Client(request, trusted)
@@ -47,8 +51,11 @@ func portalRateLimitClientKey(trusted []netip.Prefix) func(*http.Request) string
 	}
 }
 
-// fixedWindowRateLimit 是固定窗口计数器：窗口起点由该键的第一次请求建立，
-// 跨窗口即重置。互斥锁同时保护计数与清理，清理频率最多每窗口一次。
+// fixedWindowRateLimit 用途：并发安全地按首次请求建立固定窗口并清理过期桶。
+// 参数：limit 为额度；window 为窗口；key 为客户端桶键函数。
+// 返回值：限流中间件；超额返回带 Retry-After 的 429。
+// 窗口起点由该键的第一次请求建立，跨窗口即重置；互斥锁同时保护计数与清理，
+// 清理频率最多每窗口一次。
 func fixedWindowRateLimit(limit int, window time.Duration, key func(*http.Request) string) gin.HandlerFunc {
 	type bucket struct {
 		startedAt time.Time
@@ -89,9 +96,11 @@ func fixedWindowRateLimit(limit int, window time.Duration, key func(*http.Reques
 	}
 }
 
-// hasNonLoopbackTrustedProxy 报告可信代理名单是否覆盖了非回环对端。仅信任回环时，
-// 网关转发的全部请求对端都是网关地址，桶键退化成一个，限流额度变成全站共享，
-// 因此启动日志必须显式告警。
+// hasNonLoopbackTrustedProxy 用途：检测可信代理是否覆盖网关等非回环对端。
+// 参数：trusted 为已校验的可信代理前缀。
+// 返回值：存在非回环前缀时 true；否则启动时提示分桶退化。
+// 仅信任回环时，网关转发的全部请求对端都是网关地址，桶键退化成一个，限流额度
+// 变成全站共享，因此启动日志必须显式告警。
 func hasNonLoopbackTrustedProxy(trusted []netip.Prefix) bool {
 	for _, prefix := range trusted {
 		if !prefix.Addr().IsLoopback() {

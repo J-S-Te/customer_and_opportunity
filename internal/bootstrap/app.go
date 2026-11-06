@@ -116,9 +116,9 @@ func New(config Config) (*App, error) {
 		c.JSON(http.StatusOK, gin.H{
 			"status": "ready",
 			"capabilities": gin.H{
-				"win_confirmation":       gin.H{"mode": config.WinConfirmationMode, "state": winReadyState(winReady)},
-				"contract_verification":  gin.H{"enabled": config.ContractVerificationEnabled, "state": capabilityState(config.ContractVerificationEnabled)},
-				"contract_transfer":      gin.H{"subscribed": config.ContractTransferSubscribed, "state": capabilityState(config.ContractTransferSubscribed)},
+				"win_confirmation":      gin.H{"mode": config.WinConfirmationMode, "state": winReadyState(winReady)},
+				"contract_verification": gin.H{"enabled": config.ContractVerificationEnabled, "state": capabilityState(config.ContractVerificationEnabled)},
+				"contract_transfer":     gin.H{"subscribed": config.ContractTransferSubscribed, "state": capabilityState(config.ContractTransferSubscribed)},
 			},
 		})
 	})
@@ -483,7 +483,7 @@ func New(config Config) (*App, error) {
 	portalreportreference.RegisterRoutes(internal, portalreportreference.GORMReader{DB: db})
 	contractreference.RegisterInternalRoutes(internal, contractreference.NewHandler(contractreference.NewService(contractreference.NewGORMRepository(db))))
 	// 历史合同导入开立通道：客户与商机分别复用各自服务的 provision 入口
-	//（负责人目录校验、阶段状态机与赢单前置仍由领域服务执行），此处只装配机器端点。
+	//（负责人目录校验、阶段状态机与合同验真闸门仍由领域服务执行），此处只装配机器端点。
 	importprovision.RegisterInternalRoutes(internal, importprovision.NewHandler(importprovision.NewService(customerService, opportunityService)))
 	opportunity.RegisterIntegrationRoutes(internal, opportunityHandler)
 	presale.RegisterInternalRoutes(internal, presaleHandler)

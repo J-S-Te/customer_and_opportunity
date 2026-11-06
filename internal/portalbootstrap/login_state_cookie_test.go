@@ -34,9 +34,9 @@ func (loginStateOIDC) AuthorizationURL(state, nonce, codeChallenge, returnPath s
 	return "https://idp.example/authorize?state=" + url.QueryEscape(state), nil
 }
 
-// TestPortalNormalLoginStateCookie 核验普通登录入口在中央模式下建立同浏览器state绑定。
-// 参数：t为使用真实账号服务随机状态与保护器的HTTP单测上下文。
-// 返回值：无；Cookie缺失、错误状态、属性变化或旧模式额外写入即失败。
+// TestPortalNormalLoginStateCookie 用途：验证普通及中央登录都建立浏览器 state 绑定。
+// 参数：t 为该行为的测试上下文。
+// 返回值：无；行为与预期不符时测试失败。
 func TestPortalNormalLoginStateCookie(t *testing.T) {
 	for _, enabled := range []bool{false, true} {
 		config := validPortalConfig()

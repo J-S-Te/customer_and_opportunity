@@ -14,21 +14,23 @@ import (
 	"gorm.io/gorm"
 )
 
-// creditApprover 构造审批人主体：带 sales_director 角色即通过审批闸门，且不是“纯销售”，
-// 因此客户可见范围完全由平台下发的 ScopeMode/OrganizationIDs 决定。
+// creditApprover 用途：构造带审批角色和指定数据范围的固定租户主体。
+// 参数：userID 为审批人；scope 为范围模式；organizations 为可见组织。
+// 返回值：审批测试主体。
 func creditApprover(userID string, scope auth.ScopeMode, organizations ...string) auth.Principal {
 	return creditApproverInTenant("tenant-a", userID, scope, organizations...)
 }
 
-// creditApproverInTenant 用于真实 MySQL 用例：主体租户必须与本次动态测试租户一致，
-// 否则审批查询会按固定租户查不到刚插入的申请。
+// creditApproverInTenant 用途：构造与动态测试租户一致的审批主体。
+// 参数：tenant 为测试租户；userID 为审批人；scope 与 organizations 为数据范围。
+// 返回值：带销售总监角色的测试主体。
 func creditApproverInTenant(tenant, userID string, scope auth.ScopeMode, organizations ...string) auth.Principal {
 	return auth.Principal{TenantID: tenant, UserID: userID, Roles: []string{"sales_director"}, ScopeMode: scope, OrganizationIDs: organizations}
 }
 
-// TestPendingEmbedsCustomerScopeSubquery 断言审批待办箱只返回当前主体可见客户的申请。
-// 待办箱带出客户名称与申请事由，越权一条就等于泄露范围外客户信息；范围必须作为子查询
-// 嵌进真实读取语句，而不是只在别处做一次前置校验。
+// TestPendingEmbedsCustomerScopeSubquery 用途：验证信用待办以客户可见性子查询裁剪结果。
+// 参数：t 为该行为的测试上下文。
+// 返回值：无；行为与预期不符时测试失败。
 func TestPendingEmbedsCustomerScopeSubquery(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -98,8 +100,9 @@ func TestPendingEmbedsCustomerScopeSubquery(t *testing.T) {
 	}
 }
 
-// TestDecideCustomerLockAppliesCustomerScope 断言审批落库时的客户行锁也受客户范围约束：
-// 可见性校验与加锁之间客户归属发生变化时，锁查询必须失败，而不是继续审批范围外客户。
+// TestDecideCustomerLockAppliesCustomerScope 用途：验证信用审批的客户行锁保留数据范围谓词。
+// 参数：t 为该行为的测试上下文。
+// 返回值：无；行为与预期不符时测试失败。
 func TestDecideCustomerLockAppliesCustomerScope(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -160,7 +163,9 @@ func TestDecideCustomerLockAppliesCustomerScope(t *testing.T) {
 	}
 }
 
-// creditDecideErrorCode 取业务错误码，用于断言不可见场景的稳定错误契约。
+// creditDecideErrorCode 用途：提取信用审批业务错误码以校验稳定拒绝契约。
+// 参数：t 为测试上下文；err 为审批返回错误。
+// 返回值：业务错误码；非业务错误时终止测试。
 func creditDecideErrorCode(t *testing.T, err error) string {
 	t.Helper()
 	var appErr *apperror.Error
@@ -170,9 +175,9 @@ func creditDecideErrorCode(t *testing.T, err error) string {
 	return appErr.Code
 }
 
-// TestCreditDecideEnforcesCustomerScopeOnMySQL 是真实 MySQL 反例：ORG 审批人只能审批
-// 本组织客户的申请；跨组织与空组织集合都必须回 404，且客户信用等级与申请状态保持不变。
-// 未配置隔离测试 DSN 时跳过，绝不连接业务库。
+// TestCreditDecideEnforcesCustomerScopeOnMySQL 用途：在显式隔离 MySQL 上验证范围外审批失败关闭。
+// 参数：t 为该行为的测试上下文。
+// 返回值：无；行为与预期不符时测试失败。
 func TestCreditDecideEnforcesCustomerScopeOnMySQL(t *testing.T) {
 	dsn := strings.TrimSpace(os.Getenv("CRM_CREDIT_TEST_DSN"))
 	if dsn == "" {

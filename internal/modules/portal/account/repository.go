@@ -274,6 +274,9 @@ func (r *GORMRepository) RevertActivation(ctx context.Context, tenantID string, 
 // 并可能把登录请求拖进长事务。批量上限保证单次登录的最坏代价可预期。
 const activationCleanupBatch = 1000
 
+// CreateActivation 用途：写入登录激活上下文并有界清理过期记录。
+// 参数：ctx 为请求；value 为服务生成的激活上下文。
+// 返回值：插入错误；清理失败记录告警但不阻断本次登录。
 func (r *GORMRepository) CreateActivation(ctx context.Context, value *ActivationContext) error {
 	db := r.tx(ctx)
 	if err := db.Create(value).Error; err != nil {

@@ -207,8 +207,9 @@ func TestPortalConfigCatalogSynchronizationIsOptionalButCompleteWhenEnabled(t *t
 	}
 }
 
-// M-10：登录入口额度必须可配、有区间；0 表示取默认值而不是关闭限流，
-// 因此"配置遗漏"不会静默变成不限流。
+// TestPortalAuthRateLimitConfigurationIsBounded 用途：验证登录限流配置的默认值及合法区间。
+// 参数：t 为该行为的测试上下文。
+// 返回值：无；行为与预期不符时测试失败。
 func TestPortalAuthRateLimitConfigurationIsBounded(t *testing.T) {
 	if err := validPortalConfig().validate(); err != nil {
 		t.Fatalf("zero-value rate limits rejected: %v", err)
@@ -242,6 +243,9 @@ func TestPortalAuthRateLimitConfigurationIsBounded(t *testing.T) {
 	}
 }
 
+// TestPortalAuthRateLimitEnvironmentOverrides 用途：验证限流环境配置解析及非法值报错。
+// 参数：t 为该行为的测试上下文。
+// 返回值：无；行为与预期不符时测试失败。
 func TestPortalAuthRateLimitEnvironmentOverrides(t *testing.T) {
 	for name, want := range map[string]int{"3": 3, "0": 0} {
 		t.Setenv("PORTAL_LOGIN_RATE_LIMIT", name)

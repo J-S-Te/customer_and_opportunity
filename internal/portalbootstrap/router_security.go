@@ -146,20 +146,27 @@ const loginStateCookieName = "customer_portal_login_state"
 // 服务端更早或更久地保留 state。
 const loginStateTTL = 10 * time.Minute
 
+// loginStateCookie 用途：生成作用域收窄到认证路径的浏览器绑定 Cookie。
+// 参数：config 为路径及安全配置；value 为原始 state；expires 为截止时间。
+// 返回值：HttpOnly、SameSite=Lax 的 state Cookie。
 func loginStateCookie(config Config, value string, expires time.Time) *http.Cookie {
 	return &http.Cookie{Name: loginStateCookieName, Value: value, Path: config.PathPrefix + "/auth", Expires: expires, HttpOnly: true, Secure: config.SessionCookieSecure, SameSite: http.SameSiteLaxMode}
 }
 
-// expiredLoginStateCookie 用同名同路径的过期 Cookie 清除浏览器状态；回调成功和失败
-// 都必须下发，使一次登录只允许一次回调。
+// expiredLoginStateCookie 用途：以相同名称和路径清除已终止的浏览器登录状态。
+// 参数：config 为原 Cookie 的路径及安全配置。
+// 返回值：空值且 MaxAge=-1 的过期 Cookie。
+// 回调成功和失败都必须下发，使一次登录只允许一次回调。
 func expiredLoginStateCookie(config Config) *http.Cookie {
 	cookie := loginStateCookie(config, "", time.Unix(1, 0))
 	cookie.MaxAge = -1
 	return cookie
 }
 
-// verifyLoginState 比较浏览器 Cookie 与服务端签发的 state（查询串回传值）。
-// 任一缺失、含空白/控制字符（Cookie 或头注入残留）即判定非法；比较使用常量时间，
+// verifyLoginState 用途：在消费激活上下文前常量时间比较浏览器与回调 state。
+// 参数：browserState 为 Cookie 值；queryState 为回调查询值。
+// 返回值：匹配时 nil；缺失、含空白或失配返回非法登录状态。
+// 任一缺失、含空白或控制字符（Cookie 或头注入残留）即判定非法；比较使用常量时间，
 // 不按字节泄漏前缀匹配程度。它不消费 activation，纯函数便于单独测试。
 func verifyLoginState(browserState, queryState string) error {
 	if browserState == "" || queryState == "" {

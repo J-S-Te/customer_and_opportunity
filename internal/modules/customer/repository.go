@@ -196,9 +196,12 @@ func (r *GORMRepository) ListChangeLogs(ctx context.Context, tenantID string, cu
 	return pagination.Page[ChangeLogResponse]{Items: items, Page: page, PageSize: pageSize, Total: total}, nil
 }
 
-// ListOpportunityHistory 返回客户下的商机历史。商机是独立聚合，客户可见不等于商机可见，
-// 因此范围谓词直接复用 opportunity.ApplyDataScope（商机数据范围的唯一权威实现），
-// 不在客户模块复制第二份。父客户可见性由 service 前置校验，这里是纵深防御的第二道收口。
+// ListOpportunityHistory 用途：在父客户校验后按商机唯一范围谓词读取历史。
+// 参数：ctx 为请求；principal 为主体；customerID 为父客户；page、pageSize 为分页。
+// 返回值：可见商机分页；客户不可见或查询失败返回错误。
+// 不变量：商机是独立聚合，客户可见不等于商机可见，范围谓词必须复用
+// opportunity.ApplyDataScope（商机数据范围唯一权威实现），不在客户模块复制第二份；
+// 父客户可见性由 service 前置校验，这里是纵深防御的第二道收口。
 func (r *GORMRepository) ListOpportunityHistory(ctx context.Context, principal auth.Principal, customerID uint64, page, pageSize int) (pagination.Page[OpportunitySummary], error) {
 	page, pageSize = pagination.Normalize(page, pageSize)
 	db := opportunity.ApplyDataScope(database.FromContext(ctx, r.db).Table("crm_opportunities"), principal).

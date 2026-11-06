@@ -976,9 +976,9 @@ components:
       x-scope: opportunity.import_provision
       description: |-
         Advances a historical-contract opportunity to 已签约 + CLOSED through the
-        existing stage state machine and win-confirmation gate (contract
-        verification is mandatory in contract mode; an unconfigured verifier
-        returns 503 CRM_IMPORT_PROVISION_CONTRACT_NOT_VERIFIED). Repeated calls
+        existing stage state machine and contract verification gate (a
+        verifiable contract_ref is mandatory; an unconfigured or unavailable
+        verifier returns 503 CRM_IMPORT_PROVISION_CONTRACT_NOT_VERIFIED). Repeated calls
         with the same contract_ref replay the stored result without writing a
         second stage log, and no OPPORTUNITY_SIGNED event is emitted.
       parameters:
