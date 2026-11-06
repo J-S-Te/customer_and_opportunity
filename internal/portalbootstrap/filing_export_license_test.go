@@ -93,6 +93,9 @@ func TestFilingExportCommercialLicenseBoundary(t *testing.T) {
 			if !bytes.Equal(response.Body.Bytes(), renderer.content) || response.Header().Get("Content-Type") != "application/pdf" {
 				t.Fatalf("unexpected export response: content-type=%s body=%s", response.Header().Get("Content-Type"), response.Body.String())
 			}
+			if disposition := response.Header().Get("Content-Disposition"); disposition != contentDisposition("filing-1.pdf") || strings.Contains(disposition, `"`) {
+				t.Fatalf("unsafe export content disposition: %q", disposition)
+			}
 			digest := sha256.Sum256(renderer.content)
 			if response.Header().Get("X-Content-SHA256") != hex.EncodeToString(digest[:]) || repository.value.Status != filing.StatusDraft || repository.value.Version != 1 {
 				t.Fatal("history export changed business state or lost content evidence")

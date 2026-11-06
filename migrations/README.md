@@ -139,6 +139,7 @@
 39. `000119_add_ip_provenance_to_portal_request_audit_outbox.up.sql`
 40. `000123_portal_session_username.up.sql`
 41. `000125_portal_central_session_governance.up.sql`（已发布，文件及内容保持不变。）
+42. `000126_portal_activation_expiry_index.up.sql`（安全审计 M-10：为无租户条件的 `expires_at <= now` 清理新增 `idx_portal_activation_expiry_scan (expires_at, consumed_at)`；只加二级索引、不改列与约束，不改 state 唯一键和一次性消费语义。上线顺序为「先执行本迁移 → 再发布启用机会式清理的 Portal 镜像」，旧镜像不读该索引、可安全共库灰度；在存量表上新增索引仍需按在线变更方案评估 metadata lock，回退只删索引、不删 activation 证据。）
 
 ## 规则
 
@@ -227,3 +228,5 @@ Portal `000067`（`000067_portal_feedback_customer_notifications`）为 `portal_
 本轮仅核对清单、文件存在与源码计划，未连接MySQL或执行DDL。详细证据与限制见 [核验记录](../../.ai/modules/operation-docs-crm-20261013.md)。
 
 2026-10-18 已在本地一次性 MySQL 8.4.11 空库执行当前完整 CRM `up` 链：73 个文件至 `000117`，combined checksum 为 `sha256:75e29e09642ab3ac0627081f1ce518a6f30ef9f7a9bc5c8f962e27e1d5b2b2d4`。已实际核对 `crm_presale_requests` 的团队负责人/指派级别列、`crm_presale_assignments.assignment_kind` 默认值与 CHECK、两个新索引，并验证缺省写入落为 `EXECUTOR`、非法类型被拒绝；另在真实本地栈验证两级指派幂等写入不再被旧 mutation CHECK 拒绝；同时核对 `chk_crm_notification_resource_shape` 已接受三类 TS-011 通知类型。临时容器已删除。该空库执行使用显式 `collation=utf8mb4_0900_ai_ci` 连接参数；未指定时既有 `000071` 的 `CAST(... AS CHAR)` 会触发连接 collation 与列 collation 混用，属于发布前应固定的连接参数，本轮未改写 `000071`。该结果不替代上一版本增量升级、在线 DDL、metadata lock、回退演练或 Portal 迁移验证。
+
+2026-11 安全审计 M-10 静态登记：Portal 计划新增 `000126_portal_activation_expiry_index.up.sql`，源码计划变为 CRM 78 文件、Portal 41 文件（`internal/migrationplan/plan.go` 为准，`go test ./internal/migrationplan/` 校验归属、顺序与 checksum）。本轮只在源码层登记并运行静态计划测试，未连接 MySQL、未执行 DDL，因此不构成空库执行或存量升级证据；`000126` 在存量 `portal_activation_contexts` 上新增索引仍须按在线变更方案评估 metadata lock、复制延迟与回退条件（down 仅删索引）。

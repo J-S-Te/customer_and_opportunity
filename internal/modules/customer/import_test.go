@@ -284,3 +284,39 @@ func TestPreviewImportBodyLimitConstants(t *testing.T) {
 		t.Fatal("unsafe import limits")
 	}
 }
+
+// importErrorsRepoStub 只实现 ImportErrorsCSV 使用的方法，其余接口由嵌入的 nil 接口占位。
+type importErrorsRepoStub struct {
+	ImportRepository
+	rows []ImportRow
+}
+
+func (stub importErrorsRepoStub) FindImportPreview(context.Context, string, string, string) (*ImportJob, []ImportRow, error) {
+	return &ImportJob{JobNo: "0123456789abcdef0123456789abcdef"}, stub.rows, nil
+}
+
+func TestImportErrorsCSVWritesUTF8BOM(t *testing.T) {
+	service := &Service{imports: importErrorsRepoStub{rows: []ImportRow{{
+		RowNo: 2, Status: "ERROR", ErrorColumn: "客户名称", ErrorCode: "REQUIRED",
+		ErrorMessage: "客户名称不能为空", CustomerNo: "KH202609040001",
+	}}}}
+	ctx := auth.WithPrincipal(context.Background(), auth.Principal{TenantID: "tenant-a", UserID: "actor-a"})
+	data, filename, err := service.ImportErrorsCSV(ctx, "0123456789abcdef0123456789abcdef")
+	if err != nil {
+		t.Fatalf("ImportErrorsCSV() error = %v", err)
+	}
+	if !strings.HasSuffix(filename, "-errors.csv") {
+		t.Fatalf("filename = %q", filename)
+	}
+	raw := string(data)
+	if !strings.HasPrefix(raw, "\xef\xbb\xbf") {
+		t.Fatalf("import errors CSV missing UTF-8 BOM: %q", raw)
+	}
+	records, err := csv.NewReader(strings.NewReader(strings.TrimPrefix(raw, "\xef\xbb\xbf"))).ReadAll()
+	if err != nil {
+		t.Fatalf("parse import errors = %v", err)
+	}
+	if len(records) != 2 || records[0][0] != "行号" || records[1][4] != "客户名称不能为空" {
+		t.Fatalf("records = %#v", records)
+	}
+}

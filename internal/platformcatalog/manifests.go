@@ -5,6 +5,9 @@ package platformcatalog
 func CRMManifest() Manifest {
 	permissions := []Permission{
 		permission("customer.read", "查看客户", "customer", "read", "LOW"),
+		// 客户全量查看是只读放开：持有它才能在严格数据范围之上阅读租户内全部客户，
+		// 且只允许平台超级管理员授予，业务侧不能自行下发。
+		superAdminOnly(permission("customer.read.all", "查看全部客户", "customer", "read_all", "HIGH")),
 		permission("customer.create", "创建客户", "customer", "create", "MEDIUM"),
 		permission("customer.update", "维护客户", "customer", "update", "MEDIUM"),
 		permission("customer.duplicate.override", "覆盖客户疑似重名", "customer", "duplicate_override", "HIGH"),
@@ -76,13 +79,17 @@ func CRMManifest() Manifest {
 			"portal_account.provision", "portal_account.revoke", "portal_account.disable",
 			"presale.read", "presale.contact_phone.read", "presale.create", "presale.approve", "presale.approval_rule.manage", "presale.assign", "presale.progress", "presale.worklog", "presale.worklog.retry", "presale.cancel", "presale.engineer.sync", "presale.alert.config", "presale.report"),
 		role("auditor", "审计员", "只读查看经营数据和审计记录", "customer.read", "customer.audit.read", "customer.credit.read", "opportunity.read", "opportunity.attachment.read", "presale.read", "presale.report"),
+		// 全量查看员只放大客户读取范围：写路径仍按 ApplyDataScope 严格收窄，
+		// 因此该角色不携带任何 customer 写权限。
+		role("customer_all_viewer", "客户全量查看员", "查看租户内全部客户资料（只读）；仅平台超级管理员可授予",
+			"customer.read", "customer.read.all"),
 	}
-	return Manifest{Version: "crm-2026.09.21-v11", Permissions: permissions, Roles: roles, Policy: Policy{MaxEffectiveRoles: 10}}
+	return Manifest{Version: "crm-2026.09.21-v12", Permissions: permissions, Roles: roles, Policy: Policy{MaxEffectiveRoles: 10}}
 }
 
-// Portal 与 CRM 虽由同一仓库交付，授权目录仍相互独立。portal_customer 是外部客户
-// 身份，必须叠加本地 CUSTOMER 数据范围；portal_super_admin 是内部运营身份，不能被
-// 当作任意客户使用。二者均为单角色会话，具体数据范围由 Portal 服务端再次收口。
+// PortalManifest 返回门户独立授权目录，管理权限仅授予真实门户超管。
+// 参数：无。
+// 返回值：浏览器权限、角色与单角色策略，客户数据边界仍由业务复核。
 func PortalManifest() Manifest {
 	permissions := []Permission{
 		permission("project.read", "查看本人项目", "project", "read", "LOW"),
@@ -104,11 +111,19 @@ func PortalManifest() Manifest {
 		permission("feedback.reply", "回复本人反馈", "feedback", "reply", "MEDIUM"),
 		permission("account.security.manage", "管理当前账号安全", "account_security", "manage", "HIGH"),
 	}
+	customerPermissions := permissionCodes(permissions)
+	permissions = append(permissions,
+		permission("portal.customer.manage", "管理门户本地客户目录", "portal_customer", "manage", "HIGH"),
+		permission("portal.invite.manage", "管理门户本地邀请", "portal_invite", "manage", "HIGH"),
+		permission("portal.access.disable", "停用门户客户访问", "portal_access", "disable", "CRITICAL"),
+		permission("portal.local_project.manage", "管理门户本地项目授权", "portal_local_project", "manage", "HIGH"),
+		permission("portal.local_report.manage", "管理门户本地报告来源", "portal_local_report", "manage", "HIGH"),
+	)
 	return Manifest{
-		Version:     "portal-2026.08.25-v3",
+		Version:     "portal-2026.11.04-v4",
 		Permissions: permissions,
 		Roles: []Role{
-			role("portal_customer", "门户客户", "访问当前客户映射范围内的 Portal 自助能力", permissionCodes(permissions)...),
+			role("portal_customer", "门户客户", "访问当前客户映射范围内的 Portal 自助能力", customerPermissions...),
 			role("portal_super_admin", "门户超级管理员", "管理客户门户运营；跨客户业务数据必须经过受控客户上下文", permissionCodes(permissions)...),
 		},
 		Policy: Policy{MaxEffectiveRoles: 1},
@@ -117,6 +132,13 @@ func PortalManifest() Manifest {
 
 func permission(code, name, resource, action, risk string) Permission {
 	return Permission{Code: code, Name: name, ResourceCode: resource, ResourceName: resource, Action: action, RiskLevel: risk}
+}
+
+// superAdminOnly 标记该权限只能由平台超级管理员授予：业务侧角色配置不能自行下发，
+// 平台据此在授予链路上二次校验。只有确实需要跨数据范围的特权才使用它。
+func superAdminOnly(item Permission) Permission {
+	item.GrantPolicy = "SUPER_ADMIN_ONLY"
+	return item
 }
 
 func role(code, name, description string, permissions ...string) Role {

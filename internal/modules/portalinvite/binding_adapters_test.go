@@ -11,8 +11,9 @@ import (
 	"time"
 )
 
-// 平台客户绑定双写适配器：PUT 建立绑定、POST 禁用绑定，路径携带 platform_user_id，
-// scope 固定为 portal_mapping_provision / portal_mapping_disable，且与门户映射调用共用凭证。
+// TestHTTPPlatformBindingAdaptersUseExactScopesMethodsAndProof 验证真实OAuth请求与登记scope一致。
+// 参数：t为合成HTTP协议测试上下文，不连接真实外部平台。
+// 返回值：无；请求scope、方法、路径或防重放证明不匹配时失败。
 func TestHTTPPlatformBindingAdaptersUseExactScopesMethodsAndProof(t *testing.T) {
 	t.Parallel()
 	var mutex sync.Mutex
@@ -83,7 +84,7 @@ func TestHTTPPlatformBindingAdaptersUseExactScopesMethodsAndProof(t *testing.T) 
 
 	mutex.Lock()
 	defer mutex.Unlock()
-	if scopes["bind-client"] != portalMappingProvisionScope || scopes["disable-client"] != portalMappingDisableScope {
+	if scopes["bind-client"] != "portal.identity_mapping.provision" || scopes["disable-client"] != "portal.identity_mapping.disable" {
 		t.Fatalf("scopes = %v", scopes)
 	}
 	if bindMethod != http.MethodPut || disableMethod != http.MethodPost {

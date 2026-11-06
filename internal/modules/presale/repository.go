@@ -22,6 +22,9 @@ type Repository interface {
 	FindRequest(context.Context, string, uint64) (*PresaleRequest, error)
 	FindRequestForUpdate(context.Context, string, uint64) (*PresaleRequest, error)
 	FindRequestByCreateKey(context.Context, string, string) (*PresaleRequest, error)
+	// OpportunityDisplay 只读取租户内的商机名称与客户名称，用于详情展示；
+	// 它不复用商机数据范围，因为售前申请的可读性已由申请自身的范围校验决定。
+	OpportunityDisplay(context.Context, string, uint64) (OpportunityDisplay, error)
 	ListRequests(context.Context, RequestQueryScope, RequestListQuery, time.Time) (RequestListPage, error)
 	ListRequestFilterOptions(context.Context, RequestQueryScope, RequestListQuery, time.Time, int) (RequestFilterOptions, error)
 	ListOpportunityRequests(context.Context, string, uint64, int, int, time.Time) (RequestListPage, error)
@@ -147,6 +150,25 @@ func (r *GORMRepository) FindRequestByCreateKey(ctx context.Context, tenant, key
 	var v PresaleRequest
 	err := r.tx(ctx).Where("tenant_id = ? AND create_idempotency_key = ?", tenant, key).Take(&v).Error
 	return &v, mapNotFound(err)
+}
+
+// OpportunityDisplay 复用列表增强已有的“按租户读商机名称”口径，
+// 额外带出商机所属客户名称。商机或客户被软删除时只返回空名称，
+// 不阻断售前详情：申请自身保存了商机编号快照。
+func (r *GORMRepository) OpportunityDisplay(ctx context.Context, tenant string, opportunityID uint64) (OpportunityDisplay, error) {
+	var row struct {
+		Name         string
+		CustomerName string
+	}
+	err := r.tx(ctx).Table("crm_opportunities").
+		Select("crm_opportunities.name AS name, COALESCE(crm_customers.name, '') AS customer_name").
+		Joins("LEFT JOIN crm_customers ON crm_customers.tenant_id = crm_opportunities.tenant_id AND crm_customers.id = crm_opportunities.customer_id AND crm_customers.deleted_at IS NULL").
+		Where("crm_opportunities.tenant_id = ? AND crm_opportunities.id = ? AND crm_opportunities.deleted_at IS NULL", tenant, opportunityID).
+		Scan(&row).Error
+	if err != nil {
+		return OpportunityDisplay{}, err
+	}
+	return OpportunityDisplay{Name: row.Name, CustomerName: row.CustomerName}, nil
 }
 
 func applyRequestScope(db *gorm.DB, scope RequestQueryScope) *gorm.DB {

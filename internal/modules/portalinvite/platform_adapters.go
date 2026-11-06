@@ -26,8 +26,8 @@ const (
 	externalUserProvisionScope  = "external_user.provision"
 	applicationRoleAssignScope  = "application_role.assign"
 	applicationRoleRevokeScope  = "application_role.revoke"
-	portalMappingProvisionScope = "portal_mapping_provision"
-	portalMappingDisableScope   = "portal_mapping_disable"
+	portalMappingProvisionScope = "portal.identity_mapping.provision"
+	portalMappingDisableScope   = "portal.identity_mapping.disable"
 	portalApplicationRole       = "portal_customer"
 )
 
@@ -260,7 +260,7 @@ func (p *HTTPPlatformRoleRevoker) RevokePortalRole(ctx context.Context, platform
 }
 
 // HTTPPlatformBindingWriter 是平台客户绑定 BIND 接口的防腐层（Phase 2 双写）。
-// 与门户映射写入共用 portal_mapping_provision 机器客户端；平台校验 scope 与请求防重放证明。
+// 与门户映射写入共用 portal.identity_mapping.provision 机器scope；平台校验 scope 与请求防重放证明。
 type HTTPPlatformBindingWriter struct {
 	baseURL     string
 	application string
@@ -374,7 +374,7 @@ func (writer *HTTPPlatformBindingWriter) BindingStatus(ctx context.Context, plat
 }
 
 // HTTPPlatformBindingDisabler 是平台客户绑定 DISABLE_BIND 接口的防腐层；与门户禁用共用
-// portal_mapping_disable 机器客户端。
+// portal.identity_mapping.disable 机器scope。
 type HTTPPlatformBindingDisabler struct {
 	baseURL     string
 	application string

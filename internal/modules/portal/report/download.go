@@ -161,6 +161,8 @@ type DownloadRepository interface {
 }
 
 type DownloadService struct {
+	sourceAccessRequired      bool
+	sourceAccess              func(context.Context, Actor, uint64) error
 	repo                      DownloadRepository
 	files                     FileReader
 	risk                      DownloadRiskPolicy
@@ -202,6 +204,9 @@ func (s *DownloadService) RuntimeAvailable() bool {
 	return true
 }
 
+// CreateGrant 在原授权与文件状态校验前核验配置的来源ACL。
+// 参数：ctx/actor为可信客户，requestID为报告，command为幂等及风险元数据。
+// 返回值：真实下载授权；来源、客户、文件或事务错误均拒绝。
 func (s *DownloadService) CreateGrant(ctx context.Context, actor Actor, requestID uint64, command GrantCommand) (*GrantResult, error) {
 	// 每个账号/报告只保留一个活动授权槽位；明文令牌仅存在于首次成功响应，服务端只持久化摘要。
 	actor.TenantID = strings.TrimSpace(actor.TenantID)
@@ -209,6 +214,9 @@ func (s *DownloadService) CreateGrant(ctx context.Context, actor Actor, requestI
 	idempotencyKey, metadata := strings.TrimSpace(command.IdempotencyKey), command.Metadata
 	if !validActor(actor) || requestID == 0 || !validBoundedText(idempotencyKey, maxIdempotencyKeyBytes) {
 		return nil, ErrInvalidRequest
+	}
+	if err := s.validateSourceAccess(ctx, actor, requestID); err != nil {
+		return nil, err
 	}
 	token, err := s.tokens.NewToken()
 	if err != nil || len(token) < minimumTokenLen || len(token) > maximumTokenLen {
@@ -272,12 +280,17 @@ func (s *DownloadService) CreateGrant(ctx context.Context, actor Actor, requestI
 	return &GrantResult{GrantID: grant.PublicID, Status: GrantActive, ExpiresAt: grant.ExpiresAt, DownloadToken: token}, nil
 }
 
-// AuthorizeDownload 在全部范围检查通过前不消费令牌、不开启对象；依赖故障会审计但不增加下载次数。
+// AuthorizeDownload 在来源、客户及原grant校验通过前不消费令牌或打开文件。
+// 参数：ctx/actor为可信会话，requestID为报告，plaintextToken为原grant，metadata为风险元数据。
+// 返回值：受扫描、完整性、水印和风险保护的内容；任一边界失败均拒绝。
 func (s *DownloadService) AuthorizeDownload(ctx context.Context, actor Actor, requestID uint64, plaintextToken string, metadata DownloadMetadata) (*DownloadContent, error) {
 	actor.TenantID = strings.TrimSpace(actor.TenantID)
 	actor.AccountID = strings.TrimSpace(actor.AccountID)
 	if !validActor(actor) || requestID == 0 {
 		return nil, ErrGrantNotFound
+	}
+	if err := s.validateSourceAccess(ctx, actor, requestID); err != nil {
+		return nil, err
 	}
 	var value *Grant
 	var file *File
@@ -620,4 +633,26 @@ func tokenHash(token string) string {
 func invalidAttemptDedupeKey(actor Actor, requestID uint64, now time.Time) string {
 	bucket := now.UTC().Truncate(time.Hour).Format(time.RFC3339)
 	return sourceHash("INVALID_DOWNLOAD", actor.TenantID+"\x00"+actor.AccountID+"\x00"+strconv.FormatUint(requestID, 10)+"\x00"+bucket)
+}
+
+// UseSourceAccess 由固定组合根追加独立来源的精确ACL，默认旧CRM链不受影响。
+// 参数：validator为服务端来源校验器；显式传nil后所有访问失败关闭。
+// 返回值：已冻结来源访问要求的下载服务。
+func (s *DownloadService) UseSourceAccess(validator func(context.Context, Actor, uint64) error) *DownloadService {
+	s.sourceAccessRequired = true
+	s.sourceAccess = validator
+	return s
+}
+
+// validateSourceAccess 在本地来源每次建grant和下载前复核当前授权。
+// 参数：ctx/actor/requestID为原客户会话及报告坐标。
+// 返回值：来源未启用时兼容旧流程；启用后缺校验器或授权无效即失败。
+func (s *DownloadService) validateSourceAccess(ctx context.Context, actor Actor, requestID uint64) error {
+	if !s.sourceAccessRequired {
+		return nil
+	}
+	if s.sourceAccess == nil {
+		return ErrDownloadUnavailable
+	}
+	return s.sourceAccess(ctx, actor, requestID)
 }

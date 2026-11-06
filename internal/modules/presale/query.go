@@ -229,6 +229,12 @@ func (s *Service) RequestDetail(ctx context.Context, actor Actor, id uint64) (Re
 	if err = s.requireReadable(ctx, actor, requestValue); err != nil {
 		return RequestDetailView{}, err
 	}
+	// 详情展示“售前名称/被支持单位”需要商机与客户名称；读取失败按普通读库错误返回，
+	// 商机或客户已软删除时仓储只返回空名称，不影响申请本身可读。
+	display, err := s.repo.OpportunityDisplay(ctx, actor.TenantID, requestValue.OpportunityID)
+	if err != nil {
+		return RequestDetailView{}, err
+	}
 	if strings.TrimSpace(requestValue.ApplicantNameSnapshot) == "" {
 		names, resolveErr := resolveOwnerDisplayNames(ctx, s.ownerDirectory, []string{requestValue.ApplicantID})
 		if resolveErr != nil {
@@ -279,6 +285,7 @@ func (s *Service) RequestDetail(ctx context.Context, actor Actor, id uint64) (Re
 	}
 	return RequestDetailView{
 		Request: view, CurrentAssignees: assignees,
+		OpportunityName: display.Name, CustomerName: display.CustomerName,
 		TotalWorkHours: aggregate.TotalWorkHours, PushExceptionCount: aggregate.PushExceptionCount,
 		Overdue:    isOverdue(requestValue.Status, requestValue.ExpectedEnd, s.clock.Now()),
 		AlertLevel: alertAggregate.Level, AlertDueAt: alertAggregate.DueAt, AlertBasisAt: alertAggregate.BasisAt,

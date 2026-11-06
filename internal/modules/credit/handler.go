@@ -4,10 +4,15 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/apperror"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/auth"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/requestbody"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/response"
 	"net/http"
 	"strconv"
 )
+
+// creditWriteBodyLimit 限制信用写接口请求体：这些 DTO 都是小对象，
+// 收紧上限避免无界读取，同时保留统一严格解码（单对象、拒未知字段、拒重复键）。
+const creditWriteBodyLimit int64 = 16 << 10
 
 type Handler struct{ service *Service }
 
@@ -32,7 +37,7 @@ func (h *Handler) Payment(c *gin.Context) {
 		return
 	}
 	var in PaymentEvent
-	if c.ShouldBindJSON(&in) != nil {
+	if requestbody.DecodeJSONWithLimit(c, &in, creditWriteBodyLimit) != nil {
 		c.Status(http.StatusBadRequest)
 		return
 	}
@@ -95,7 +100,7 @@ func (h *Handler) Apply(c *gin.Context) {
 		return
 	}
 	var in ApplyRequest
-	if c.ShouldBindJSON(&in) != nil {
+	if requestbody.DecodeJSONWithLimit(c, &in, creditWriteBodyLimit) != nil {
 		response.Error(c, apperror.New(400, "CRM_CREDIT_APPLICATION_INVALID", "invalid credit application"))
 		return
 	}
@@ -117,7 +122,7 @@ func (h *Handler) RuleSettings(c *gin.Context) {
 }
 func (h *Handler) UpdateRuleSettings(c *gin.Context) {
 	var in UpdateRuleSettingsRequest
-	if c.ShouldBindJSON(&in) != nil {
+	if requestbody.DecodeJSONWithLimit(c, &in, creditWriteBodyLimit) != nil {
 		response.Error(c, apperror.New(400, "CRM_CREDIT_RULE_INVALID", "invalid credit rule settings"))
 		return
 	}
@@ -168,7 +173,7 @@ func (h *Handler) decide(c *gin.Context, approve bool) {
 		return
 	}
 	var in DecisionRequest
-	if c.ShouldBindJSON(&in) != nil {
+	if requestbody.DecodeJSONWithLimit(c, &in, creditWriteBodyLimit) != nil {
 		response.Error(c, apperror.New(400, "CRM_CREDIT_APPLICATION_INVALID", "invalid decision"))
 		return
 	}

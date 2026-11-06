@@ -19,6 +19,7 @@ import (
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/crmauth"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/customer"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/handover"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/importprovision"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/notification"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/opportunity"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/ownerdirectory"
@@ -50,6 +51,9 @@ type App struct {
 // New 装配当前应用的配置、存储、认证及服务入口。
 // 参数：config为当前应用运行配置。
 // 返回值：装配后的应用或认证实例；配置与依赖装配失败时返回错误。
+// New 按运行配置装配 CRM 身份、业务服务及显式集成能力。
+// 参数：config 为已校验的 CRM 配置。
+// 返回值：可运行应用；数据库、身份或适配器装配失败时返回错误。
 func New(config Config) (*App, error) {
 	licenseCtx, licenseCancel := context.WithCancel(context.Background())
 	started := false
@@ -101,7 +105,23 @@ func New(config Config) (*App, error) {
 		return pingErr == nil && sqlDB.PingContext(ctx) == nil
 	}
 	base.GET("/livez", livenessHandler)
-	base.GET("/readyz", readinessHandler(databaseHealthy))
+	// C14：能力维度快照；赢单确认模式、合同验真与转合同订阅是模式/开关事实，
+	// 可选未启用只反映在 state=disabled，不影响整体就绪判定。
+	base.GET("/readyz", func(c *gin.Context) {
+		if !databaseHealthy(c.Request.Context()) {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"status": "not_ready"})
+			return
+		}
+		winReady := config.WinConfirmationMode == "contract" || config.WinConfirmationMode == "local_evidence"
+		c.JSON(http.StatusOK, gin.H{
+			"status": "ready",
+			"capabilities": gin.H{
+				"win_confirmation":       gin.H{"mode": config.WinConfirmationMode, "state": winReadyState(winReady)},
+				"contract_verification":  gin.H{"enabled": config.ContractVerificationEnabled, "state": capabilityState(config.ContractVerificationEnabled)},
+				"contract_transfer":      gin.H{"subscribed": config.ContractTransferSubscribed, "state": capabilityState(config.ContractTransferSubscribed)},
+			},
+		})
+	})
 	base.GET("/healthz", func(c *gin.Context) {
 		if !databaseHealthy(c.Request.Context()) {
 			c.JSON(503, gin.H{"status": "unhealthy"})
@@ -318,7 +338,7 @@ func New(config Config) (*App, error) {
 			bindingWriter, bindErr := portalinvite.NewHTTPPlatformBindingWriter(context.Background(), portalinvite.PlatformBindingWriterOptions{
 				BaseURL: config.PlatformCustomerBindingBaseURL, TokenURL: config.PlatformManagementTokenURL,
 				ClientID: config.PortalProvisionClientID, ClientSecret: config.PortalProvisionClientSecret,
-				Scope: "portal_mapping_provision", ApplicationCode: config.PlatformPortalApplicationCode, TLS: config.PlatformManagementTLS,
+				Scope: "portal.identity_mapping.provision", ApplicationCode: config.PlatformPortalApplicationCode, TLS: config.PlatformManagementTLS,
 			})
 			if bindErr != nil {
 				return nil, bindErr
@@ -326,7 +346,7 @@ func New(config Config) (*App, error) {
 			bindingDisabler, disableBindErr := portalinvite.NewHTTPPlatformBindingDisabler(context.Background(), portalinvite.PlatformBindingDisablerOptions{
 				BaseURL: config.PlatformCustomerBindingBaseURL, TokenURL: config.PlatformManagementTokenURL,
 				ClientID: config.PortalDisableClientID, ClientSecret: config.PortalDisableClientSecret,
-				Scope: "portal_mapping_disable", ApplicationCode: config.PlatformPortalApplicationCode, TLS: config.PlatformManagementTLS,
+				Scope: "portal.identity_mapping.disable", ApplicationCode: config.PlatformPortalApplicationCode, TLS: config.PlatformManagementTLS,
 			})
 			if disableBindErr != nil {
 				return nil, disableBindErr
@@ -365,6 +385,7 @@ func New(config Config) (*App, error) {
 	}
 	opportunityCatalogService := opportunity.NewCatalogService(db, auditWriter)
 	opportunityService := opportunity.NewService(db, opportunityRepo, auditWriter, contractVerifier).UseCatalog(opportunityCatalogService)
+	opportunityService.UseWinConfirmation(config.WinConfirmationMode, config.ContractTransferSubscribed, opportunity.NewWinEvidenceStore(db))
 	if config.ContractSignedCountEnabled {
 		counter, counterErr := opportunity.NewHTTPSignedContractCounter(context.Background(), opportunity.SignedContractCounterOptions{
 			Endpoint: config.ContractSignedCountURL, TokenURL: config.ContractSignedCountTokenURL,
@@ -461,6 +482,9 @@ func New(config Config) (*App, error) {
 	}
 	portalreportreference.RegisterRoutes(internal, portalreportreference.GORMReader{DB: db})
 	contractreference.RegisterInternalRoutes(internal, contractreference.NewHandler(contractreference.NewService(contractreference.NewGORMRepository(db))))
+	// 历史合同导入开立通道：客户与商机分别复用各自服务的 provision 入口
+	//（负责人目录校验、阶段状态机与赢单前置仍由领域服务执行），此处只装配机器端点。
+	importprovision.RegisterInternalRoutes(internal, importprovision.NewHandler(importprovision.NewService(customerService, opportunityService)))
 	opportunity.RegisterIntegrationRoutes(internal, opportunityHandler)
 	presale.RegisterInternalRoutes(internal, presaleHandler)
 	credit.RegisterInternalRoutes(internal, creditHandler)

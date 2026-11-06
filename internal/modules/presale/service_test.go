@@ -345,7 +345,8 @@ func TestValidateCreate(t *testing.T) {
 	if err := validateCreate(valid); !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("empty description error=%v", err)
 	}
-	valid.Description = strings.Repeat("需求说明 ", 5000)
+	// 描述上限已从 60000 下调到 5000 字符，这里取靠近上限但未超限的长文本。
+	valid.Description = strings.Repeat("需求说明 ", 1000)
 	if err := validateCreate(valid); err != nil {
 		t.Fatalf("long description rejected: %v", err)
 	}

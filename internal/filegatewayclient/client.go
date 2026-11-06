@@ -140,8 +140,9 @@ func (client *Client) Bind(ctx context.Context, requestID, applicationID, fileID
 	return client.do(ctx, http.MethodPost, "/api/v1/files/"+url.PathEscape(fileID)+"/bindings", requestID, "application/json", bytes.NewReader(payload), nil)
 }
 
-// UploadV2 通过一次性网关票据写入受限数据流。受保护的本地暂存
-// 文件仅用于在创建上传会话前确定不可变的大小和摘要。
+// UploadV2 通过真实一次性票据写入有界文件，本地用途严格核实READY完成回执。
+// 参数：ctx为请求，input为固定用途、精确资源绑定及原文件。
+// 返回值：真实网关文件；票据、上传或本地精确回执不匹配时失败。
 func (client *Client) UploadV2(ctx context.Context, input V2UploadInput) (V2UploadReceipt, error) {
 	if strings.TrimSpace(input.RequestID) == "" || strings.TrimSpace(input.Purpose) == "" || strings.TrimSpace(input.Name) == "" || strings.TrimSpace(input.MediaType) == "" || strings.TrimSpace(input.ResourceType) == "" || strings.TrimSpace(input.ResourceID) == "" || strings.TrimSpace(input.BindingType) == "" || input.Content == nil {
 		return V2UploadReceipt{}, errors.New("v2 file upload input is incomplete")
@@ -195,6 +196,13 @@ func (client *Client) UploadV2(ctx context.Context, input V2UploadInput) (V2Uplo
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 1<<20))
 		return V2UploadReceipt{}, fmt.Errorf("file gateway returned HTTP %d", response.StatusCode)
+	}
+	if input.Purpose == "portal.local_report" {
+		binding, err := localUploadCompletion(response, grant)
+		if err != nil {
+			return V2UploadReceipt{}, err
+		}
+		return V2UploadReceipt{FileID: grant.FileID, BindingID: binding, SHA256: digest, SizeBytes: uint64(size)}, nil
 	}
 	var completed struct {
 		Data struct {
@@ -347,6 +355,7 @@ func (client *Client) do(ctx context.Context, method, path, requestID, contentTy
 // 精确不可变描述。委托网关端点重新检查源命名空间
 // 及该业务绑定；Portal 不持有 Project 文件凭据。
 type PortalReportSourceInput struct {
+	SourceType     string `json:"source_type,omitempty"`
 	RequestID      uint64 `json:"request_id"`
 	ExpectedSHA256 string `json:"expected_sha256"`
 	ExpectedSize   int64  `json:"expected_size"`
@@ -359,9 +368,12 @@ type PortalReportFile struct {
 	Content                 io.ReadCloser
 }
 
+// OpenPortalReportFile 读取固定来源的精确不可变报告并校验网关证据。
+// 参数：ctx/traceID为请求，fileID为真实网关文件，input为来源及期望描述。
+// 返回值：受控文件流；未知来源、超限或回执不匹配时失败。
 func (client *Client) OpenPortalReportFile(ctx context.Context, traceID, fileID string, input PortalReportSourceInput) (PortalReportFile, error) {
 	empty := PortalReportFile{}
-	if input.RequestID == 0 || input.ExpectedSize <= 0 || input.ExpectedSize > 50<<20 || input.ExpectedMIME != "application/pdf" || len(input.ExpectedSHA256) != 64 || input.ExpectedName == "" {
+	if (input.SourceType != "" && input.SourceType != "PROJECT" && input.SourceType != "PORTAL_LOCAL") || (input.SourceType == "PORTAL_LOCAL" && input.ExpectedSize > 20<<20) || input.RequestID == 0 || input.ExpectedSize <= 0 || input.ExpectedSize > 50<<20 || input.ExpectedMIME != "application/pdf" || len(input.ExpectedSHA256) != 64 || input.ExpectedName == "" {
 		return empty, errors.New("invalid report source descriptor")
 	}
 	body, err := json.Marshal(input)
@@ -393,4 +405,31 @@ func (client *Client) OpenPortalReportFile(ctx context.Context, traceID, fileID 
 		return empty, errors.New("report source gateway evidence invalid")
 	}
 	return PortalReportFile{VersionID: version, SHA256: digest, MIME: media, Size: response.ContentLength, Content: response.Body}, nil
+}
+
+// localUploadCompletion 依据网关真实data协议核实新本地用途的不可变完成证据。
+// 参数：response为v2上传完成响应，grant为本次精确会话。
+// 返回值：真实绑定ID；非201、缺字段、串接JSON或未知回执均失败。
+func localUploadCompletion(response *http.Response, grant V2DirectGrant) (string, error) {
+	if response.StatusCode != http.StatusCreated {
+		return "", errors.New("local report upload receipt status is invalid")
+	}
+	raw, err := io.ReadAll(io.LimitReader(response.Body, (1<<20)+1))
+	if err != nil || len(raw) > 1<<20 {
+		return "", errors.New("local report upload receipt is invalid")
+	}
+	var value struct {
+		Data struct {
+			UploadID  string `json:"upload_id"`
+			FileID    string `json:"file_id"`
+			BindingID string `json:"binding_id"`
+			Status    string `json:"status"`
+		} `json:"data"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&value) != nil || decoder.Decode(&struct{}{}) != io.EOF || value.Data.UploadID != grant.UploadID || value.Data.FileID != grant.FileID || value.Data.BindingID == "" || value.Data.Status != "READY" {
+		return "", errors.New("local report upload completion identity is invalid")
+	}
+	return value.Data.BindingID, nil
 }

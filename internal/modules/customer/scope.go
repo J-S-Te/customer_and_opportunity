@@ -35,6 +35,15 @@ func ApplyDataScope(db *gorm.DB, principal auth.Principal) *gorm.DB {
 	}
 }
 
+// ApplyReadScope 在严格数据范围之上放开“查看全部客户”权限：持有 customer.read.all 的
+// 主体可以读取租户内全部未删除客户，但写路径仍走 ApplyDataScope，不能据此获得改写作废权限。
+func ApplyReadScope(db *gorm.DB, principal auth.Principal) *gorm.DB {
+	if principal.HasPermission("customer.read.all") {
+		return db.Where("crm_customers.tenant_id = ? AND crm_customers.deleted_at IS NULL", principal.TenantID)
+	}
+	return ApplyDataScope(db, principal)
+}
+
 // salesOnlyPrincipal 判定主体是否只有销售角色：纯销售即便持有 application/tenant 级数据范围，
 // 客户可见范围也只限本人当前负责的客户。
 func salesOnlyPrincipal(principal auth.Principal) bool {

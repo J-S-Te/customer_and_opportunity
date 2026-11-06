@@ -93,3 +93,46 @@ func TestLatestApprovedQuotationBindsTenantAndExcludesSupersededApproval(t *test
 		}
 	}
 }
+
+// 列表关键字里的 % 和 _ 必须按字面匹配：转义后每条 LIKE 都声明 ESCAPE，
+// 绑定参数里不能再出现裸通配符；普通关键字仍保持原有的显示值/规范化值两套模式。
+func TestOpportunityListKeywordEscapesLikeWildcards(t *testing.T) {
+	db, err := gorm.Open(mysql.New(mysql.Config{DSN: "gorm:gorm@tcp(127.0.0.1:9910)/gorm?charset=utf8mb4&parseTime=True&loc=Local", SkipInitializeWithVersion: true}), &gorm.Config{DryRun: true, DisableAutomaticPing: true})
+	if err != nil {
+		t.Fatalf("open dry-run database: %v", err)
+	}
+	statement := applyOpportunityListKeyword(db.Model(&Opportunity{}), `50%_ A`).Find(&[]Opportunity{}).Statement
+	sql := statement.SQL.String()
+	if count := strings.Count(sql, `ESCAPE '\\'`); count != 6 {
+		t.Fatalf("every LIKE needs ESCAPE, got %d in %q", count, sql)
+	}
+	seen := map[string]int{}
+	for _, value := range statement.Vars {
+		if text, ok := value.(string); ok {
+			seen[text]++
+		}
+	}
+	// 显示值出现在 4 条 LIKE 上，去空格并小写后的规范化值出现在另外 2 条上。
+	for pattern, want := range map[string]int{`%50\%\_ A%`: 4, `%50\%\_a%`: 2} {
+		if seen[pattern] != want {
+			t.Fatalf("pattern %q occurrences=%d want %d (vars=%#v)", pattern, seen[pattern], want, statement.Vars)
+		}
+	}
+	if seen[`%50%_ A%`] > 0 || seen["%50%_a%"] > 0 {
+		t.Fatalf("unescaped wildcard leaked into patterns: %#v", statement.Vars)
+	}
+}
+
+func TestOpportunityBoardKeywordUsesSameEscaping(t *testing.T) {
+	db, err := gorm.Open(mysql.New(mysql.Config{DSN: "gorm:gorm@tcp(127.0.0.1:9910)/gorm?charset=utf8mb4&parseTime=True&loc=Local", SkipInitializeWithVersion: true}), &gorm.Config{DryRun: true, DisableAutomaticPing: true})
+	if err != nil {
+		t.Fatalf("open dry-run database: %v", err)
+	}
+	statement := applyOpportunityBoardKeyword(db.Model(&Opportunity{}), `a_b%`).Find(&[]Opportunity{}).Statement
+	if got := strings.Count(statement.SQL.String(), `ESCAPE '\\'`); got != 2 {
+		t.Fatalf("board LIKEs must declare ESCAPE, got %d in %q", got, statement.SQL.String())
+	}
+	if len(statement.Vars) != 2 || statement.Vars[0] != `%a\_b\%%` || statement.Vars[1] != `%a\_b\%%` {
+		t.Fatalf("vars=%#v", statement.Vars)
+	}
+}

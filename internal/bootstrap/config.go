@@ -107,6 +107,8 @@ type Config struct {
 	PortalProjectHistoryClientID     string
 	PortalProjectHistoryClientSecret string
 	PortalProjectHistoryScope        string
+	WinConfirmationMode              string
+	ContractTransferSubscribed       bool
 	ContractVerificationEnabled      bool
 	ContractSummaryURL               string
 	ContractSummaryTokenURL          string
@@ -169,6 +171,9 @@ type Config struct {
 // LoadConfig 读取并校验CRM启动配置，区分中央权威与旧模式本地期限。
 // 参数：无；配置来自当前进程环境变量。
 // 返回值：完整配置；解析、策略或安全边界无效时返回错误。
+// LoadConfig 读取并校验 CRM 运行配置及显式可选集成。
+// 参数：无；配置来自进程环境。
+// 返回值：有效配置；安全边界或配置格式不满足时返回错误。
 func LoadConfig() (Config, error) {
 	// 配置在进程开放监听端口前一次性解析并校验。任何布尔值、时长或密钥格式错误都失败退出，
 	// 避免运行中根据环境变量变化形成同一副本内不一致的安全策略。
@@ -278,6 +283,14 @@ func LoadConfig() (Config, error) {
 	portalProjectHistoryEnabled, err := strconv.ParseBool(valueOrDefault("PORTAL_PROJECT_HISTORY_ENABLED", "false"))
 	if err != nil {
 		return Config{}, fmt.Errorf("PORTAL_PROJECT_HISTORY_ENABLED: %w", err)
+	}
+	winConfirmationMode := valueOrDefault("CRM_WIN_CONFIRMATION_MODE", "contract")
+	if winConfirmationMode != "contract" && winConfirmationMode != "local_evidence" {
+		return Config{}, fmt.Errorf("CRM_WIN_CONFIRMATION_MODE must be contract or local_evidence")
+	}
+	contractTransferSubscribed, err := strconv.ParseBool(valueOrDefault("CRM_CONTRACT_TRANSFER_SUBSCRIBED", "true"))
+	if err != nil {
+		return Config{}, fmt.Errorf("CRM_CONTRACT_TRANSFER_SUBSCRIBED: %w", err)
 	}
 	contractVerificationEnabled, err := strconv.ParseBool(valueOrDefault("CONTRACT_VERIFICATION_ENABLED", "false"))
 	if err != nil {
@@ -422,6 +435,8 @@ func LoadConfig() (Config, error) {
 		PortalProjectHistoryURL:     os.Getenv("PORTAL_PROJECT_HISTORY_URL"), PortalProjectHistoryTokenURL: os.Getenv("PORTAL_PROJECT_HISTORY_TOKEN_URL"),
 		PortalProjectHistoryClientID: os.Getenv("PORTAL_PROJECT_HISTORY_CLIENT_ID"), PortalProjectHistoryClientSecret: os.Getenv("PORTAL_PROJECT_HISTORY_CLIENT_SECRET"),
 		PortalProjectHistoryScope:   valueOrDefault("PORTAL_PROJECT_HISTORY_SCOPE", "portal.project_history.read"),
+		WinConfirmationMode:         winConfirmationMode,
+		ContractTransferSubscribed:  contractTransferSubscribed,
 		ContractVerificationEnabled: contractVerificationEnabled,
 		ContractSummaryURL:          os.Getenv("CONTRACT_SUMMARY_URL"), ContractSummaryTokenURL: os.Getenv("CONTRACT_SUMMARY_TOKEN_URL"),
 		ContractSummaryClientID: os.Getenv("CONTRACT_SUMMARY_CLIENT_ID"), ContractSummaryClientSecret: os.Getenv("CONTRACT_SUMMARY_CLIENT_SECRET"),

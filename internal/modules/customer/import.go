@@ -624,13 +624,19 @@ func (s *Service) ImportErrorsCSV(ctx context.Context, jobNo string) ([]byte, st
 		return nil, "", err
 	}
 	var builder strings.Builder
+	// 与客户导出保持一致：错误明细 CSV 也带 UTF-8 BOM，避免 Excel 按本地代码页打开中文乱码。
+	builder.WriteString("\xef\xbb\xbf")
 	writer := csv.NewWriter(&builder)
-	_ = writer.Write([]string{"行号", "状态", "错误列", "错误代码", "错误信息", "客户编号"})
+	if err = writer.Write([]string{"行号", "状态", "错误列", "错误代码", "错误信息", "客户编号"}); err != nil {
+		return nil, "", err
+	}
 	for _, row := range rows {
 		if row.Status == "READY" || row.Status == "IMPORTED" {
 			continue
 		}
-		_ = writer.Write([]string{fmt.Sprint(row.RowNo), safeCSV(row.Status), safeCSV(row.ErrorColumn), safeCSV(row.ErrorCode), safeCSV(row.ErrorMessage), safeCSV(row.CustomerNo)})
+		if err = writer.Write([]string{fmt.Sprint(row.RowNo), safeCSV(row.Status), safeCSV(row.ErrorColumn), safeCSV(row.ErrorCode), safeCSV(row.ErrorMessage), safeCSV(row.CustomerNo)}); err != nil {
+			return nil, "", err
+		}
 	}
 	writer.Flush()
 	if err = writer.Error(); err != nil {

@@ -84,13 +84,14 @@ func (repository *GORMRepository) ActiveCustomer(ctx context.Context, principal 
 }
 
 // activeCustomerQuery 构造“当前主体可见且仍可引用的客户”查询。
-// 客户可见性必须与客户模块同口径：范围谓词直接复用 customer.ApplyDataScope（客户数据范围的
-// 唯一权威实现），不在合同引用内复制。销售只看“当前负责人”owner_user_id；交接后原创建人
-// 立即失去引用权限，created_by 仅作创建历史，不能作为访问依据。
+// 客户可见性必须与客户模块同口径：范围谓词直接复用 customer.ApplyReadScope（它以
+// customer.ApplyDataScope 为严格基线），不在合同引用内复制。因此纯销售仍只看“当前负责人”
+// owner_user_id，交接后原创建人立即失去引用权限，created_by 仅作创建历史；持有
+// customer.read.all 的主体按客户模块的只读口径放开到租户内全部客户。商机侧谓词不受影响。
 // 参数：db 为未绑定的 GORM 连接；principal 为认证边界输出的主体；id 为待引用的客户ID。
 // 返回值：已带范围、租户、状态与合并标记约束的查询。
 func activeCustomerQuery(db *gorm.DB, principal auth.Principal, id uint64) *gorm.DB {
-	return customer.ApplyDataScope(db.Model(&customer.Customer{}), principal).
+	return customer.ApplyReadScope(db.Model(&customer.Customer{}), principal).
 		Select("id", "name", "status").
 		Where("crm_customers.id = ? AND crm_customers.status = ? AND crm_customers.merged_into_id IS NULL", id, customer.StatusActive)
 }
@@ -178,7 +179,7 @@ func scopeMode(scopes []auth.DataScope) auth.ScopeMode {
 }
 
 // applyScope 只用于商机侧，逐字对应 opportunity 模块的数据范围谓词（scoped），
-// 客户侧不再使用本函数：客户范围必须复用 customer.ApplyDataScope。
+// 客户侧不再使用本函数：客户范围必须复用 customer.ApplyReadScope。
 func applyScope(query *gorm.DB, principal auth.Principal, ownerUserColumn, ownerOrgColumn string) *gorm.DB {
 	switch principal.ScopeMode {
 	case auth.ScopeAll:

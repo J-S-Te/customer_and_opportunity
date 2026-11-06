@@ -1,6 +1,7 @@
 package customer
 
 import (
+	"fmt"
 	"net/http"
 
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/apperror"
@@ -11,6 +12,7 @@ var (
 	ErrDuplicateCode                = apperror.New(http.StatusConflict, "CRM_CUSTOMER_DUPLICATE_CREDIT_CODE", "unified credit code already exists")
 	ErrDuplicateName                = apperror.New(http.StatusUnprocessableEntity, "CRM_CUSTOMER_DUPLICATE_NAME", "potential duplicate customer name requires an authorized override")
 	ErrInvalidContact               = apperror.New(http.StatusUnprocessableEntity, "CRM_CUSTOMER_INVALID_REGISTRATION_CONTACT", "exactly one registration contact is required")
+	ErrContactsLimitExceeded        = apperror.New(http.StatusUnprocessableEntity, "CRM_CUSTOMER_CONTACTS_LIMIT_EXCEEDED", "at most 50 contacts are allowed")
 	ErrInactive                     = apperror.New(http.StatusConflict, "CRM_CUSTOMER_INACTIVE", "only active customers can be edited")
 	ErrNotVoid                      = apperror.New(http.StatusConflict, "CRM_CUSTOMER_NOT_VOID", "only void customers can be restored")
 	ErrVoidBlocked                  = apperror.New(http.StatusConflict, "CRM_CUSTOMER_VOID_BLOCKED", "customer has active dependencies")
@@ -25,6 +27,7 @@ var (
 	ErrCreateReplayInvalid          = apperror.New(http.StatusConflict, "CRM_CUSTOMER_CREATE_REPLAY_INVALID", "customer creation replay no longer matches its resource")
 	ErrCreateIdempotencyUnavailable = apperror.New(http.StatusServiceUnavailable, "CRM_CUSTOMER_CREATE_IDEMPOTENCY_UNAVAILABLE", "customer creation idempotency repository is not configured")
 	ErrInvalidQuery                 = apperror.New(http.StatusBadRequest, "CRM_CUSTOMER_QUERY_INVALID", "customer query is invalid")
+	ErrInvalidExportFilters         = apperror.New(http.StatusUnprocessableEntity, "CRM_CUSTOMER_EXPORT_FILTERS_INVALID", "customer export filters are invalid")
 	ErrInvalidMasterData            = apperror.New(http.StatusUnprocessableEntity, "CRM_CUSTOMER_MASTER_DATA_INVALID", "customer master data is invalid")
 	ErrChangeReasonRequired         = apperror.New(http.StatusUnprocessableEntity, "CRM_CUSTOMER_CHANGE_REASON_REQUIRED", "change reason is required")
 	ErrKeyFilterUnavailable         = apperror.New(http.StatusServiceUnavailable, "CRM_CUSTOMER_KEY_FILTER_NOT_CONFIGURED", "key-customer classification is not configured")
@@ -41,3 +44,10 @@ var (
 	ErrImportJobExpired             = apperror.New(http.StatusConflict, "CRM_CUSTOMER_IMPORT_JOB_EXPIRED", "customer import preview has expired")
 	ErrImportJobConflict            = apperror.New(http.StatusConflict, "CRM_CUSTOMER_IMPORT_JOB_CONFLICT", "customer import job cannot be committed in its current state")
 )
+
+// newExportRowLimitError 构造导出超限的 422 校验错误，沿用本模块 ValidationError 的语义：
+// 请求本身合法、但按当前筛选条件产生的数据量不适合同步导出，需要调用方缩小范围。
+func newExportRowLimitError(limit int) error {
+	return apperror.New(http.StatusUnprocessableEntity, "CRM_CUSTOMER_EXPORT_ROW_LIMIT_EXCEEDED",
+		fmt.Sprintf("导出数据量超过上限（%d 行），请缩小筛选范围后重试", limit))
+}

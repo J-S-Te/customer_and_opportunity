@@ -47,22 +47,31 @@ func TestPortalNormalLoginStateCookie(t *testing.T) {
 		}
 		cookies := response.Result().Cookies()
 		if !enabled {
-			if len(cookies) != 0 {
-				t.Fatal("legacy login unexpectedly changed cookies")
+			// 普通登录必须把原始 state 绑定到当前浏览器；M-3 的登录 state Cookie 不能省略。
+			if len(cookies) != 1 || cookies[0].Name != loginStateCookieName {
+				t.Fatalf("legacy login must issue exactly one browser state cookie, got %#v", cookies)
 			}
 			continue
 		}
-		if len(cookies) != 1 {
-			t.Fatalf("central normal login needs one state cookie, got %d", len(cookies))
+		if len(cookies) != 2 {
+			t.Fatalf("central normal login needs browser and central state cookies, got %d", len(cookies))
 		}
-		cookie := cookies[0]
+		var cookie *http.Cookie
+		for _, candidate := range cookies {
+			if candidate.Name == config.SessionCookieName+"_oidc_state" {
+				cookie = candidate
+			}
+		}
+		if cookie == nil {
+			t.Fatalf("central state cookie missing: %#v", cookies)
+		}
 		target, _ := url.Parse(response.Header().Get("Location"))
-		if cookie.Name != config.SessionCookieName+"_oidc_state" || cookie.Value == "" ||
+		if cookie.Value == "" ||
 			cookie.Value != target.Query().Get("state") || cookie.Path != config.PathPrefix ||
 			!cookie.HttpOnly || !cookie.Secure || cookie.SameSite != http.SameSiteLaxMode ||
 			cookie.MaxAge != 600 || !cookie.Expires.After(time.Now()) ||
 			cookie.Expires.After(time.Now().Add(11*time.Minute)) {
-			t.Fatal("login state cookie does not match the protected browser transaction")
+			t.Fatal("central login state cookie does not match the protected browser transaction")
 		}
 	}
 }

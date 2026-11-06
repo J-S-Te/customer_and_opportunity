@@ -135,6 +135,9 @@ func (s *Service) ListFollowups(ctx context.Context, id uint64, page, pageSize i
 	return s.repo.ListFollowups(ctx, principal.TenantID, id, page, pageSize)
 }
 
+// CompleteTerminalTodo 按显式赢单模式补全终态证据或失败原因。
+// 参数：ctx 为身份上下文，id 为商机，input 为版本及补全依据。
+// 返回值：更新后的商机；无权限、冲突或证据错误时失败。
 func (s *Service) CompleteTerminalTodo(ctx context.Context, id uint64, input TerminalTodoRequest) (*Response, error) {
 	principal, err := requirePrincipal(ctx)
 	if err != nil {
@@ -151,24 +154,24 @@ func (s *Service) CompleteTerminalTodo(ctx context.Context, id uint64, input Ter
 		return nil, ErrInactive
 	}
 	before := toResponse(model)
+	var evidence *WinConfirmation
 	switch model.TerminalPendingType {
-	case PendingContract:
-		if model.CurrentStage != StageSigned || input.ContractRef == nil || strings.TrimSpace(*input.ContractRef) == "" {
+	case PendingContract, PendingWinEvidence:
+		if model.CurrentStage != StageSigned {
 			return nil, ErrTerminalTodoAbsent
 		}
-		if s.contracts == nil {
-			return nil, apperror.New(503, "INTEGRATION_CONTRACT_NOT_CONFIGURED", "contract verification is not configured")
+		evidence, err = s.prepareWinConfirmation(ctx, model, input.ContractRef, input.WinEvidence)
+		if err != nil {
+			return nil, err
 		}
-		belongs, verifyErr := s.contracts.BelongsToCustomer(ctx, strings.TrimSpace(*input.ContractRef), model.CustomerID)
-		if verifyErr != nil {
-			return nil, apperror.Wrap(verifyErr, 503, "INTEGRATION_DEPENDENCY_UNAVAILABLE", "contract verification is unavailable")
+		model.ContractRef, model.TerminalPendingType = normalizedOptionalExternalString(input.ContractRef), PendingNone
+		if evidence != nil {
+			model.ContractRef = nil
 		}
-		if !belongs {
-			return nil, apperror.New(422, "CRM_OPPORTUNITY_CONTRACT_CUSTOMER_MISMATCH", "contract belongs to another customer")
-		}
-		contract := strings.TrimSpace(*input.ContractRef)
-		model.ContractRef, model.TerminalPendingType = &contract, PendingNone
 	case PendingLostReason:
+		if input.WinEvidence != nil {
+			return nil, ErrWinModeMismatch
+		}
 		if model.CurrentStage != StageFailed || !validLostReason(input.LostReason) {
 			return nil, ErrLostReasonRequired
 		}
@@ -178,11 +181,14 @@ func (s *Service) CompleteTerminalTodo(ctx context.Context, id uint64, input Ter
 		return nil, ErrTerminalTodoAbsent
 	}
 	model.UpdatedBy = principal.UserID
-	err = database.WithTransaction(ctx, s.db, func(txCtx context.Context) error {
+	err = s.runCreateTransaction(ctx, func(txCtx context.Context) error {
 		if updateErr := s.repo.UpdateTerminalTodo(txCtx, model, input.Version); updateErr != nil {
 			return updateErr
 		}
-		return s.audit.Write(txCtx, audit.Event{TenantID: principal.TenantID, Module: "opportunity", Operation: "TERMINAL_TODO_COMPLETE", ResourceType: "opportunity", ResourceID: uintString(id), ActorID: principal.UserID, ActorNameSnapshot: principal.DisplayName, BeforeJSON: audit.JSON(before), AfterJSON: audit.JSON(toResponse(model)), Reason: input.Reason, Result: "SUCCESS"})
+		if err := s.saveWinConfirmation(txCtx, model, evidence); err != nil {
+			return err
+		}
+		return s.audit.Write(txCtx, audit.Event{TenantID: principal.TenantID, Module: "opportunity", Operation: "TERMINAL_TODO_COMPLETE", ResourceType: "opportunity", ResourceID: uintString(id), ActorID: principal.UserID, ActorNameSnapshot: principal.DisplayName, BeforeJSON: audit.JSON(before), AfterJSON: audit.JSON(winAuditSnapshot(model, evidence)), Reason: input.Reason, Result: "SUCCESS"})
 	})
 	if err != nil {
 		return nil, err
@@ -199,18 +205,21 @@ func (s *Service) CompleteTerminalTodo(ctx context.Context, id uint64, input Ter
 }
 
 type Service struct {
-	freeze          FreezeChecker
-	db              *gorm.DB
-	repo            Repository
-	audit           audit.Writer
-	contracts       ContractVerifier
-	signedContracts SignedContractCounter
-	qbStatuses      QBStatusReader
-	launches        *ExternalLaunchSigner
-	owners          ownerdirectory.Catalog
-	now             func() time.Time
-	catalog         *CatalogService
-	// 仅在服务单元测试中注入；生产构造始终使用共享 GORM 事务边界。
+	winMode                  string
+	contractTransferDisabled bool
+	winEvidence              WinEvidenceStore
+	freeze                   FreezeChecker
+	db                       *gorm.DB
+	repo                     Repository
+	audit                    audit.Writer
+	contracts                ContractVerifier
+	signedContracts          SignedContractCounter
+	qbStatuses               QBStatusReader
+	launches                 *ExternalLaunchSigner
+	owners                   ownerdirectory.Catalog
+	now                      func() time.Time
+	catalog                  *CatalogService
+	// 创建及阶段证据写入共享同一事务边界，生产构造绑定 GORM 事务。
 	createTransaction func(context.Context, func(context.Context) error) error
 	// 转合同命令保持与生产相同的事务语义，同时让聚焦测试无需连接真实 MySQL。
 	contractTransferTransaction func(context.Context, func(context.Context) error) error
@@ -269,6 +278,9 @@ func (s *Service) Create(ctx context.Context, input CreateRequest) (*Response, e
 	}
 	input.IdempotencyKey = key
 	if err := validateOpportunityMasterDataSelection(input.Name, input.Type, input.Source, input.RequirementSummary, input.TypeIDs, input.SourceIDs); err != nil {
+		return nil, err
+	}
+	if err := validateSystemCount(input.SystemCount); err != nil {
 		return nil, err
 	}
 	if s.owners != nil {
@@ -548,6 +560,9 @@ func (s *Service) Update(ctx context.Context, id uint64, input UpdateRequest) (*
 	if err = validateOpportunityMasterDataSelection(input.Name, input.Type, input.Source, input.RequirementSummary, input.TypeIDs, input.SourceIDs); err != nil {
 		return nil, err
 	}
+	if err = validateSystemCount(input.SystemCount); err != nil {
+		return nil, err
+	}
 	model, err := s.repo.FindByID(ctx, principal, id)
 	if err != nil {
 		return nil, err
@@ -639,6 +654,15 @@ func validateOpportunityMasterDataSelection(name, opportunityType, source, requi
 		(strings.TrimSpace(opportunityType) == "" && len(typeIDs) == 0) ||
 		(strings.TrimSpace(source) == "" && len(sourceIDs) == 0) {
 		return apperror.New(422, "CRM_OPPORTUNITY_MASTER_DATA_INVALID", "opportunity master data is invalid")
+	}
+	return nil
+}
+
+// validateSystemCount 与 DTO binding 的 max=10000 同口径：HTTP 入口由绑定层先拒，
+// 服务层再兜住绕过绑定的内部调用，避免异常数量落到列表、导出和合同回写。
+func validateSystemCount(count uint32) error {
+	if count > maxSystemCount {
+		return apperror.New(422, "CRM_OPPORTUNITY_INVALID_SYSTEM_COUNT", "system count exceeds the business limit")
 	}
 	return nil
 }
@@ -924,6 +948,9 @@ func validatePagination(page, pageSize int) error {
 	return nil
 }
 
+// ChangeStage 按赢单策略、权限范围与乐观锁执行阶段变更。
+// 参数：ctx 为身份上下文，id 为商机，input 为目标及确认依据。
+// 返回值：更新后的商机；模式或状态不匹配时返回错误。
 func (s *Service) ChangeStage(ctx context.Context, id uint64, input StageChangeRequest) (*Response, error) {
 	principal, err := requirePrincipal(ctx)
 	if err != nil {
@@ -946,27 +973,24 @@ func (s *Service) ChangeStage(ctx context.Context, id uint64, input StageChangeR
 	if err = validateStageChange(model, input.TargetStage); err != nil {
 		return nil, err
 	}
+	var evidence *WinConfirmation
 	if input.TargetStage == StageSigned {
-		if input.ContractRef == nil || strings.TrimSpace(*input.ContractRef) == "" {
-			return nil, ErrContractRequired
+		evidence, err = s.prepareWinConfirmation(ctx, model, input.ContractRef, input.WinEvidence)
+		if err != nil {
+			return nil, err
 		}
-		if s.contracts == nil {
-			return nil, apperror.New(503, "INTEGRATION_CONTRACT_NOT_CONFIGURED", "contract verification is not configured")
-		}
-		belongs, verifyErr := s.contracts.BelongsToCustomer(ctx, *input.ContractRef, model.CustomerID)
-		if verifyErr != nil {
-			return nil, apperror.Wrap(verifyErr, 503, "INTEGRATION_DEPENDENCY_UNAVAILABLE", "contract verification is unavailable")
-		}
-		if !belongs {
-			return nil, apperror.New(422, "CRM_OPPORTUNITY_CONTRACT_CUSTOMER_MISMATCH", "contract belongs to another customer")
-		}
+	} else if input.WinEvidence != nil {
+		return nil, ErrWinModeMismatch
 	}
 	if input.TargetStage == StageFailed && !validLostReason(input.LostReason) {
 		return nil, ErrLostReasonRequired
 	}
+	if evidence != nil {
+		input.ContractRef = nil
+	}
 	before := toResponse(model)
 	applyStage(model, input.TargetStage, input.ContractRef, input.LostReason, PendingNone, s.now(), principal.UserID)
-	err = s.persistStage(ctx, principal, model, before, input.Version, StageLog{TenantID: principal.TenantID, OpportunityID: model.ID, FromStage: before.CurrentStage, ToStage: model.CurrentStage, Source: SourceManual, SourceID: request.ID(ctx), Reason: input.Reason, ContractRef: model.ContractRef, LostReason: model.LostReason, PendingType: model.TerminalPendingType, OperatorID: principal.UserID, ChangedAt: model.StageChangedAt, RequestID: request.ID(ctx)})
+	err = s.persistStage(ctx, principal, model, before, input.Version, StageLog{TenantID: principal.TenantID, OpportunityID: model.ID, FromStage: before.CurrentStage, ToStage: model.CurrentStage, Source: SourceManual, SourceID: request.ID(ctx), Reason: input.Reason, ContractRef: model.ContractRef, LostReason: model.LostReason, PendingType: model.TerminalPendingType, OperatorID: principal.UserID, ChangedAt: model.StageChangedAt, RequestID: request.ID(ctx)}, evidence)
 	if err != nil {
 		return nil, err
 	}
@@ -974,6 +998,9 @@ func (s *Service) ChangeStage(ctx context.Context, id uint64, input StageChangeR
 	return &result, nil
 }
 
+// ApplyExternalStatus 接收可信外部状态，但不代替本地赢单确认。
+// 参数：ctx 为机器身份上下文，input 为外部状态快照。
+// 返回值：更新后的商机；过期、越权或终态冲突时拒绝。
 func (s *Service) ApplyExternalStatus(ctx context.Context, input ExternalStatusRequest) (*Response, error) {
 	principal, err := requirePrincipal(ctx)
 	if err != nil {
@@ -1013,6 +1040,10 @@ func (s *Service) ApplyExternalStatus(ctx context.Context, input ExternalStatusR
 		return nil, ErrStaleEvent
 	}
 	target, pending := mapExternalStatus(input.Status, input.ContractRef, input.LostReason)
+	stageContractRef := input.ContractRef
+	if target == StageSigned && s.winModeValue() == WinModeLocalEvidence {
+		pending, stageContractRef = PendingWinEvidence, nil
+	}
 	if target == "" {
 		return nil, apperror.New(422, "CRM_OPPORTUNITY_UNKNOWN_EXTERNAL_STATUS", "unsupported external status")
 	}
@@ -1034,7 +1065,7 @@ func (s *Service) ApplyExternalStatus(ctx context.Context, input ExternalStatusR
 		return nil, ErrExternalStatusTerminal
 	}
 	before := toResponse(model)
-	applyStage(model, target, input.ContractRef, input.LostReason, pending, input.ChangedAt.UTC(), principal.UserID)
+	applyStage(model, target, stageContractRef, input.LostReason, pending, input.ChangedAt.UTC(), principal.UserID)
 	model.ExternalStatusChangedAt = pointerTime(input.ChangedAt.UTC())
 	log := StageLog{TenantID: principal.TenantID, OpportunityID: model.ID, FromStage: before.CurrentStage, ToStage: model.CurrentStage, Source: SourceQBCallback, SourceID: externalStageSourceID(input.SourceID, input.Status), ContractRef: model.ContractRef, LostReason: model.LostReason, PendingType: model.TerminalPendingType, OperatorID: principal.UserID, ChangedAt: model.StageChangedAt, RequestID: request.ID(ctx)}
 	snapshot, err := externalLinkSnapshot(principal.TenantID, model.ID, input, amount, s.now())
@@ -1131,8 +1162,11 @@ func externalLinkSnapshot(tenantID string, opportunityID uint64, input ExternalS
 	return &ExternalLink{TenantID: tenantID, OpportunityID: opportunityID, Type: input.Type, SourceID: input.SourceID, Status: input.Status, Amount: amount, ChangedAt: input.ChangedAt.UTC(), SnapshotJSON: encoded, CreatedAt: createdAt}, nil
 }
 
+// persistExternalStage 在统一事务中保留外部原始快照及CRM阶段投影。
+// 参数：ctx/principal 为上下文与主体，model/before 为状态，expected 为版本，log/snapshot 为证据。
+// 返回值：任何持久化错误；外层事务统一回滚。
 func (s *Service) persistExternalStage(ctx context.Context, principal auth.Principal, model *Opportunity, before Response, expected uint64, log StageLog, snapshot *ExternalLink) error {
-	return database.WithTransaction(ctx, s.db, func(txCtx context.Context) error {
+	return s.runCreateTransaction(ctx, func(txCtx context.Context) error {
 		if err := s.repo.UpdateStage(txCtx, model, expected); err != nil {
 			return err
 		}
@@ -1247,9 +1281,15 @@ func (s *Service) CreateExternalLaunchContext(ctx context.Context, id uint64, la
 	return &result, nil
 }
 
+// ContractTransfer 在真实订阅与已核验合同成立时受理一次转单。
+// 参数：ctx 为身份上下文，id 为商机，input 为版本与幂等请求。
+// 返回值：受理或精确重放结果；未订阅及冲突时失败。
 func (s *Service) ContractTransfer(ctx context.Context, id uint64, input ContractTransferRequest) (*ContractTransferResponse, error) {
 	principal, err := requirePrincipal(ctx)
 	if err != nil {
+		return nil, err
+	}
+	if err := s.ensureContractTransferSubscribed(); err != nil {
 		return nil, err
 	}
 	key := strings.TrimSpace(input.IdempotencyKey)
@@ -1486,12 +1526,18 @@ func contractTransferAlreadyLinked(model *Opportunity) bool {
 	return model.ContractIntakeID != nil && strings.TrimSpace(*model.ContractIntakeID) != ""
 }
 
-func (s *Service) persistStage(ctx context.Context, principal auth.Principal, model *Opportunity, before Response, expected uint64, log StageLog) error {
-	return database.WithTransaction(ctx, s.db, func(txCtx context.Context) error {
+// persistStage 原子写入阶段、日志、可选证据及审计。
+// 参数：ctx 为身份上下文，principal 为主体，model/before 为前后状态，expected 为版本，log/evidence 为持久证据。
+// 返回值：任一持久化失败返回错误，外层事务统一回滚。
+func (s *Service) persistStage(ctx context.Context, principal auth.Principal, model *Opportunity, before Response, expected uint64, log StageLog, evidence *WinConfirmation) error {
+	return s.runCreateTransaction(ctx, func(txCtx context.Context) error {
 		if err := s.repo.UpdateStage(txCtx, model, expected); err != nil {
 			return err
 		}
 		if err := s.repo.CreateStageLog(txCtx, &log); err != nil {
+			return err
+		}
+		if err := s.saveWinConfirmation(txCtx, model, evidence); err != nil {
 			return err
 		}
 		if log.FromStage != log.ToStage || model.Status != StatusFollowing {
@@ -1499,7 +1545,7 @@ func (s *Service) persistStage(ctx context.Context, principal auth.Principal, mo
 				return err
 			}
 		}
-		return s.audit.Write(txCtx, audit.Event{TenantID: principal.TenantID, Module: "opportunity", Operation: "STAGE_CHANGE", ResourceType: "opportunity", ResourceID: uintString(model.ID), ActorID: principal.UserID, ActorNameSnapshot: principal.DisplayName, BeforeJSON: audit.JSON(before), AfterJSON: audit.JSON(toResponse(model)), Reason: log.Reason, Result: "SUCCESS"})
+		return s.audit.Write(txCtx, audit.Event{TenantID: principal.TenantID, Module: "opportunity", Operation: "STAGE_CHANGE", ResourceType: "opportunity", ResourceID: uintString(model.ID), ActorID: principal.UserID, ActorNameSnapshot: principal.DisplayName, BeforeJSON: audit.JSON(before), AfterJSON: audit.JSON(winAuditSnapshot(model, evidence)), Reason: log.Reason, Result: "SUCCESS"})
 	})
 }
 

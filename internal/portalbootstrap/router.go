@@ -9,6 +9,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"mime"
 	"net"
 	"net/http"
 	"net/url"
@@ -24,6 +25,7 @@ import (
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/portal/evaluation"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/portal/feedback"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/portal/filing"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/portal/localidentity"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/portal/project"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/portal/projectexport"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/portal/projectmessage"
@@ -31,6 +33,7 @@ import (
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/portal/workerruntime"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/apperror"
 	sharedauth "github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/auth"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/pagination"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/requestbody"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/response"
 )
@@ -40,7 +43,16 @@ const (
 	maxPortalQueryPage = 1_000_000
 )
 
+// CustomerDirectory 回答 tenant+customer 是否仍是可用的 CRM 本地客户。
+// 门户服务项按客户存储且对外可见，写入前必须先确认客户真实存在：否则会为不存在、
+// 已删除或已合并的客户留下孤立配置行，后续同号客户还可能错误继承这些开关。
+type CustomerDirectory interface {
+	Exists(context.Context, string, uint64) (bool, error)
+}
+
 type RouterDependencies struct {
+	LocalIdentity         *localidentity.Service
+	CustomerAuthority     *localidentity.Repository
 	LicenseCheck          commercial.Check
 	Config                Config
 	RequestAudit          gin.HandlerFunc
@@ -63,6 +75,7 @@ type RouterDependencies struct {
 	FilingMaterials       *filing.MaterialService
 	MachineAuthenticator  machineAuthenticator
 	CustomerCapabilities  capability.Reader
+	CustomerDirectory     CustomerDirectory
 	DatabaseHealthy       func() bool
 	Logger                *slog.Logger
 }
@@ -74,6 +87,7 @@ type runtimeCapability struct {
 }
 
 type runtimeCapabilities struct {
+	CustomerDirectoryMode   string               `json:"customer_directory_mode"`
 	ReportRequestSubmission runtimeCapability    `json:"report_request_submission"`
 	ProjectExport           runtimeCapability    `json:"project_export"`
 	ReportDownload          runtimeCapability    `json:"report_download"`
@@ -134,7 +148,13 @@ func NewRouter(deps RouterDependencies) *gin.Engine {
 			c.JSON(http.StatusServiceUnavailable, gin.H{"status": "not_ready"})
 			return
 		}
-		c.JSON(http.StatusOK, gin.H{"status": "ready"})
+		// C14：能力维度快照；客户目录模式是模式事实（crm|local），不影响整体就绪。
+		c.JSON(http.StatusOK, gin.H{
+			"status": "ready",
+			"capabilities": gin.H{
+				"customer_directory": gin.H{"mode": deps.Config.LocalDirectoryMode, "state": "ready"},
+			},
+		})
 	})
 	base.GET("/healthz", func(c *gin.Context) {
 		if deps.DatabaseHealthy != nil && !deps.DatabaseHealthy() {
@@ -143,27 +163,11 @@ func NewRouter(deps RouterDependencies) *gin.Engine {
 		}
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
-	base.GET("/auth/login", beginLogin(deps))
-	base.GET("/activate", func(c *gin.Context) {
-		token := strings.TrimSpace(c.Query("token"))
-		if token == "" {
-			response.Error(c, account.ErrInvalidLoginState)
-			return
-		}
-		result, err := deps.Account.BeginInvitationLogin(c.Request.Context(), token, deps.Config.PathPrefix+"/")
-		if err != nil {
-			response.Error(c, err)
-			return
-		}
-		if deps.Config.CentralSessionEnabled {
-			cookie := sessionCookie(deps.Config, result.State, time.Now().UTC().Add(10*time.Minute))
-			cookie.Name = deps.Config.SessionCookieName + "_oidc_state"
-			cookie.MaxAge = 600
-			http.SetCookie(c.Writer, cookie)
-		}
-		c.Redirect(http.StatusFound, result.AuthorizationURL)
-	})
-	base.GET("/auth/callback", completeLogin(deps))
+	// 三个匿名入口共用一套进程内固定窗口限流（M-10）：超限时直接 Abort，
+	// 不会创建 activation 上下文、不写 portal_auth_events，也不发起 OIDC 跳转。
+	base.GET("/auth/login", portalAuthRateLimit(deps.Config, deps.Config.loginRateLimit()), beginLogin(deps))
+	base.GET("/activate", portalAuthRateLimit(deps.Config, deps.Config.activateRateLimit()), beginActivationLogin(deps))
+	base.GET("/auth/callback", portalAuthRateLimit(deps.Config, deps.Config.callbackRateLimit()), completeLogin(deps))
 	base.GET("/auth/session", authenticate(deps), centralLifecycle(deps, false))
 	base.POST("/auth/activity", authenticate(deps), originAndCSRF(deps.Config), centralLifecycle(deps, true))
 	base.POST("/auth/logout", authenticate(deps), originAndCSRF(deps.Config), logout(deps))
@@ -171,12 +175,12 @@ func NewRouter(deps RouterDependencies) *gin.Engine {
 		base.POST("/auth/backchannel-logout", deps.BackchannelLogout)
 	}
 	internal := base.Group("/internal", machineAuth(deps.MachineAuthenticator))
-	internal.POST("/accounts/provision", requireMachineScope("portal.identity_mapping.provision"), requireMachineClientSubject(deps.Config.CRMProvisionClientSubject), provision(deps))
-	internal.POST("/accounts/reconciliation-snapshot", requireMachineScope("portal.identity_mapping.provision"), requireMachineClientSubject(deps.Config.CRMProvisionClientSubject), reconciliationSnapshot(deps))
-	internal.POST("/accounts/disable", requireMachineScope("portal.identity_mapping.disable"), requireMachineClientSubject(deps.Config.CRMDisableClientSubject), disableAccount(deps))
-	internal.GET("/customers/:customerID/capabilities", requireMachineScope("portal.customer_capabilities.read"), getCustomerCapabilities(deps))
-	internal.PUT("/customers/:customerID/capabilities", requireMachineScope("portal.customer_capabilities.manage"), updateCustomerCapabilities(deps))
-	internal.POST("/report-callbacks", requireMachineScope("report.callback.write"), reportCallback(deps))
+	internal.POST("/accounts/provision", crmSourceOnly(deps), requireMachineScope("portal.identity_mapping.provision"), requireMachineClientSubject(deps.Config.CRMProvisionClientSubject), provision(deps))
+	internal.POST("/accounts/reconciliation-snapshot", crmSourceOnly(deps), requireMachineScope("portal.identity_mapping.provision"), requireMachineClientSubject(deps.Config.CRMProvisionClientSubject), reconciliationSnapshot(deps))
+	internal.POST("/accounts/disable", crmSourceOnly(deps), requireMachineScope("portal.identity_mapping.disable"), requireMachineClientSubject(deps.Config.CRMDisableClientSubject), disableAccount(deps))
+	internal.GET("/customers/:customerID/capabilities", crmSourceOnly(deps), requireMachineScope("portal.customer_capabilities.read"), getCustomerCapabilities(deps))
+	internal.PUT("/customers/:customerID/capabilities", crmSourceOnly(deps), requireMachineScope("portal.customer_capabilities.manage"), updateCustomerCapabilities(deps))
+	internal.POST("/report-callbacks", crmSourceOnly(deps), requireMachineScope("report.callback.write"), reportCallback(deps))
 	internal.GET("/report-outbox/failed", requireMachineScope("portal.report.delivery.manage"), listReportDeliveryFailures(deps))
 	internal.POST("/report-outbox/failed/:id/retry", requireMachineScope("portal.report.delivery.manage"), retryReportDeliveryFailure(deps))
 	internal.GET("/report-risk-alerts", requireMachineScope("portal.report.risk.manage"), listReportRiskAlertsForReview(deps))
@@ -187,8 +191,8 @@ func NewRouter(deps RouterDependencies) *gin.Engine {
 	internal.POST("/evaluations/:id/low-score-notice/read", requireMachineScope("portal.evaluation.read"), readEvaluationNotice(deps))
 	internal.POST("/filings/:id/unlock", requireMachineScope("portal.filing.unlock"), unlockFiling(deps))
 	internal.POST("/filing-material-scan-callbacks", requireMachineScope("portal.filing_material.scan.write"), filingMaterialScanCallback(deps))
-	internal.GET("/customers/:customerID/projects", requireMachineScope("portal.project_history.read"), listProjectHistoryForCRM(deps))
-	internal.POST("/project-access/sync", requireMachineScope("portal.project_access.sync"), syncProjectAccess(deps))
+	internal.GET("/customers/:customerID/projects", crmSourceOnly(deps), requireMachineScope("portal.project_history.read"), listProjectHistoryForCRM(deps))
+	internal.POST("/project-access/sync", crmSourceOnly(deps), requireMachineScope("portal.project_access.sync"), syncProjectAccess(deps))
 	internal.GET("/project-conversations", requireMachineScope("portal.project_message.manage"), listProjectConversationsForManager(deps))
 	internal.GET("/project-conversations/:id", requireMachineScope("portal.project_message.manage"), getProjectConversationForManager(deps))
 	internal.POST("/project-conversations/:id/messages", requireMachineScope("portal.project_message.manage"), sendProjectMessageForManager(deps))
@@ -199,10 +203,14 @@ func NewRouter(deps RouterDependencies) *gin.Engine {
 	api := base.Group("/api/v1", authenticate(deps))
 	api.GET("/auth/me", me)
 	api.GET("/capabilities", capabilities(deps))
+	if deps.Config.directoryMode() == localidentity.ModeLocal {
+		localidentity.NewHandler(deps.LocalIdentity).RegisterRoutes(api.Group("/local-admin", localAdminGuard(deps.Config), csrfOnWrites(deps.Config)))
+	}
 	api.GET("/account/security", requirePermission("account.security.manage"), accountSecurity(deps))
 	api.GET("/account/sessions", requirePermission("account.security.manage"), accountSessions(deps))
 	api.DELETE("/account/sessions/:id", requirePermission("account.security.manage"), originAndCSRF(deps.Config), revokeAccountSession(deps))
 	api.POST("/account/security-events/:id/ack", requirePermission("account.security.manage"), originAndCSRF(deps.Config), acknowledgeSecurityEvent(deps))
+	api.Use(customerBusinessBoundary())
 	api.GET("/projects", requirePermission("project.read"), listProjects(deps))
 	api.GET("/projects/:projectID", requirePermission("project.read"), getProject(deps))
 	api.GET("/projects/:projectID/activities", requirePermission("project.read"), listActivities(deps))
@@ -255,10 +263,14 @@ func NewRouter(deps RouterDependencies) *gin.Engine {
 	return router
 }
 
+// capabilities 返回原运行时能力和严格目录模式元数据。
+// 参数：deps为固定组合根依赖与来源配置。
+// 返回值：保持原认证和精确权限要求的处理器。
 func capabilities(deps RouterDependencies) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.Header("Cache-Control", "no-store")
 		value := runtimeCapabilities{
+			CustomerDirectoryMode:   string(deps.Config.directoryMode()),
 			ReportRequestSubmission: unavailableCapability("PORTAL_REPORT_DELIVERY_WORKER_UNAVAILABLE"),
 			ProjectExport:           unavailableCapability("PORTAL_PROJECT_EXPORT_WORKER_UNAVAILABLE"),
 			ReportDownload:          unavailableCapability("REPORT_SECURITY_PROVIDERS_NOT_CONFIGURED"),
@@ -288,13 +300,16 @@ func capabilities(deps RouterDependencies) gin.HandlerFunc {
 		if deps.Filings != nil && deps.Filings.ExportAvailable() {
 			value.FilingExport = runtimeCapability{Available: true, Mode: "READY"}
 		}
-		if deps.CustomerCapabilities != nil {
+		if deps.CustomerCapabilities != nil && !localAdminSession(deps.Config, currentSession(c)) {
 			options, optionsErr := deps.CustomerCapabilities.Get(c.Request.Context(), deps.Config.TenantID, currentSession(c).CustomerID)
 			if optionsErr != nil && deps.Logger != nil {
 				deps.Logger.Error("customer capabilities read failed", "error", optionsErr)
 			} else if optionsErr == nil {
 				value.Customer = capabilityOptionsToResponse(options)
 			}
+		}
+		if deps.Config.directoryMode() == localidentity.ModeLocal {
+			value.ReportRequestSubmission = unavailableCapability("PORTAL_LOCAL_REPORT_ADMIN_SOURCE_ONLY")
 		}
 		response.OK(c, value)
 	}
@@ -366,6 +381,21 @@ func updateCustomerCapabilities(deps RouterDependencies) gin.HandlerFunc {
 				return
 			}
 		}
+		// 服务项按客户落库，写前必须证明该客户在当前租户下真实可用；
+		// 否则会为不存在、已删除或已合并的客户留下孤立配置行。
+		if deps.CustomerDirectory == nil {
+			response.Error(c, apperror.New(http.StatusServiceUnavailable, "PORTAL_CUSTOMER_DIRECTORY_UNAVAILABLE", "customer directory is not configured"))
+			return
+		}
+		exists, err := deps.CustomerDirectory.Exists(c.Request.Context(), principal.TenantID, customerID)
+		if err != nil {
+			response.Error(c, apperror.New(http.StatusServiceUnavailable, "PORTAL_CUSTOMER_DIRECTORY_UNAVAILABLE", "customer directory unavailable"))
+			return
+		}
+		if !exists {
+			response.Error(c, apperror.ErrNotFound)
+			return
+		}
 		options := capability.OptionsFromMap(body.Capabilities)
 		updated, err := writer.Upsert(c.Request.Context(), principal.TenantID, customerID, options)
 		if err != nil {
@@ -409,19 +439,47 @@ func beginLogin(deps RouterDependencies) gin.HandlerFunc {
 			response.Error(c, err)
 			return
 		}
-		if deps.Config.CentralSessionEnabled {
-			cookie := sessionCookie(deps.Config, result.State, time.Now().UTC().Add(10*time.Minute))
-			cookie.Name = deps.Config.SessionCookieName + "_oidc_state"
-			cookie.MaxAge = 600
-			http.SetCookie(c.Writer, cookie)
-		}
-		c.Redirect(http.StatusFound, result.AuthorizationURL)
+		redirectWithLoginState(c, deps.Config, result)
 	}
 }
 
-// completeLogin 完成已核验门户登录并写入独立Cookie。
-// 参数：deps为既有应用装配依赖。
-// 返回值：与该调用匹配的核验或持久化结果；失败保留原有错误语义。
+// beginActivationLogin 是 /activate 的第二条 begin 入口。它和 /auth/login 共用
+// redirectWithLoginState，保证邀请激活链路同样把 state 绑定到当前浏览器（M-3）；
+// 只保留一个实现是防止两个入口再次出现安全语义漂移。
+func beginActivationLogin(deps RouterDependencies) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		token := strings.TrimSpace(c.Query("token"))
+		if token == "" {
+			response.Error(c, account.ErrInvalidLoginState)
+			return
+		}
+		result, err := deps.Account.BeginInvitationLogin(c.Request.Context(), token, deps.Config.PathPrefix+"/")
+		if err != nil {
+			response.Error(c, err)
+			return
+		}
+		redirectWithLoginState(c, deps.Config, result)
+	}
+}
+
+// redirectWithLoginState 先下发绑定当前浏览器的 state Cookie，再跳转 OIDC 授权端点。
+// 中央会话开启时同时下发中央桥接 state Cookie，两条回调校验链都不可省略。
+func redirectWithLoginState(c *gin.Context, config Config, start account.LoginStart) {
+	if start.State == "" {
+		// 缺失 state 的授权地址无法完成回调校验，宁可失败也不签发无绑定登录。
+		response.Error(c, account.ErrInvalidLoginState)
+		return
+	}
+	http.SetCookie(c.Writer, loginStateCookie(config, start.State, time.Now().Add(loginStateTTL)))
+	if config.CentralSessionEnabled {
+		cookie := sessionCookie(config, start.State, time.Now().UTC().Add(10*time.Minute))
+		cookie.Name = config.SessionCookieName + "_oidc_state"
+		cookie.MaxAge = 600
+		http.SetCookie(c.Writer, cookie)
+	}
+	c.Redirect(http.StatusFound, start.AuthorizationURL)
+}
+
 func completeLogin(deps RouterDependencies) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if deps.Config.CentralSessionEnabled {
@@ -450,8 +508,21 @@ func completeLogin(deps RouterDependencies) gin.HandlerFunc {
 			expired.MaxAge = -1
 			http.SetCookie(c.Writer, expired)
 		}
+		browserState := ""
+		if cookie, err := c.Request.Cookie(loginStateCookieName); err == nil {
+			browserState = cookie.Value
+		}
+		// 任何路径（含错误、state 不匹配、成功）都先清理 Cookie：回调只能用一次，
+		// 且失败后不允许重放同一浏览器会话里的旧 state。
+		http.SetCookie(c.Writer, expiredLoginStateCookie(deps.Config))
 		if c.Query("error") != "" {
 			response.Error(c, account.ErrInvalidClaims)
+			return
+		}
+		// 浏览器绑定校验必须在消费 activation 之前完成：跨站/他人发起的回调即使持有
+		// 合法 state 也拿不到 Cookie，因此不会消耗受害者的待登录上下文（M-3）。
+		if err := verifyLoginState(browserState, c.Query("state")); err != nil {
+			response.Error(c, err)
 			return
 		}
 		remoteIP := directRemoteIP(c.Request.RemoteAddr)
@@ -511,7 +582,12 @@ func authenticate(deps RouterDependencies) gin.HandlerFunc {
 			return
 		}
 		c.Set(sessionContextKey, session)
-		if deps.CustomerCapabilities != nil {
+		if localAdminSession(deps.Config, session) && !managementMetadata(c, deps.Config, session) {
+			response.Error(c, apperror.ErrForbidden)
+			c.Abort()
+			return
+		}
+		if deps.CustomerCapabilities != nil && !managementMetadata(c, deps.Config, session) {
 			options, optionsErr := deps.CustomerCapabilities.Get(c.Request.Context(), session.TenantID, session.CustomerID)
 			if optionsErr != nil {
 				response.Error(c, apperror.ErrUnauthenticated)
@@ -1067,11 +1143,25 @@ func portalProjectVisible(c *gin.Context, deps RouterDependencies, projectID str
 	}
 	return true
 }
+
+// listReports 按原客户分页协议返回报告，本地来源增加账号与项目授权交集。
+// 参数：deps为固定组合根依赖与来源配置。
+// 返回值：保持原认证和精确权限要求的处理器。
 func listReports(deps RouterDependencies) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		page, _ := strconv.Atoi(c.Query("page"))
 		size, _ := strconv.Atoi(c.Query("page_size"))
-		value, err := deps.Reports.List(c.Request.Context(), actor(c), page, size)
+		var value pagination.Page[report.Request]
+		var err error
+		if deps.Config.directoryMode() == localidentity.ModeLocal {
+			if deps.LocalIdentity == nil {
+				response.Error(c, localidentity.ErrUnavailable)
+				return
+			}
+			value, err = deps.LocalIdentity.CustomerReports(c.Request.Context(), actor(c), page, size)
+		} else {
+			value, err = deps.Reports.List(c.Request.Context(), actor(c), page, size)
+		}
 		if err != nil {
 			response.Error(c, err)
 			return
@@ -1083,11 +1173,18 @@ func listReports(deps RouterDependencies) gin.HandlerFunc {
 		response.OK(c, gin.H{"items": items, "page": value.Page, "page_size": value.PageSize, "total": value.Total})
 	}
 }
+
+// getReport 在原报告详情链前复核独立本地来源ACL。
+// 参数：deps为固定组合根依赖与来源配置。
+// 返回值：保持原认证和精确权限要求的处理器。
 func getReport(deps RouterDependencies) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		id, _ := strconv.ParseUint(c.Param("id"), 10, 64)
 		if id == 0 {
 			response.Error(c, apperror.New(http.StatusBadRequest, "COMMON_VALIDATION_ERROR", "report id must be a positive integer"))
+			return
+		}
+		if !localCustomerReport(c, deps, id, "report.read") {
 			return
 		}
 		value, err := deps.Reports.GetDetail(c.Request.Context(), actor(c), id)
@@ -1098,8 +1195,16 @@ func getReport(deps RouterDependencies) gin.HandlerFunc {
 		response.OK(c, publicReportDetail(value))
 	}
 }
+
+// createReport 保留CRM原申请流程，本地来源明确要求管理员登记PDF。
+// 参数：deps为固定组合根依赖与来源配置。
+// 返回值：保持原认证和精确权限要求的处理器。
 func createReport(deps RouterDependencies) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		if deps.Config.directoryMode() == localidentity.ModeLocal {
+			response.Error(c, apperror.New(http.StatusConflict, "PORTAL_LOCAL_REPORT_ADMIN_SOURCE_ONLY", "本地报告由门户管理员登记真实PDF来源"))
+			return
+		}
 		var body struct {
 			ProjectID    string `json:"project_id"`
 			ReportType   string `json:"report_type"`
@@ -1124,11 +1229,17 @@ func createReport(deps RouterDependencies) gin.HandlerFunc {
 	}
 }
 
+// createReportGrant 复核本地来源后继续原下载grant安全链。
+// 参数：deps为固定组合根依赖与来源配置。
+// 返回值：保持原认证和精确权限要求的处理器。
 func createReportGrant(deps RouterDependencies) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		id, _ := strconv.ParseUint(c.Param("id"), 10, 64)
 		if id == 0 || deps.ReportDownloads == nil {
 			response.Error(c, report.ErrNotFound)
+			return
+		}
+		if !localCustomerReport(c, deps, id, "report.download") {
 			return
 		}
 		value, err := deps.ReportDownloads.CreateGrant(c.Request.Context(), actor(c), id, report.GrantCommand{
@@ -1142,11 +1253,17 @@ func createReportGrant(deps RouterDependencies) gin.HandlerFunc {
 	}
 }
 
+// downloadReport 复核本地来源及当前授权后继续原扫描、水印、风险与审计下载链。
+// 参数：deps为固定组合根依赖与来源配置。
+// 返回值：保持原认证和精确权限要求的处理器。
 func downloadReport(deps RouterDependencies) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		id, _ := strconv.ParseUint(c.Param("id"), 10, 64)
 		if id == 0 || deps.ReportDownloads == nil {
 			response.Error(c, report.ErrNotFound)
+			return
+		}
+		if !localCustomerReport(c, deps, id, "report.download") {
 			return
 		}
 		content, err := deps.ReportDownloads.AuthorizeDownload(c.Request.Context(), actor(c), id, c.GetHeader("X-Report-Download-Token"), reportDownloadMetadata(deps.Config, c))
@@ -1320,8 +1437,14 @@ func readReportNotification(deps RouterDependencies) gin.HandlerFunc {
 }
 
 func contentDisposition(fileName string) string {
-	// RFC 5987 编码避免 引号字符串注入，ASCII 回退文件名不依赖回调返回的任意字符。
-	return "attachment; filename=report.pdf; filename*=UTF-8''" + url.PathEscape(fileName)
+	// mime.FormatMediaType 按 RFC 2231/5987 编码：ASCII 名称输出 filename=...，
+	// 非 ASCII 名称输出 filename*=utf-8''...，并转义引号、控制字符及 attr-char；
+	// 仅在名称为空时使用安全回退名，不再拼接与真实文件无关的固定回退。
+	name := fileName
+	if strings.TrimSpace(name) == "" {
+		name = "report.pdf"
+	}
+	return mime.FormatMediaType("attachment", map[string]string{"filename": name})
 }
 
 type reportResponse struct {
@@ -1461,7 +1584,7 @@ func exportFiling(deps RouterDependencies) gin.HandlerFunc {
 		c.Header("Cache-Control", "private, no-store")
 		c.Header("X-Content-Type-Options", "nosniff")
 		c.Header("X-Content-SHA256", file.SHA256)
-		c.Header("Content-Disposition", `attachment; filename="`+file.FileName+`"`)
+		c.Header("Content-Disposition", contentDisposition(file.FileName))
 		c.Data(http.StatusOK, "application/pdf", file.Content)
 	}
 }

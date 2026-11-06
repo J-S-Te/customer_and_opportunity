@@ -1,6 +1,7 @@
 package portalbootstrap
 
 import (
+	"crypto/subtle"
 	"net/http"
 	"net/url"
 	"strings"
@@ -134,6 +135,43 @@ func currentSession(c *gin.Context) *account.Session {
 
 func sessionCookie(config Config, value string, expires time.Time) *http.Cookie {
 	return &http.Cookie{Name: config.SessionCookieName, Value: value, Path: config.PathPrefix, Expires: expires, HttpOnly: true, Secure: config.SessionCookieSecure, SameSite: http.SameSiteLaxMode}
+}
+
+// loginStateCookieName 是 OIDC state 的浏览器绑定 Cookie（M-3）。原始 state 只下发到
+// 浏览器，服务端仍只持久化 sha256 摘要；路径收窄到 <prefix>/auth，使公开的激活入口和
+// SPA 页面路由都收不到该值。
+const loginStateCookieName = "customer_portal_login_state"
+
+// loginStateTTL 与 account.Service 建立 activation 的 10 分钟有效期一致，浏览器不会比
+// 服务端更早或更久地保留 state。
+const loginStateTTL = 10 * time.Minute
+
+func loginStateCookie(config Config, value string, expires time.Time) *http.Cookie {
+	return &http.Cookie{Name: loginStateCookieName, Value: value, Path: config.PathPrefix + "/auth", Expires: expires, HttpOnly: true, Secure: config.SessionCookieSecure, SameSite: http.SameSiteLaxMode}
+}
+
+// expiredLoginStateCookie 用同名同路径的过期 Cookie 清除浏览器状态；回调成功和失败
+// 都必须下发，使一次登录只允许一次回调。
+func expiredLoginStateCookie(config Config) *http.Cookie {
+	cookie := loginStateCookie(config, "", time.Unix(1, 0))
+	cookie.MaxAge = -1
+	return cookie
+}
+
+// verifyLoginState 比较浏览器 Cookie 与服务端签发的 state（查询串回传值）。
+// 任一缺失、含空白/控制字符（Cookie 或头注入残留）即判定非法；比较使用常量时间，
+// 不按字节泄漏前缀匹配程度。它不消费 activation，纯函数便于单独测试。
+func verifyLoginState(browserState, queryState string) error {
+	if browserState == "" || queryState == "" {
+		return account.ErrInvalidLoginState
+	}
+	if strings.ContainsAny(browserState, "\r\n\t ") || strings.ContainsAny(queryState, "\r\n\t ") {
+		return account.ErrInvalidLoginState
+	}
+	if subtle.ConstantTimeCompare([]byte(browserState), []byte(queryState)) != 1 {
+		return account.ErrInvalidLoginState
+	}
+	return nil
 }
 
 func safeLocalPath(value, prefix string) bool {

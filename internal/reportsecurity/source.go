@@ -32,11 +32,15 @@ func NewGatewayIngestor(source GatewaySource, store *EncryptedStore) (*GatewayIn
 func (g *GatewayIngestor) Ingest(context.Context, string, report.FileDescriptor) (report.IngestResult, error) {
 	return report.IngestResult{}, ErrInvalid
 }
+
+// IngestForJob 依据冻结来源读取原文件，再执行既有扫描与加密vault。
+// 参数：ctx为请求，job为精确租户作业，d为不可变且显式的本地或原项目来源。
+// 返回值：可信安全摄取证据；未知来源或不匹配内容时拒绝。
 func (g *GatewayIngestor) IngestForJob(ctx context.Context, job report.IngestJob, d report.FileDescriptor) (report.IngestResult, error) {
-	if g == nil || g.source == nil || g.store == nil || job.TenantID != g.store.tenant || job.CustomerID == 0 || job.RequestID == 0 || job.ReportRevision == 0 || job.EventID == "" || !fileIDPattern.MatchString(d.ObjectRef) || d.Size <= 0 || d.Size > maxPDFBytes || d.MIME != "application/pdf" {
+	if (d.SourceType != "" && d.SourceType != "PROJECT" && d.SourceType != "PORTAL_LOCAL") || (d.SourceType == "PORTAL_LOCAL" && d.Size > 20<<20) || g == nil || g.source == nil || g.store == nil || job.TenantID != g.store.tenant || job.CustomerID == 0 || job.RequestID == 0 || job.ReportRevision == 0 || job.EventID == "" || !fileIDPattern.MatchString(d.ObjectRef) || d.Size <= 0 || d.Size > maxPDFBytes || d.MIME != "application/pdf" {
 		return report.IngestResult{}, ErrInvalid
 	}
-	source, err := g.source.OpenPortalReportFile(ctx, job.EventID, d.ObjectRef, filegatewayclient.PortalReportSourceInput{RequestID: job.RequestID, ExpectedSHA256: d.FileHash, ExpectedSize: d.Size, ExpectedMIME: d.MIME, ExpectedName: d.FileName})
+	source, err := g.source.OpenPortalReportFile(ctx, job.EventID, d.ObjectRef, filegatewayclient.PortalReportSourceInput{SourceType: d.SourceType, RequestID: job.RequestID, ExpectedSHA256: d.FileHash, ExpectedSize: d.Size, ExpectedMIME: d.MIME, ExpectedName: d.FileName})
 	if err != nil {
 		return report.IngestResult{}, ErrUnavailable
 	}

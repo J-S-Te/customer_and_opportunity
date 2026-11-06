@@ -28,8 +28,11 @@ type Manifest struct {
 	Policy      Policy
 }
 
+// Permission 是目录中的一条权限。GrantPolicy 表达“谁能授予这条权限”：空串等同 DEFAULT
+// （沿用平台默认授予规则），SUPER_ADMIN_ONLY 表示只允许平台超级管理员授予。
 type Permission struct {
 	Code, Name, Action, ResourceCode, ResourceName, RiskLevel string
+	GrantPolicy                                               string
 }
 
 type Role struct {
@@ -64,6 +67,9 @@ type catalogPermission struct {
 	ResourceCode string `json:"resource_code"`
 	ResourceName string `json:"resource_name,omitempty"`
 	RiskLevel    string `json:"risk_level"`
+	// 字段顺序即 JSON 顺序，必须与平台侧目录结构一致；空值通过 omitempty 省略，
+	// 因此未声明授予策略的既有权限不会改变已发布的载荷。
+	GrantPolicy string `json:"grant_policy,omitempty"`
 }
 
 type catalogRole struct {
@@ -198,11 +204,17 @@ func normalizeManifest(manifest Manifest) (catalogPayload, error) {
 		item.Code, item.Name = strings.TrimSpace(item.Code), strings.TrimSpace(item.Name)
 		item.Action, item.ResourceCode = strings.TrimSpace(item.Action), strings.TrimSpace(item.ResourceCode)
 		item.ResourceName, item.RiskLevel = strings.TrimSpace(item.ResourceName), strings.ToUpper(strings.TrimSpace(item.RiskLevel))
+		// 授予策略只接受空前缀（平台默认）与平台已定义的枚举，未知值直接拒绝，
+		// 避免拼写错误让特权权限悄悄退回默认授予规则。
+		item.GrantPolicy = strings.ToUpper(strings.TrimSpace(item.GrantPolicy))
 		if item.Code == "" || item.Name == "" || item.Action == "" || item.ResourceCode == "" {
 			return catalogPayload{}, errors.New("authorization catalog permission is incomplete")
 		}
 		if item.RiskLevel != "LOW" && item.RiskLevel != "MEDIUM" && item.RiskLevel != "HIGH" && item.RiskLevel != "CRITICAL" {
 			return catalogPayload{}, fmt.Errorf("authorization catalog permission %s has invalid risk level", item.Code)
+		}
+		if item.GrantPolicy != "" && item.GrantPolicy != "DEFAULT" && item.GrantPolicy != "SUPER_ADMIN_ONLY" {
+			return catalogPayload{}, fmt.Errorf("authorization catalog permission %s has invalid grant policy", item.Code)
 		}
 		if _, duplicate := permissionCodes[item.Code]; duplicate {
 			return catalogPayload{}, fmt.Errorf("authorization catalog contains duplicate permission %s", item.Code)
@@ -212,7 +224,7 @@ func normalizeManifest(manifest Manifest) (catalogPayload, error) {
 			return catalogPayload{}, fmt.Errorf("authorization catalog contains duplicate resource/action %s/%s", item.ResourceCode, item.Action)
 		}
 		permissionCodes[item.Code], resourceActions[resourceAction] = struct{}{}, struct{}{}
-		payload.Permissions = append(payload.Permissions, catalogPermission{Code: item.Code, Name: item.Name, Action: item.Action, ResourceCode: item.ResourceCode, ResourceName: item.ResourceName, RiskLevel: item.RiskLevel})
+		payload.Permissions = append(payload.Permissions, catalogPermission{Code: item.Code, Name: item.Name, Action: item.Action, ResourceCode: item.ResourceCode, ResourceName: item.ResourceName, RiskLevel: item.RiskLevel, GrantPolicy: item.GrantPolicy})
 	}
 	sort.Slice(payload.Permissions, func(i, j int) bool { return payload.Permissions[i].Code < payload.Permissions[j].Code })
 	roleCodes := make(map[string]struct{}, len(manifest.Roles))

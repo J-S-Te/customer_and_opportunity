@@ -73,6 +73,21 @@ type InviteClient interface {
 	Consume(context.Context, string, string) error
 }
 
+// LocalCustomerAuthority 复核本地目录及邀请权威，不替代平台身份授权。
+// 参数：上下文、租户、客户、真实平台主体及是否允许待激活邀请。
+// 返回值：无；目录、映射、来源或邀请不一致时失败。
+type LocalCustomerAuthority interface {
+	ResolveCustomerRef(context.Context, string, string, string, bool) (uint64, error)
+	ValidateCustomer(context.Context, string, uint64, string, bool) error
+}
+
+// TransactionalInviteClient 在同一门户事务中消费本地邀请。
+// 参数：事务上下文、邀请秘密及真实平台主体。
+// 返回值：无；邀请不可用或写入失败时回滚登录。
+type TransactionalInviteClient interface {
+	ConsumeInTransaction(context.Context, string, string) error
+}
+
 // SecretProtector 隔离持久化层与明文访问令牌、邀请令牌和 PKCE 材料，降低数据库泄露后的重放风险。
 type SecretProtector interface {
 	Encrypt(context.Context, []byte) ([]byte, error)

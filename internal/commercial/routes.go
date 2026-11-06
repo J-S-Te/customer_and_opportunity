@@ -4,6 +4,7 @@ package commercial
 // 未知路由始终归为 MUTATE_BUSINESS，与 HTTP 方法无关。
 var historicalRoutes = map[string]map[string]bool{
 	"crm": {
+		"GET /api/v1/opportunities/:id/win-confirmation":   true,
 		"GET /api/v1/customers/:id/credit":                 true,
 		"GET /api/v1/customers/:id/credit/history":         true,
 		"GET /api/v1/customers/:id/credit/payment-records": true,
@@ -72,6 +73,13 @@ var historicalRoutes = map[string]map[string]bool{
 		"GET /api/v1/presale/reports/filter-options":                      true,
 	},
 	"portal": {
+		"GET /api/v1/local-admin/customers":                      true,
+		"GET /api/v1/local-admin/customers/:id/contacts":         true,
+		"GET /api/v1/local-admin/customers/:id/accounts":         true,
+		"GET /api/v1/local-admin/customers/:id/invitations":      true,
+		"GET /api/v1/local-admin/customers/:id/projects":         true,
+		"GET /api/v1/local-admin/customers/:id/project-access":   true,
+		"GET /api/v1/local-admin/operations":                     true,
 		"GET /livez":                                             true,
 		"GET /readyz":                                            true,
 		"GET /healthz":                                           true,

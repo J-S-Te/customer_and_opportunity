@@ -47,10 +47,14 @@ func (s *Service) ChangeOwner(ctx context.Context, id uint64, input ChangeOwnerR
 	if err = s.ensureOwnerNotFrozen(ctx, principal.TenantID, ownerID); err != nil {
 		return nil, err
 	}
-	if s.owners != nil {
-		if err = s.owners.Validate(ctx, ownerID, ownerOrgID); err != nil {
-			return nil, err
-		}
+	// 负责人目录未接线（OWNER_DIRECTORY_ENABLED=false）时必须失败关闭：改派要求权威目录
+	// 证明目标用户与组织是有效任职关系，缺少目录就一律拒绝，避免把任意字符串写成负责人。
+	// 创建路径不受影响（负责人强制继承认证主体），非负责人字段的更新也不经过这里。
+	if s.owners == nil {
+		return nil, ownerdirectory.ErrUnavailable
+	}
+	if err = s.owners.Validate(ctx, ownerID, ownerOrgID); err != nil {
+		return nil, err
 	}
 	requestHash := ownerRequestHash(ownerID, ownerOrgID, input.Version, reason)
 	prior, err := s.repo.FindChangeIdempotency(ctx, principal.TenantID, id, "OWNER_CHANGE", principal.UserID, idempotencyKey)

@@ -32,6 +32,9 @@ func configuredCapability(available bool, unavailableReason string) RuntimeCapab
 	return RuntimeCapability{Available: false, Mode: capabilityModeFailClosed, ReasonCode: unavailableReason}
 }
 
+// runtimeCapabilities 描述已装配能力及订阅，不能代替权限或远端健康核验。
+// 参数：config 为已校验的运行配置。
+// 返回值：能力状态与明确的降级原因。
 func runtimeCapabilities(config Config) RuntimeCapabilities {
 	portalReady := config.PortalInviteEnabled && config.PlatformExternalIdentityEnabled
 	qbStatus := configuredCapability(config.QBStatusQueryEnabled, "QB_ACTIVE_QUERY_NOT_CONFIGURED")
@@ -39,13 +42,16 @@ func runtimeCapabilities(config Config) RuntimeCapabilities {
 		qbStatus.Mode = capabilityModeCallbackOnly
 	}
 	return RuntimeCapabilities{
-		"owner_directory":          configuredCapability(config.OwnerDirectoryEnabled, "OWNER_DIRECTORY_NOT_CONFIGURED"),
-		"portal_account_provision": configuredCapability(portalReady, "PORTAL_IDENTITY_PROVIDER_NOT_CONFIGURED"),
-		"portal_access_disable":    configuredCapability(portalReady, "PORTAL_IDENTITY_PROVIDER_NOT_CONFIGURED"),
-		"approval_task_query":      configuredCapability(config.ApprovalTaskResolverEnabled, "APPROVAL_TASK_RESOLVER_NOT_CONFIGURED"),
-		"qb_active_query":          qbStatus,
-		"qb_launch_quotation":      configuredCapability(config.QBLaunchEnabled, "QB_LAUNCH_NOT_CONFIGURED"),
-		"qb_launch_bid":            configuredCapability(config.QBLaunchEnabled, "QB_LAUNCH_NOT_CONFIGURED"),
+		"win_confirmation_contract":       configuredCapability(config.WinConfirmationMode != "local_evidence" && config.ContractVerificationEnabled, "CONTRACT_VERIFICATION_NOT_CONFIGURED"),
+		"win_confirmation_local_evidence": configuredCapability(config.WinConfirmationMode == "local_evidence", "LOCAL_WIN_CONFIRMATION_NOT_ENABLED"),
+		"contract_transfer":               configuredCapability(config.ContractTransferSubscribed, "CONTRACT_TRANSFER_NOT_SUBSCRIBED"),
+		"owner_directory":                 configuredCapability(config.OwnerDirectoryEnabled, "OWNER_DIRECTORY_NOT_CONFIGURED"),
+		"portal_account_provision":        configuredCapability(portalReady, "PORTAL_IDENTITY_PROVIDER_NOT_CONFIGURED"),
+		"portal_access_disable":           configuredCapability(portalReady, "PORTAL_IDENTITY_PROVIDER_NOT_CONFIGURED"),
+		"approval_task_query":             configuredCapability(config.ApprovalTaskResolverEnabled, "APPROVAL_TASK_RESOLVER_NOT_CONFIGURED"),
+		"qb_active_query":                 qbStatus,
+		"qb_launch_quotation":             configuredCapability(config.QBLaunchEnabled, "QB_LAUNCH_NOT_CONFIGURED"),
+		"qb_launch_bid":                   configuredCapability(config.QBLaunchEnabled, "QB_LAUNCH_NOT_CONFIGURED"),
 		// 导入和附件使用进程内有界解析、格式、摘要、路径和内容校验，不依赖外部杀毒服务。
 		"customer_import_scan":            configuredCapability(true, ""),
 		"opportunity_attachment_upload":   configuredCapability(config.AttachmentLocalEnabled, "ATTACHMENT_STORAGE_OR_SCANNER_NOT_CONFIGURED"),

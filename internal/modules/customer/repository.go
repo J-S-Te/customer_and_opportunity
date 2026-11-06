@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/shopspring/decimal"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/opportunity"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/auth"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/businessclock"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/database"
@@ -19,6 +20,7 @@ type Repository interface {
 	NextNumber(context.Context, string, string) (string, error)
 	Create(context.Context, *Customer) error
 	FindByID(context.Context, auth.Principal, uint64, bool) (*Customer, error)
+	FindReadableByID(context.Context, auth.Principal, uint64, bool) (*Customer, error)
 	FindDuplicates(context.Context, string, string, string, uint64) ([]DuplicateCandidate, error)
 	List(context.Context, auth.Principal, ListQuery) (pagination.Page[Response], error)
 	Update(context.Context, *Customer, uint64) error
@@ -30,7 +32,7 @@ type Repository interface {
 	LockActiveForWrite(context.Context, auth.Principal, uint64) (*Customer, error)
 	ListFollowups(context.Context, string, uint64, int, int) (pagination.Page[FollowupResponse], error)
 	ListChangeLogs(context.Context, string, uint64, int, int) (pagination.Page[ChangeLogResponse], error)
-	ListOpportunityHistory(context.Context, string, uint64, int, int) (pagination.Page[OpportunitySummary], error)
+	ListOpportunityHistory(context.Context, auth.Principal, uint64, int, int) (pagination.Page[OpportunitySummary], error)
 }
 
 // ScopedDuplicateRepository 是客户重复检查的可见性扩展点。
@@ -194,10 +196,13 @@ func (r *GORMRepository) ListChangeLogs(ctx context.Context, tenantID string, cu
 	return pagination.Page[ChangeLogResponse]{Items: items, Page: page, PageSize: pageSize, Total: total}, nil
 }
 
-func (r *GORMRepository) ListOpportunityHistory(ctx context.Context, tenantID string, customerID uint64, page, pageSize int) (pagination.Page[OpportunitySummary], error) {
+// ListOpportunityHistory 返回客户下的商机历史。商机是独立聚合，客户可见不等于商机可见，
+// 因此范围谓词直接复用 opportunity.ApplyDataScope（商机数据范围的唯一权威实现），
+// 不在客户模块复制第二份。父客户可见性由 service 前置校验，这里是纵深防御的第二道收口。
+func (r *GORMRepository) ListOpportunityHistory(ctx context.Context, principal auth.Principal, customerID uint64, page, pageSize int) (pagination.Page[OpportunitySummary], error) {
 	page, pageSize = pagination.Normalize(page, pageSize)
-	db := database.FromContext(ctx, r.db).Table("crm_opportunities").
-		Where("tenant_id = ? AND customer_id = ? AND deleted_at IS NULL", tenantID, customerID)
+	db := opportunity.ApplyDataScope(database.FromContext(ctx, r.db).Table("crm_opportunities"), principal).
+		Where("crm_opportunities.customer_id = ?", customerID)
 	var total int64
 	if err := db.Count(&total).Error; err != nil {
 		return pagination.Page[OpportunitySummary]{}, err
@@ -326,6 +331,23 @@ func scopedCustomer(db *gorm.DB, principal auth.Principal) *gorm.DB {
 
 func (r *GORMRepository) FindByID(ctx context.Context, principal auth.Principal, id uint64, preload bool) (*Customer, error) {
 	db := scopedCustomer(database.FromContext(ctx, r.db).Model(&Customer{}), principal)
+	if preload {
+		db = db.Preload("Contacts", "deleted_at IS NULL")
+	}
+	var model Customer
+	if err := db.First(&model, "crm_customers.id = ?", id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	return &model, nil
+}
+
+// FindReadableByID 是只读路径的客户详情入口：在严格范围之上允许 customer.read.all
+// 阅读租户全部客户；写路径必须继续使用 FindByID/行锁，不得复用本方法。
+func (r *GORMRepository) FindReadableByID(ctx context.Context, principal auth.Principal, id uint64, preload bool) (*Customer, error) {
+	db := ApplyReadScope(database.FromContext(ctx, r.db).Model(&Customer{}), principal)
 	if preload {
 		db = db.Preload("Contacts", "deleted_at IS NULL")
 	}
@@ -566,7 +588,9 @@ func (r *GORMRepository) loadCustomerListSummaries(ctx context.Context, tenantID
 }
 
 func buildCustomerListQuery(db *gorm.DB, principal auth.Principal, query ListQuery) *gorm.DB {
-	db = scopedCustomer(db.Model(&Customer{}), principal)
+	// 列表与 CSV 导出共用本函数：读取口径使用 ApplyReadScope，客户全量查看权限在此生效，
+	// 写路径仍由 ApplyDataScope（经 FindByID/行锁）严格收窄。
+	db = ApplyReadScope(db.Model(&Customer{}), principal)
 	if customerListUsesSummaryJoin(query) {
 		db = db.
 			Joins(`LEFT JOIN (
@@ -588,13 +612,15 @@ func buildCustomerListQuery(db *gorm.DB, principal auth.Principal, query ListQue
 	}
 	if keyword := strings.TrimSpace(query.Keyword); keyword != "" {
 		normalized := normalizeName(keyword)
-		pattern := "%" + keyword + "%"
-		normalizedPattern := "%" + normalized + "%"
+		// 关键字仍按字面子串匹配：% 和 _ 由 LikeContains 转义，
+		// 再由 ESCAPE 声明转义字符，避免用户输入被当成通配符放大扫描范围。
+		pattern := database.LikeContains(keyword)
+		normalizedPattern := database.LikeContains(normalized)
 		// 同时搜索显示值及规范值。显示
 		// 列使由旧迁移创建规范值的已有行
 		// 仍能获得直观结果；规范表达式
 		// 使包含空格或大小写差异的名称也可被搜索。
-		db = db.Where(`crm_customers.customer_no LIKE ? OR crm_customers.name LIKE ? OR crm_customers.normalized_name LIKE ? OR LOWER(REPLACE(crm_customers.name, ' ', '')) LIKE ?`, pattern, pattern, normalizedPattern, normalizedPattern)
+		db = db.Where(`crm_customers.customer_no LIKE ? ESCAPE '\\' OR crm_customers.name LIKE ? ESCAPE '\\' OR crm_customers.normalized_name LIKE ? ESCAPE '\\' OR LOWER(REPLACE(crm_customers.name, ' ', '')) LIKE ? ESCAPE '\\'`, pattern, pattern, normalizedPattern, normalizedPattern)
 	}
 	if query.CustomerType != "" {
 		db = db.Where("customer_type = ?", query.CustomerType)
