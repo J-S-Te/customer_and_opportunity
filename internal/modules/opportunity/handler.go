@@ -51,9 +51,20 @@ func (h *Handler) ListFailedContractTransfers(c *gin.Context) {
 	response.OK(c, gin.H{"items": items})
 }
 
+// RetryFailedContractTransfer 只允许订阅中的合同转单重新进入待投递队列。
+// 参数：c 为已认证且通过转单权限检查的 HTTP 上下文。
+// 返回值：HTTP 重试结果；未订阅时保持历史状态不变。
 func (h *Handler) RetryFailedContractTransfer(c *gin.Context) {
 	if h.outbox == nil {
 		response.Error(c, apperror.New(http.StatusServiceUnavailable, "CRM_OUTBOX_UNAVAILABLE", "转合同队列运维未配置"))
+		return
+	}
+	if h.service == nil {
+		response.Error(c, apperror.New(http.StatusServiceUnavailable, "CRM_OUTBOX_UNAVAILABLE", "转合同服务未配置"))
+		return
+	}
+	if err := h.service.ensureContractTransferSubscribed(); err != nil {
+		response.Error(c, err)
 		return
 	}
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)

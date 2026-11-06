@@ -12,27 +12,36 @@ import (
 )
 
 type Config struct {
-	MySQLDSN      string
-	WorkerID      string
-	PollInterval  time.Duration
-	LeaseDuration time.Duration
-	BatchSize     int
-	TokenURL      string
-	ClientID      string
-	ClientSecret  string
-	Scope         string
-	IntakeURL     string
-	TLS           integrationhttp.TLSOptions
+	SubscriptionDisabled bool
+	MySQLDSN             string
+	WorkerID             string
+	PollInterval         time.Duration
+	LeaseDuration        time.Duration
+	BatchSize            int
+	TokenURL             string
+	ClientID             string
+	ClientSecret         string
+	Scope                string
+	IntakeURL            string
+	TLS                  integrationhttp.TLSOptions
 }
 
+// LoadConfig 保留默认合同投递配置，并允许显式停订阅后冻结积压。
+// 参数：无；配置来自进程环境。
+// 返回值：运行配置；订阅开启但凭据缺失或参数非法时返回错误。
 func LoadConfig() (Config, error) {
+	subscribed, err := boolEnv("CRM_CONTRACT_TRANSFER_SUBSCRIBED", true)
+	if err != nil {
+		return Config{}, err
+	}
 	hostname, _ := os.Hostname()
 	requireMTLS, err := boolEnv("CONTRACT_TLS_REQUIRE_MTLS", false)
 	if err != nil {
 		return Config{}, err
 	}
 	cfg := Config{
-		MySQLDSN: os.Getenv("MYSQL_DSN"), WorkerID: env("CONTRACT_TRANSFER_WORKER_ID", hostname),
+		SubscriptionDisabled: !subscribed,
+		MySQLDSN:             os.Getenv("MYSQL_DSN"), WorkerID: env("CONTRACT_TRANSFER_WORKER_ID", hostname),
 		PollInterval:  durationEnv("CONTRACT_TRANSFER_POLL_INTERVAL", 5*time.Second),
 		LeaseDuration: durationEnv("CONTRACT_TRANSFER_LEASE_DURATION", time.Minute),
 		BatchSize:     intEnv("CONTRACT_TRANSFER_BATCH_SIZE", 20), TokenURL: os.Getenv("CONTRACT_TOKEN_URL"),
@@ -45,8 +54,13 @@ func LoadConfig() (Config, error) {
 		},
 	}
 	if cfg.MySQLDSN == "" || cfg.WorkerID == "" || len(cfg.WorkerID) > 128 || cfg.PollInterval <= 0 ||
-		cfg.LeaseDuration < 15*time.Second || cfg.BatchSize < 1 || cfg.BatchSize > 100 ||
-		cfg.ClientID == "" || cfg.ClientSecret == "" || cfg.Scope != "opportunity.signed.write" {
+		cfg.LeaseDuration < 15*time.Second || cfg.BatchSize < 1 || cfg.BatchSize > 100 {
+		return Config{}, fmt.Errorf("invalid contract transfer worker configuration")
+	}
+	if cfg.SubscriptionDisabled {
+		return cfg, nil
+	}
+	if cfg.ClientID == "" || cfg.ClientSecret == "" || cfg.Scope != "opportunity.signed.write" {
 		return Config{}, fmt.Errorf("invalid contract transfer worker configuration")
 	}
 	// 两个端点都属于机器间协议；配置阶段固定 scheme、禁止 URL 用户信息，并把是否允许明文 HTTP 交给显式安全开关。

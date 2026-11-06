@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	core "github.com/J-S-Te/license-core"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/commercial"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/filegateway"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/middleware"
@@ -17,6 +18,7 @@ import (
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/portal/evaluation"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/portal/feedback"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/portal/filing"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/portal/localidentity"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/portal/machineauth"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/portal/project"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/portal/projectexport"
@@ -46,6 +48,9 @@ type App struct {
 // 参数：ctx 为应用上下文；config 为已解析运行配置。
 // 返回值：应用实例；配置或依赖初始化失败返回错误。
 func New(ctx context.Context, config Config) (*App, error) {
+	if err := config.validate(); err != nil {
+		return nil, err
+	}
 	licenseCtx, licenseCancel := context.WithCancel(ctx)
 	started := false
 	defer func() {
@@ -71,6 +76,15 @@ func New(ctx context.Context, config Config) (*App, error) {
 	defer cancel()
 	if err := sqlDB.PingContext(pingCtx); err != nil {
 		return nil, fmt.Errorf("ping Portal database: %w", err)
+	}
+	defer func() {
+		if !started {
+			_ = sqlDB.Close()
+		}
+	}()
+	localRepo := localidentity.NewRepository(db)
+	if err := localRepo.CheckMode(ctx, config.TenantID, config.directoryMode()); err != nil {
+		return nil, fmt.Errorf("validate Portal customer authority: %w", err)
 	}
 	auditStore := requestaudit.NewPortalStore(db)
 	auditDispatcher, err := requestaudit.NewDispatcher(auditStore, requestaudit.DispatcherOptions{
@@ -99,21 +113,28 @@ func New(ctx context.Context, config Config) (*App, error) {
 	if err != nil {
 		return nil, err
 	}
-	inviteClient, err := NewCRMInviteClient(ctx, CRMInviteClientOptions{
-		BaseURL: config.CRMInviteBaseURL, TokenURL: config.CRMInviteTokenURL,
-		ClientID: config.CRMInviteClientID, ClientSecret: config.CRMInviteClientSecret,
-		Scope: config.CRMInviteScope,
-	})
-	if err != nil {
-		return nil, err
-	}
+	var inviteClient account.InviteClient
+	var localAccounts *localidentity.AccountAdapter
 	var accountServiceOptions []account.ServiceOption
+	if config.directoryMode() == localidentity.ModeLocal {
+		localAccounts = &localidentity.AccountAdapter{Repo: localRepo, TenantID: config.TenantID, HMACKey: config.LocalInviteHMACKey}
+		inviteClient = localAccounts
+		accountServiceOptions = append(accountServiceOptions, account.WithLocalCustomerAuthority(localAccounts))
+	} else {
+		inviteClient, err = NewCRMInviteClient(ctx, CRMInviteClientOptions{BaseURL: config.CRMInviteBaseURL, TokenURL: config.CRMInviteTokenURL, ClientID: config.CRMInviteClientID, ClientSecret: config.CRMInviteClientSecret, Scope: config.CRMInviteScope})
+		if err != nil {
+			return nil, err
+		}
+	}
 	if config.UsePlatformBinding {
 		// Phase 4：平台绑定开启后，非邀请登录以 authorization-context 的 customer_ref 为
 		// 客户边界；邀请链路与回退仍使用本地 portal_identity_links。
 		accountServiceOptions = append(accountServiceOptions, account.WithPlatformBinding())
 	}
 	accountRepository := account.NewGORMRepository(db)
+	if localAccounts != nil {
+		accountRepository.UseLocalDirectory()
+	}
 	if config.CentralSessionEnabled {
 		accountRepository.EnableCentralSessions()
 		accountServiceOptions = append(accountServiceOptions, account.WithCentralSessions(oidcAdapter.central, central.Expectation{
@@ -150,7 +171,12 @@ func New(ctx context.Context, config Config) (*App, error) {
 		portalFileClient = fileClient
 		reportFileReader = report.NewLocalFileGatewayReader(fileClient, reportDescriptorProtector)
 	}
-	reportProviders, err := newReportDownloadProviders(ctx, db, config, reportDescriptorProtector)
+	var reportProviders *reportDownloadProviders
+	if localAccounts != nil {
+		reportProviders, err = newReportDownloadProvidersWithIdentity(ctx, db, config, reportDescriptorProtector, localAccounts)
+	} else {
+		reportProviders, err = newReportDownloadProviders(ctx, db, config, reportDescriptorProtector)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("initialize Portal report download: %w", err)
 	}
@@ -192,12 +218,33 @@ func New(ctx context.Context, config Config) (*App, error) {
 		filingMaterialScanner = filing.NewLocalMaterialScanner(filingMaterialStore)
 	}
 	filingMaterialService := filing.NewMaterialService(filingRepository, filingProtector{codec: codec}, filingMaterialStore, filingMaterialScanner, systemClock{}, requestIDGenerator{})
-	router := NewRouter(RouterDependencies{Config: config, LicenseCheck: licenseCheck, RequestAudit: middleware.RequestAudit(auditStore, middleware.RequestAuditOptions{
+	var localService *localidentity.Service
+	if localAccounts != nil {
+		platform, err := NewLocalIdentityPlatform(ctx, LocalIdentityPlatformOptions{PlatformBaseURL: config.PlatformBaseURL, TokenURL: config.LocalPlatformTokenURL, TenantID: config.TenantID, Provision: config.LocalProvision, RoleAssign: config.LocalRoleAssign, RoleRevoke: config.LocalRoleRevoke, BindingWrite: config.LocalBindingWrite, BindingDisable: config.LocalBindingDisable})
+		if err != nil {
+			return nil, fmt.Errorf("initialize Portal local identity platform: %w", err)
+		}
+		localFiles, err := NewLocalIdentityFiles(portalGatewayClient, config.FileGatewayApplicationID, config.ReportSourceApplicationID)
+		if err != nil {
+			return nil, fmt.Errorf("initialize Portal local report files: %w", err)
+		}
+		localService, err = localidentity.NewService(localidentity.Dependencies{Repo: localRepo, Accounts: accountService, Protector: protector, DescriptorProtector: reportDescriptorProtector, HMACKey: config.LocalInviteHMACKey, Platform: platform, Audit: auditStore, Mode: localidentity.ModeLocal, TenantID: config.TenantID, EnvironmentCode: config.PlatformEnvironmentCode, PublicURL: config.PublicOrigin + config.PathPrefix, CheckLicense: func(ctx context.Context) error { return licenseCheck(ctx, core.MUTATE_BUSINESS) }, Files: localFiles})
+		if err != nil {
+			return nil, fmt.Errorf("initialize Portal local identity: %w", err)
+		}
+	}
+
+	if localService != nil {
+		reportDownloadService.UseSourceAccess(func(ctx context.Context, actor report.Actor, id uint64) error {
+			return localService.AssertCustomerReport(ctx, actor, id, "report.download")
+		})
+	}
+	router := NewRouter(RouterDependencies{Config: config, LocalIdentity: localService, CustomerAuthority: localRepo, LicenseCheck: licenseCheck, RequestAudit: middleware.RequestAudit(auditStore, middleware.RequestAuditOptions{
 		TenantID: config.TenantID, ApplicationCode: config.PlatformApplicationCode, EnvironmentCode: config.PlatformEnvironmentCode,
 		TrustedProxies: config.TrustedProxies,
 	}), Account: accountService, BackchannelLogout: newPortalBackchannelLogoutHandler(oidcAdapter, accountRepository, config.OIDCIssuer, config.OIDCClientID, config.BackchannelLogoutTTL).Handle, Projects: projectService, ProjectExports: projectExportService, ProjectMessages: projectMessageService, Reports: reportService, ReportDownloads: reportDownloadService, WorkerReadiness: workerReadiness, WorkerHeartbeatMaxAge: workerruntime.HeartbeatMaxAge, ReportDownloadError: func(ctx context.Context, err error) {
 		slog.Default().ErrorContext(ctx, "Portal report download completion audit failed", "error", err)
-	}, Feedback: feedbackService, Evaluations: evaluationService, Filings: filingService, FilingMaterials: filingMaterialService, MachineAuthenticator: machineAuthenticator, CustomerCapabilities: customerCapabilities, DatabaseHealthy: func() bool {
+	}, Feedback: feedbackService, Evaluations: evaluationService, Filings: filingService, FilingMaterials: filingMaterialService, MachineAuthenticator: machineAuthenticator, CustomerCapabilities: customerCapabilities, CustomerDirectory: newCRMCustomerDirectory(db), DatabaseHealthy: func() bool {
 		pingCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 		return sqlDB.PingContext(pingCtx) == nil

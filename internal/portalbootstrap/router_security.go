@@ -156,6 +156,7 @@ func loginStateCookie(config Config, value string, expires time.Time) *http.Cook
 // expiredLoginStateCookie 用途：以相同名称和路径清除已终止的浏览器登录状态。
 // 参数：config 为原 Cookie 的路径及安全配置。
 // 返回值：空值且 MaxAge=-1 的过期 Cookie。
+// 回调成功和失败都必须下发，使一次登录只允许一次回调。
 func expiredLoginStateCookie(config Config) *http.Cookie {
 	cookie := loginStateCookie(config, "", time.Unix(1, 0))
 	cookie.MaxAge = -1
@@ -165,6 +166,8 @@ func expiredLoginStateCookie(config Config) *http.Cookie {
 // verifyLoginState 用途：在消费激活上下文前常量时间比较浏览器与回调 state。
 // 参数：browserState 为 Cookie 值；queryState 为回调查询值。
 // 返回值：匹配时 nil；缺失、含空白或失配返回非法登录状态。
+// 任一缺失、含空白或控制字符（Cookie 或头注入残留）即判定非法；比较使用常量时间，
+// 不按字节泄漏前缀匹配程度。它不消费 activation，纯函数便于单独测试。
 func verifyLoginState(browserState, queryState string) error {
 	if browserState == "" || queryState == "" {
 		return account.ErrInvalidLoginState

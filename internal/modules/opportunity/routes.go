@@ -5,6 +5,9 @@ import (
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/middleware"
 )
 
+// RegisterRoutes 注册受权限与会话保护的 CRM 商机接口。
+// 参数：router 为受保护路由组，handler 为业务处理器。
+// 返回值：无。
 func RegisterRoutes(router *gin.RouterGroup, handler *Handler) {
 	router.GET("/opportunity-catalog-items", middleware.RequirePermission("opportunity.read"), handler.ListCatalogItems)
 	router.POST("/opportunity-catalog-items", middleware.RequirePermission("opportunity.catalog.manage"), handler.CreateCatalogItem)
@@ -18,6 +21,7 @@ func RegisterRoutes(router *gin.RouterGroup, handler *Handler) {
 	opportunities.GET("", middleware.RequirePermission("opportunity.read"), handler.List)
 	opportunities.GET("/board", middleware.RequirePermission("opportunity.read"), handler.Board)
 	opportunities.GET("/:id", middleware.RequirePermission("opportunity.read"), handler.Get)
+	opportunities.GET("/:id/win-confirmation", middleware.RequirePermission("opportunity.read"), handler.WinConfirmation)
 	opportunities.POST("", middleware.RequirePermission("opportunity.create"), handler.Create)
 	opportunities.PUT("/:id", middleware.RequirePermission("opportunity.update"), handler.Update)
 	opportunities.PUT("/:id/owner", middleware.RequirePermission("opportunity.owner.change"), handler.ChangeOwner)

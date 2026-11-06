@@ -134,6 +134,7 @@ func ensureCreditCustomerVisible(db *gorm.DB, principal auth.Principal, customer
 // creditApplicationNotFound 用途：统一不存在与范围外申请的 404，避免存在性探测。
 // 参数：无。
 // 返回值：申请不存在业务错误。
+// 不变量：申请不存在与申请指向的客户不在当前主体数据范围内共用同一 404。
 func creditApplicationNotFound() error {
 	return apperror.New(404, "CRM_CREDIT_APPLICATION_NOT_FOUND", "credit application not found")
 }
@@ -141,6 +142,7 @@ func creditApplicationNotFound() error {
 // ensureCreditApplicationCustomerVisible 用途：按客户范围验证申请可见性，不可见折叠为申请 404。
 // 参数：db 为查询会话；principal 为审批主体；customerID 为申请客户。
 // 返回值：可见时 nil；不可见为 404；数据库故障保留原错误。
+// 不变量：数据库错误不得折叠成 404，否则真实故障会被误报成资源缺失。
 func ensureCreditApplicationCustomerVisible(db *gorm.DB, principal auth.Principal, customerID uint64) error {
 	err := ensureCreditCustomerVisible(db, principal, customerID)
 	if err == nil {
@@ -156,6 +158,8 @@ func ensureCreditApplicationCustomerVisible(db *gorm.DB, principal auth.Principa
 // lockScopedCreditCustomer 用途：在已锁申请的事务中按范围锁定可用客户，保持申请到客户锁序。
 // 参数：tx 为事务；principal 为审批主体；customerID 为客户；dest 接收锁定行。
 // 返回值：查询错误；无可见可用客户时返回记录不存在。
+// 不变量：复用 scopedCreditCustomers（customer.ApplyDataScope）与申请创建时客户锁同形，
+// 并要求客户仍为 ACTIVE 且未合并；调用方必须已锁定申请行，保持“申请→客户”锁序。
 func lockScopedCreditCustomer(tx *gorm.DB, principal auth.Principal, customerID uint64, dest any) error {
 	return scopedCreditCustomers(tx, principal).
 		Clauses(clause.Locking{Strength: "UPDATE"}).
@@ -169,6 +173,28 @@ func defaultRuleSettings(tenant string, now time.Time) RuleSettings {
 }
 
 var creditReferencePattern = regexp.MustCompile(`^[A-Za-z0-9._/-]+$`)
+
+// maxCreditAmountLength 与 crm_customer_credit_payment_records.due_amount/paid_amount 的
+// VARCHAR(32) 列宽一致。金额在进入 decimal 解析和落库前必须先过长度与字符集门禁，
+// 否则任意长字符串会被当作金额承载。
+const maxCreditAmountLength = 32
+
+// validCreditAmount 校验金额字符串的字面格式：只允许数字、正负号和小数点，且不超过列宽。
+// 空值和超限都按请求校验失败（422）拒绝，不进入 decimal 解析。
+func validCreditAmount(value string) bool {
+	if value == "" || len(value) > maxCreditAmountLength {
+		return false
+	}
+	for _, character := range value {
+		switch {
+		case character >= '0' && character <= '9':
+		case character == '.' || character == '+' || character == '-':
+		default:
+			return false
+		}
+	}
+	return true
+}
 
 var allowedCreditSources = map[string]struct{}{
 	"settlement": {}, "erp": {}, "finance": {}, "manual": {},
@@ -346,6 +372,11 @@ func (s *Service) ProcessPayment(ctx context.Context, event PaymentEvent) (Payme
 	event.ContractNo = strings.TrimSpace(event.ContractNo)
 	event.PeriodNo = strings.TrimSpace(event.PeriodNo)
 	event.SourceSystem = strings.ToLower(strings.TrimSpace(event.SourceSystem))
+	// 金额先过长度/字符集门禁再进入 decimal：这里拒绝超长或含非数字字符的字符串，
+	// 避免把上游任意长输入当作金额参与解析、比较和持久化。
+	if !validCreditAmount(event.DueAmount) || !validCreditAmount(event.PaidAmount) {
+		return PaymentRecord{}, apperror.New(422, "CRM_CREDIT_PAYMENT_AMOUNT_INVALID", "due_amount and paid_amount must be decimal strings of at most 32 characters")
+	}
 	due, err := decimal.NewFromString(event.DueAmount)
 	if err != nil || due.IsNegative() {
 		return PaymentRecord{}, apperror.New(400, "CRM_CREDIT_EVENT_INVALID", "due_amount is invalid")

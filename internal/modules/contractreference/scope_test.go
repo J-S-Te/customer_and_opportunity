@@ -183,6 +183,34 @@ func TestActiveCustomerScopeAdministratorKeepsTenantWideAccess(t *testing.T) {
 	}
 }
 
+// TestActiveCustomerScopeAllowsCustomerReadAllPermission 验证持有 customer.read.all 的纯销售
+// 可以引用非本人负责的客户：客户侧可见性与客户模块同口径，按 ApplyReadScope 放开到租户内
+// 全部未删除客户；商机侧谓词不受该权限影响（见下方 strict 用例与商机侧用例）。
+func TestActiveCustomerScopeAllowsCustomerReadAllPermission(t *testing.T) {
+	viewer := auth.Principal{TenantID: "tenant-a", UserID: "sales-a", Roles: []string{"sales"}, ScopeMode: auth.ScopeAll,
+		Permissions: map[string]struct{}{"customer.read.all": {}}}
+	rendered := renderActiveCustomer(t, viewer, 7)
+	requireSQLFragments(t, rendered,
+		"crm_customers.tenant_id = ?",
+		"crm_customers.deleted_at IS NULL",
+		"crm_customers.id = ?",
+		"crm_customers.status = ?",
+		"crm_customers.merged_into_id IS NULL",
+	)
+	requireNoSQLFragments(t, rendered, "crm_customers.owner_user_id", "created_by")
+	if !bindsValue(rendered, "tenant-a") || !bindsValue(rendered, uint64(7)) || !bindsValue(rendered, customer.StatusActive) {
+		t.Fatalf("租户/客户ID/状态绑定缺失: vars=%#v", rendered.vars)
+	}
+
+	// 同一销售不持有该权限时仍是严格口径：只按当前负责人收窄，原有断言不放宽。
+	strict := renderActiveCustomer(t, auth.Principal{TenantID: "tenant-a", UserID: "sales-a", Roles: []string{"sales"}, ScopeMode: auth.ScopeAll}, 7)
+	requireSQLFragments(t, strict, "crm_customers.owner_user_id = ?")
+	requireNoSQLFragments(t, strict, "created_by")
+	if !bindsValue(strict, "sales-a") {
+		t.Fatalf("无权限销售未按本人收窄: vars=%#v", strict.vars)
+	}
+}
+
 // TestUsableOpportunityScopeMatchesOpportunityModulePredicate 验证商机侧范围与 opportunity
 // 模块的权威谓词一致：ALL 按租户、ORG 按 owner_org_id（空集合拒绝）、其余按当前负责人；
 // 商机模块没有“纯销售强制自管”特例，因此这里也不额外收紧，且只看 owner 不看 created_by。

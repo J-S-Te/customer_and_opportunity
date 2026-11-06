@@ -287,8 +287,8 @@ func (s *Service) SignProvision(ctx context.Context, id uint64, request Provisio
 		Reason: provisionSignReason(request.Reason), ContractRef: model.ContractRef,
 		PendingType: model.TerminalPendingType, OperatorID: operator, ChangedAt: model.StageChangedAt, RequestID: requestctx.ID(ctx),
 	}
-	// 本通道只写阶段与阶段日志，不产出额外确认证据。
-	if err = s.persistStage(ctx, principal, model, before, request.ExpectedVersion, log); err != nil {
+	// evidence 恒为 nil：本通道不产出赢单/合同确认证据，只写阶段与阶段日志。
+	if err = s.persistStage(ctx, principal, model, before, request.ExpectedVersion, log, nil); err != nil {
 		// 并发重复推进同一合同引用会撞阶段日志唯一键；恢复既有结果而不是报 500。
 		if isDuplicateStageSource(err) {
 			if current, findErr := s.repo.FindByID(ctx, principal, id); findErr == nil && current.CurrentStage == StageSigned && current.Status == StatusClosed &&

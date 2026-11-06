@@ -38,7 +38,7 @@ type AuditConfig struct {
 	BatchSize                                                                   int
 }
 
-// BindingConfig 是平台客户绑定禁用收敛的机器凭据（portal_mapping_disable scope）。
+// BindingConfig 是平台客户绑定禁用收敛的机器凭据（portal.identity_mapping.disable scope）。
 type BindingConfig struct {
 	BaseURL, ClientID, ClientSecret, Scope string
 	TLS                                    integrationhttp.TLSOptions
@@ -54,6 +54,9 @@ type PlatformConfig struct {
 	TLS                                                                     integrationhttp.TLSOptions
 }
 
+// LoadConfig 读取既有恢复任务配置及平台实际登记的精确绑定scope。
+// 参数：无。
+// 返回值：受控配置或非法scope、缺依赖错误，不执行任务。
 func LoadConfig() (Config, error) {
 	portalMTLS, err := boolEnv("PORTAL_ACCESS_DISABLE_PORTAL_TLS_REQUIRE_MTLS", false)
 	if err != nil {
@@ -82,7 +85,7 @@ func LoadConfig() (Config, error) {
 		Binding: BindingConfig{
 			BaseURL:  os.Getenv("PORTAL_ACCESS_DISABLE_PLATFORM_BINDING_BASE_URL"),
 			ClientID: os.Getenv("PORTAL_ACCESS_DISABLE_PLATFORM_BINDING_CLIENT_ID"), ClientSecret: os.Getenv("PORTAL_ACCESS_DISABLE_PLATFORM_BINDING_CLIENT_SECRET"),
-			Scope: env("PORTAL_ACCESS_DISABLE_PLATFORM_BINDING_SCOPE", "portal_mapping_disable"),
+			Scope: env("PORTAL_ACCESS_DISABLE_PLATFORM_BINDING_SCOPE", "portal.identity_mapping.disable"),
 			TLS:   integrationhttp.TLSOptions{RootCAFile: os.Getenv("PORTAL_ACCESS_DISABLE_PLATFORM_TLS_ROOT_CA_FILE"), ClientCertFile: os.Getenv("PORTAL_ACCESS_DISABLE_PLATFORM_TLS_CLIENT_CERT_FILE"), ClientKeyFile: os.Getenv("PORTAL_ACCESS_DISABLE_PLATFORM_TLS_CLIENT_KEY_FILE"), ServerName: os.Getenv("PORTAL_ACCESS_DISABLE_PLATFORM_TLS_SERVER_NAME"), RequireMTLS: platformMTLS},
 		},
 		Platform: PlatformConfig{
@@ -103,6 +106,9 @@ func LoadConfig() (Config, error) {
 	return cfg, cfg.validate()
 }
 
+// validate 按原安全边界核验任务配置，绑定scope不能用服务用途名替代。
+// 参数：无。
+// 返回值：缺依赖、权限scope或传输配置错误。
 func (c Config) validate() error {
 	required := map[string]string{
 		"PORTAL_ACCESS_DISABLE_MYSQL_DSN": c.MySQLDSN, "PORTAL_ACCESS_DISABLE_WORKER_ID": c.WorkerID,
@@ -146,8 +152,8 @@ func (c Config) validate() error {
 	if c.Audit.PollInterval < 100*time.Millisecond || c.Audit.PollInterval > time.Minute || c.Audit.BatchSize < 1 || c.Audit.BatchSize > 100 {
 		return fmt.Errorf("invalid Portal access disable audit dispatcher configuration")
 	}
-	if c.PlatformOnly && c.Binding.Scope != "portal_mapping_disable" {
-		return fmt.Errorf("PORTAL_ACCESS_DISABLE_PLATFORM_BINDING_SCOPE must be portal_mapping_disable")
+	if c.PlatformOnly && c.Binding.Scope != "portal.identity_mapping.disable" {
+		return fmt.Errorf("PORTAL_ACCESS_DISABLE_PLATFORM_BINDING_SCOPE must be portal.identity_mapping.disable")
 	}
 	endpoints := map[string]string{
 		"PORTAL_ACCESS_DISABLE_PLATFORM_ROLE_REVOKE_URL": c.Platform.RoleRevokeURL, "PORTAL_ACCESS_DISABLE_PLATFORM_TOKEN_URL": c.Platform.TokenURL,

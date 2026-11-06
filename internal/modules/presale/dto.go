@@ -52,13 +52,18 @@ type RequestQueryScope struct {
 	AssigneeID  string
 }
 
+// maxDescriptionRunes 是售前申请描述上限，DTO binding 标签与 validateCreate 必须一致。
+// 描述列是 TEXT（最多 65535 字节），5000 个 UTF-8 字符最坏占 20000 字节，仍留有余量；
+// 旧的 60000 字符上限已接近列宽，超长内容会在审批推送和导出时才暴露问题。
+const maxDescriptionRunes = 5000
+
 type CreateRequestInput struct {
 	OpportunityID  uint64    `json:"opportunity_id" binding:"required"`
 	Venue          Venue     `json:"venue" binding:"required"`
 	ServiceAddress string    `json:"service_address" binding:"omitempty,max=500"`
 	ContactName    string    `json:"contact_name" binding:"required,max=128"`
 	ContactPhone   string    `json:"contact_phone" binding:"required,max=64"`
-	Description    string    `json:"description" binding:"required,max=60000"`
+	Description    string    `json:"description" binding:"required,max=5000"`
 	ExpectedStart  time.Time `json:"expected_start" binding:"required"`
 	ExpectedEnd    time.Time `json:"expected_end" binding:"required"`
 	Urgency        Urgency   `json:"urgency" binding:"required"`
@@ -73,7 +78,7 @@ type ReopenRequestInput struct {
 	ServiceAddress string    `json:"service_address" binding:"omitempty,max=500"`
 	ContactName    string    `json:"contact_name" binding:"required,max=128"`
 	ContactPhone   string    `json:"contact_phone" binding:"required,max=64"`
-	Description    string    `json:"description" binding:"required,max=60000"`
+	Description    string    `json:"description" binding:"required,max=5000"`
 	ExpectedStart  time.Time `json:"expected_start" binding:"required"`
 	ExpectedEnd    time.Time `json:"expected_end" binding:"required"`
 	Urgency        Urgency   `json:"urgency" binding:"required"`
@@ -179,6 +184,14 @@ type OpportunitySnapshot struct {
 	Venue         Venue
 }
 
+// OpportunityDisplay 是售前详情展示的商机只读补充信息：
+// 商机名称作为“售前名称”，商机所属客户名称作为“被支持单位”。
+// 它不参与任何授权判断，申请本身的可读性仍由数据范围校验决定。
+type OpportunityDisplay struct {
+	Name         string
+	CustomerName string
+}
+
 // RequestView 是面向接口的显式投影，避免直接序列化 GORM 模型而泄露联系人密文、
 // 幂等键或请求摘要等内部字段。
 type RequestView struct {
@@ -261,6 +274,8 @@ type RequestListItem struct {
 
 type RequestDetailView struct {
 	Request             RequestView           `json:"request"`
+	OpportunityName     string                `json:"opportunity_name"`
+	CustomerName        string                `json:"customer_name"`
 	CurrentAssignees    []AssigneeSummaryView `json:"current_assignees"`
 	TotalWorkHours      string                `json:"total_work_hours"`
 	PushExceptionCount  int64                 `json:"push_exception_count"`

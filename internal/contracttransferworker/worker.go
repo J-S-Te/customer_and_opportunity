@@ -88,10 +88,17 @@ type gormTransferStore struct {
 	db *gorm.DB
 }
 
+// New 装配转合同消费者，停订阅时不构造合同网络客户端。
+// 参数：config 为已校验的消费者配置。
+// 返回值：保留自身数据库及许可消费者的应用；装配失败返回错误。
 func New(config Config) (*App, error) {
-	client, err := newContractClient(config)
-	if err != nil {
-		return nil, err
+	var client deliveryClient
+	var err error
+	if !config.SubscriptionDisabled {
+		client, err = newContractClient(config)
+		if err != nil {
+			return nil, err
+		}
 	}
 	db, err := gorm.Open(mysqlDialector(config.MySQLDSN), &gorm.Config{DisableAutomaticPing: true})
 	if err != nil {
@@ -136,7 +143,13 @@ func (a *App) Run(ctx context.Context) error {
 	}
 }
 
+// RunOnce 在有效许可与订阅同时成立时领取并投递历史任务。
+// 参数：ctx 为取消与许可上下文。
+// 返回值：实际处理数量；停订阅不领取、不更新队列，返回零。
 func (a *App) RunOnce(ctx context.Context) (int, error) {
+	if a.config.SubscriptionDisabled {
+		return 0, nil
+	}
 	if !workerlicense.Allowed(ctx, core.MUTATE_BUSINESS) {
 		return 0, nil
 	}

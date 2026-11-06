@@ -2,6 +2,11 @@ package opportunity
 
 import "time"
 
+// maxSystemCount 是拓扑系统数量的业务上限。列是 INT UNSIGNED，本身可存到 40 亿，
+// 但真实商机不会覆盖上万个系统；限量让异常录入在绑定层就失败，而不是落到列表、
+// 导出和合同回写。修改这里必须同步 CreateRequest/UpdateRequest 的 binding 标签。
+const maxSystemCount = 10000
+
 type CreateRequest struct {
 	Name               string   `json:"name" binding:"required,max=200"`
 	CustomerID         uint64   `json:"customer_id" binding:"required"`
@@ -12,7 +17,7 @@ type CreateRequest struct {
 	ExpectedAmount     string   `json:"expected_amount" binding:"required"`
 	ExpectedSignDate   string   `json:"expected_sign_date" binding:"required"`
 	RequirementSummary string   `json:"requirement_summary" binding:"required,max=10000"`
-	SystemCount        uint32   `json:"system_count"`
+	SystemCount        uint32   `json:"system_count" binding:"max=10000"`
 	PainPoints         string   `json:"pain_points" binding:"omitempty,max=10000"`
 	CompetitorInfo     string   `json:"competitor_info" binding:"omitempty,max=10000"`
 	// OwnerUserID 与 OwnerOrgID 只用于兼容旧客户端；创建服务始终绑定认证主体及其主组织。
@@ -32,7 +37,7 @@ type UpdateRequest struct {
 	ExpectedAmount     string   `json:"expected_amount" binding:"required"`
 	ExpectedSignDate   string   `json:"expected_sign_date" binding:"required"`
 	RequirementSummary string   `json:"requirement_summary" binding:"required,max=10000"`
-	SystemCount        uint32   `json:"system_count"`
+	SystemCount        uint32   `json:"system_count" binding:"max=10000"`
 	PainPoints         string   `json:"pain_points" binding:"omitempty,max=10000"`
 	CompetitorInfo     string   `json:"competitor_info" binding:"omitempty,max=10000"`
 	Version            uint64   `json:"version" binding:"required"`
@@ -110,11 +115,12 @@ type MemberTermQuery struct {
 }
 
 type StageChangeRequest struct {
-	TargetStage string  `json:"target_stage" binding:"required"`
-	Reason      string  `json:"reason" binding:"required,max=500"`
-	ContractRef *string `json:"contract_ref" binding:"omitempty,max=64"`
-	LostReason  *string `json:"lost_reason" binding:"omitempty,max=64"`
-	Version     uint64  `json:"version" binding:"required"`
+	WinEvidence *WinEvidenceInput `json:"win_evidence,omitempty"`
+	TargetStage string            `json:"target_stage" binding:"required"`
+	Reason      string            `json:"reason" binding:"required,max=500"`
+	ContractRef *string           `json:"contract_ref" binding:"omitempty,max=64"`
+	LostReason  *string           `json:"lost_reason" binding:"omitempty,max=64"`
+	Version     uint64            `json:"version" binding:"required"`
 }
 
 type ExternalStatusRequest struct {
@@ -190,10 +196,11 @@ type ContractLinkRequest struct {
 }
 
 type TerminalTodoRequest struct {
-	ContractRef *string `json:"contract_ref" binding:"omitempty,max=64"`
-	LostReason  *string `json:"lost_reason" binding:"omitempty,max=64"`
-	Version     uint64  `json:"version" binding:"required"`
-	Reason      string  `json:"reason" binding:"required,max=500"`
+	WinEvidence *WinEvidenceInput `json:"win_evidence,omitempty"`
+	ContractRef *string           `json:"contract_ref" binding:"omitempty,max=64"`
+	LostReason  *string           `json:"lost_reason" binding:"omitempty,max=64"`
+	Version     uint64            `json:"version" binding:"required"`
+	Reason      string            `json:"reason" binding:"required,max=500"`
 }
 
 type FollowupCreateRequest struct {

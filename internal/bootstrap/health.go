@@ -24,3 +24,25 @@ func readinessHandler(check func(context.Context) bool) gin.HandlerFunc {
 		c.JSON(http.StatusOK, gin.H{"status": "ready"})
 	}
 }
+
+// capabilityState 按 C14 口径渲染能力状态：disabled 属可选未购买/被停用，
+// 不计入就绪降级；ready 表示配置校验通过后的运行态。
+// 参数：enabled 为该能力开关的运行事实。
+// 返回值：ready 或 disabled。
+func capabilityState(enabled bool) string {
+	if enabled {
+		return "ready"
+	}
+	return "disabled"
+}
+
+// winReadyState 渲染赢单确认模式状态：两种已登记模式都算 ready，未登记模式
+// 说明配置漂移，返回 not_configured。
+// 参数：valid 为模式是否为 contract/local_evidence 之一。
+// 返回值：ready 或 not_configured。
+func winReadyState(valid bool) string {
+	if valid {
+		return "ready"
+	}
+	return "not_configured"
+}

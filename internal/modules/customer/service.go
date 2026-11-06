@@ -154,7 +154,7 @@ func (s *Service) Create(ctx context.Context, request CreateRequest) (*Response,
 		return nil, apperror.ErrForbidden
 	}
 	if err = validateRegistrationContacts(request.Contacts); err != nil {
-		return nil, ErrInvalidContact
+		return nil, err
 	}
 	// 摘要绑定租户、操作者、标准化业务字段以及敏感字段 HMAC；同一幂等键不能被换载荷复用，
 	// 同时避免把信用代码、电话和邮箱明文写入幂等表。
@@ -435,6 +435,12 @@ func (s *Service) Update(ctx context.Context, id uint64, request UpdateRequest) 
 	if err != nil {
 		return nil, err
 	}
+	// 负责人目录未接线（OWNER_DIRECTORY_ENABLED=false）时必须失败关闭：缺少权威目录就无法
+	// 证明目标用户与组织是有效任职关系，任何改变负责人归属的更新都会被拒绝；
+	// 不涉及负责人变更的更新保持原行为。
+	if s.owners == nil && (current.OwnerUserID != request.OwnerUserID || current.OwnerOrgID != request.OwnerOrgID) {
+		return nil, ownerdirectory.ErrUnavailable
+	}
 	if current.Status != StatusActive {
 		return nil, ErrInactive
 	}
@@ -623,7 +629,14 @@ func (s *Service) changeStatus(ctx context.Context, id uint64, request StatusCha
 	return &result, nil
 }
 
+// maxContacts 与 CreateRequest/UpdateRequest 上的 max=50 绑定标签保持一致。服务层再校验一次，
+// 覆盖绕过 HTTP 绑定（内部调用、导入、平台通道）的集合，避免一次写入无界子项。
+const maxContacts = 50
+
 func validateRegistrationContacts(contacts []ContactInput) error {
+	if len(contacts) > maxContacts {
+		return ErrContactsLimitExceeded
+	}
 	for _, contact := range contacts {
 		if strings.TrimSpace(contact.Name) == "" || strings.TrimSpace(contact.Phone) == "" {
 			return ErrInvalidContact
@@ -642,6 +655,9 @@ func validateRegistrationContacts(contacts []ContactInput) error {
 }
 
 func validateUpdateRegistrationContacts(contacts []UpdateContactInput) error {
+	if len(contacts) > maxContacts {
+		return ErrContactsLimitExceeded
+	}
 	for _, contact := range contacts {
 		if strings.TrimSpace(contact.Name) == "" || (contact.Phone != nil && strings.TrimSpace(*contact.Phone) == "") {
 			return ErrInvalidContact
@@ -686,7 +702,7 @@ func (s *Service) Get(ctx context.Context, id uint64) (*Response, error) {
 	if err != nil {
 		return nil, err
 	}
-	model, err := s.repo.FindByID(ctx, principal, id, false)
+	model, err := s.repo.FindReadableByID(ctx, principal, id, false)
 	if err != nil {
 		return nil, err
 	}
@@ -781,7 +797,9 @@ func (s *Service) ListContacts(ctx context.Context, id uint64) ([]ContactRespons
 	if err != nil {
 		return nil, err
 	}
-	model, err := s.repo.FindByID(ctx, principal, id, true)
+	// 联系人属于客户子资源，父客户可见性走只读口径（含 customer.read.all），
+	// 但不因此获得任何写权限。
+	model, err := s.repo.FindReadableByID(ctx, principal, id, true)
 	if err != nil {
 		return nil, err
 	}
@@ -794,7 +812,8 @@ func (s *Service) ListChangeLogs(ctx context.Context, id uint64, page, pageSize 
 		return pagination.Page[ChangeLogResponse]{}, err
 	}
 	// 先通过父客户证明当前主体可见，再读取子表，避免只猜测子资源编号形成 IDOR。
-	if _, err = s.repo.FindByID(ctx, principal, id, false); err != nil {
+	// 可见性按只读口径判定：持有 customer.read.all 的主体可以读取租户内全部客户的历史。
+	if _, err = s.repo.FindReadableByID(ctx, principal, id, false); err != nil {
 		return pagination.Page[ChangeLogResponse]{}, err
 	}
 	return s.repo.ListChangeLogs(ctx, principal.TenantID, id, page, pageSize)
@@ -809,8 +828,10 @@ func (s *Service) ListOpportunityHistory(ctx context.Context, id uint64, page, p
 		return pagination.Page[OpportunitySummary]{}, err
 	}
 	// 父客户可见只证明客户本身可见；商机历史的条目范围必须由商机数据范围再收窄一次，
-	// 因此 principal 必须继续下传到仓储，不能只传租户。
-	if _, err = s.repo.FindByID(ctx, principal, id, false); err != nil {
+	// 父客户可见只证明客户本身可见；商机历史的条目范围必须由商机数据范围再收窄一次，
+	// 因此 principal 必须继续下传到仓储，不能只传租户。客户全量查看权限只放开父客户校验，
+	// 不会放大商机侧的条目范围。
+	if _, err = s.repo.FindReadableByID(ctx, principal, id, false); err != nil {
 		return pagination.Page[OpportunitySummary]{}, err
 	}
 	return s.repo.ListOpportunityHistory(ctx, principal, id, page, pageSize)
@@ -821,7 +842,7 @@ func (s *Service) ProjectHistory(ctx context.Context, id uint64, page, pageSize 
 	if err != nil {
 		return ProjectHistoryPage{}, err
 	}
-	if _, err = s.repo.FindByID(ctx, principal, id, false); err != nil {
+	if _, err = s.repo.FindReadableByID(ctx, principal, id, false); err != nil {
 		return ProjectHistoryPage{}, err
 	}
 	if s.projects == nil {
@@ -834,11 +855,32 @@ func (s *Service) ProjectHistory(ctx context.Context, id uint64, page, pageSize 
 	return value, nil
 }
 
-// CreateExport 在请求生命周期内生成 CSV 临时文件。文件只用于当前响应，调用方必须在
-// response 完成后删除；不依赖 OSS、导出 Worker 或持久化导出任务，也不导出敏感字段。
-func (s *Service) CreateExport(ctx context.Context) (*os.File, error) {
+// createExportPageSize 是导出内部翻页的固定容量；调用方传入的 Page/PageSize 不生效，
+// 避免导出被前端展示用分页参数截断。
+const createExportPageSize = 100
+
+// createExportMaxRows 是单次客户导出允许输出的最大数据行数（不含表头）。
+// 导出现在会按 Total 一直翻页到末尾，没有上限时一次“全量导出”足以拖垮数据库查询、
+// 堆内存和临时文件；超过上限必须整体拒绝，不做静默截断，也不返回部分文件。
+const createExportMaxRows = 50000
+
+// createExportRowLimit 是运行时实际生效的上限。生产路径不写它，恒等于 createExportMaxRows；
+// 只为让测试注入更小的上限，覆盖“分页累计行数超限”分支，而不必真的构造 5 万行数据。
+var createExportRowLimit = createExportMaxRows
+
+// CreateExport 在请求生命周期内生成 CSV 临时文件，保留调用方传入的筛选与排序条件。
+// 文件只用于当前响应，调用方必须在 response 完成后删除；不依赖 OSS、导出 Worker
+// 或持久化导出任务，也不导出敏感字段。
+func (s *Service) CreateExport(ctx context.Context, query ListQuery) (*os.File, error) {
 	if _, err := principalFromContext(ctx); err != nil {
 		return nil, err
+	}
+	// 导出自行分页：清空调用方分页参数并固定每页容量，避免把列表页大小带进导出。
+	query.Page, query.PageSize = 0, createExportPageSize
+	// 未指定排序时沿用 created_at asc。不能让导出落到仓储默认的 updated_at desc：
+	// 导出期间数据更新会使行在同一次多页导出里重复或漏出。
+	if strings.TrimSpace(query.SortBy) == "" {
+		query.SortBy, query.SortOrder = "created_at", "asc"
 	}
 	file, err := os.CreateTemp("", "crm-customer-export-*.csv")
 	if err != nil {
@@ -850,20 +892,41 @@ func (s *Service) CreateExport(ctx context.Context) (*os.File, error) {
 		_ = os.Remove(name)
 		return nil, cause
 	}
+	// Excel 在中文 Windows 上按本地代码页解析无 BOM 的 UTF-8 CSV，会把中文表头与
+	// 客户名称显示成乱码；先写入 UTF-8 BOM，确保 charset=utf-8 的响应能按 UTF-8 打开。
+	if _, err = file.WriteString("\xef\xbb\xbf"); err != nil {
+		return cleanup(err)
+	}
 	writer := csv.NewWriter(file)
 	if err = writer.Write([]string{"客户编号", "客户名称", "客户类型", "行业", "区域", "负责人姓名", "负责人组织名称", "状态", "创建时间"}); err != nil {
 		return cleanup(err)
 	}
+	// 上限按“已写入数据行”累计，分页过程中数据增删也以累计行数为准；
+	// 只要超限就整体失败：已写入的部分既不返回也不静默截断。
+	limit := createExportRowLimit
+	if limit <= 0 {
+		limit = createExportMaxRows
+	}
+	exported := 0
 	for page := 1; ; page++ {
-		result, listErr := s.List(ctx, ListQuery{Page: page, PageSize: 100, SortBy: "created_at", SortOrder: "asc"})
+		query.Page = page
+		result, listErr := s.List(ctx, query)
 		if listErr != nil {
 			return cleanup(listErr)
+		}
+		// List 已带回整批 Total：先在写任何数据行之前拒绝，避免先写入大量内容再回滚。
+		if result.Total > int64(limit) {
+			return cleanup(newExportRowLimitError(limit))
 		}
 		owners, resolveErr := s.exportOwnerNames(ctx, result.Items)
 		if resolveErr != nil {
 			return cleanup(resolveErr)
 		}
 		for _, item := range result.Items {
+			exported++
+			if exported > limit {
+				return cleanup(newExportRowLimitError(limit))
+			}
 			owner := owners[item.ID]
 			// 导出列包含用户可控文本（客户名称等），统一按 SEC-B6 口径做公式注入转义：
 			// =/+/-/@ 前缀与前导 tab/CR 一律加 ' 前缀按字面渲染，普通值原样返回。
@@ -874,7 +937,7 @@ func (s *Service) CreateExport(ctx context.Context) (*os.File, error) {
 				return cleanup(err)
 			}
 		}
-		if len(result.Items) == 0 || int64(page*100) >= result.Total {
+		if len(result.Items) == 0 || int64(page*createExportPageSize) >= result.Total {
 			break
 		}
 	}
@@ -989,7 +1052,8 @@ func (s *Service) ListFollowups(ctx context.Context, id uint64, page, pageSize i
 	if err != nil {
 		return pagination.Page[FollowupResponse]{}, err
 	}
-	if _, err = s.repo.FindByID(ctx, principal, id, false); err != nil {
+	// 跟进记录是只读子资源：父客户可见性按只读口径判定，写路径（CreateFollowup）仍走行锁。
+	if _, err = s.repo.FindReadableByID(ctx, principal, id, false); err != nil {
 		return pagination.Page[FollowupResponse]{}, err
 	}
 	return s.repo.ListFollowups(ctx, principal.TenantID, id, page, pageSize)

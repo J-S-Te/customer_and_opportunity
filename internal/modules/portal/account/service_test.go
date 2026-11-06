@@ -106,3 +106,15 @@ func TestPortalAccountIDIsStableBusinessIdentifier(t *testing.T) {
 		t.Fatalf("portalAccountID(42)=%q", got)
 	}
 }
+
+// TestLocalManagementPermissionIsAdminOnly 验证新管理能力不能混入客户会话。
+// 参数：t 为测试上下文。
+// 返回值：无；客户接受管理权限或管理员被拒绝时失败。
+func TestLocalManagementPermissionIsAdminOnly(t *testing.T) {
+	for _, role := range []string{"portal_customer", "portal_super_admin"} {
+		claims := Claims{Subject: "subject", Roles: []string{role}, Permissions: []string{"portal.customer.manage"}, DataScopes: []DataScope{{RoleCode: role, ScopeType: "APPLICATION"}}}
+		if got := validPortalAuthorization(claims, "dev"); got != (role == "portal_super_admin") {
+			t.Fatalf("role %s management authorization=%v", role, got)
+		}
+	}
+}

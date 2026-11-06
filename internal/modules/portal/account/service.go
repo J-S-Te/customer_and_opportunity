@@ -45,6 +45,7 @@ type Service struct {
 	// usePlatformBinding 打开后，非邀请登录以平台 authorization-context 下发的
 	// customer_ref 作为客户边界，不再依赖本地 portal_identity_links（Phase 4）。
 	usePlatformBinding bool
+	localAuthority     LocalCustomerAuthority
 }
 
 // ServiceOption 允许装配层在 Phase 4 过渡期打开平台绑定路径；默认关闭保持旧行为。
@@ -55,6 +56,13 @@ type ServiceOption func(*Service)
 // 返回值：装配选项；不得从浏览器请求动态设置。
 func WithCentralSessions(client central.Client, expected central.Expectation) ServiceOption {
 	return func(s *Service) { s.centralClient = client; s.centralExpectation = expected }
+}
+
+// WithLocalCustomerAuthority 打开本地目录的每次登录与会话复核。
+// 参数：authority 为本地唯一客户权威；不能由浏览器选择。
+// 返回值：服务装配选项；nil 不开启本地模式。
+func WithLocalCustomerAuthority(authority LocalCustomerAuthority) ServiceOption {
+	return func(service *Service) { service.localAuthority = authority }
 }
 
 // WithPlatformBinding 打开平台客户绑定路径（nil 语义：调用即开启）。
@@ -390,8 +398,8 @@ func (s *Service) CompleteLogin(ctx context.Context, state, code string, metadat
 			s.writeLoginSecurityEvent(ctx, activation, "SUBJECT_MISMATCH", "HIGH", "PORTAL_ADMIN_INVITATION_REJECTED", metadata, now)
 			return LoginResult{}, ErrSubjectMismatch
 		}
-	} else if s.usePlatformBinding && claims.CustomerRef != "" {
-		parsed, parseErr := strconv.ParseUint(claims.CustomerRef, 10, 64)
+	} else if s.localAuthority != nil || s.usePlatformBinding && claims.CustomerRef != "" {
+		parsed, parseErr := s.resolveCustomerReference(ctx, claims.TenantID, claims.IdentityID, claims.CustomerRef, activation.ExpectedPlatformUserID != "")
 		if parseErr != nil || parsed == 0 {
 			s.writeLoginSecurityEvent(ctx, activation, "LOGIN_FAILED", "HIGH", "OIDC_CUSTOMER_REF_INVALID", metadata, now)
 			return LoginResult{}, ErrNotProvisioned
@@ -428,6 +436,16 @@ func (s *Service) CompleteLogin(ctx context.Context, state, code string, metadat
 		}
 		link = found
 		customerID = link.CustomerID
+	}
+	if s.localAuthority != nil && !isPortalSuperAdmin(claims.Roles) {
+		if err := s.localAuthority.ValidateCustomer(ctx, claims.TenantID, customerID, claims.IdentityID, activation.ExpectedPlatformUserID != ""); err != nil {
+			return LoginResult{}, ErrNotProvisioned
+		}
+		local, err := s.repo.FindLink(ctx, claims.TenantID, claims.IdentityID)
+		if err != nil || local == nil || local.CustomerID != customerID {
+			return LoginResult{}, ErrNotProvisioned
+		}
+		link = local
 	}
 	var inviteToken string
 	if activation.InviteTokenHash != hash("") {
@@ -476,6 +494,7 @@ func (s *Service) CompleteLogin(ctx context.Context, state, code string, metadat
 	if err != nil {
 		return LoginResult{}, err
 	}
+	transactionalInvites, transactional := s.invites.(TransactionalInviteClient)
 	activatedNow := link != nil && link.Status == IdentityPending
 	if err = s.repo.WithTransaction(ctx, func(txCtx context.Context) error {
 		if activatedNow {
@@ -486,12 +505,18 @@ func (s *Service) CompleteLogin(ctx context.Context, state, code string, metadat
 		if createErr := s.repo.CreateSession(txCtx, session); createErr != nil {
 			return createErr
 		}
-		return s.repo.CreateSecurityEvent(txCtx, successEvent)
+		if err := s.repo.CreateSecurityEvent(txCtx, successEvent); err != nil {
+			return err
+		}
+		if transactional && inviteToken != "" {
+			return transactionalInvites.ConsumeInTransaction(txCtx, inviteToken, claims.IdentityID)
+		}
+		return nil
 	}); err != nil {
 		return LoginResult{}, err
 	}
 	// CRM 邀请消费故意放在最后：远端成功前浏览器会话已持久化；若消费失败则撤销会话并保留邀请可重试。
-	if inviteToken != "" {
+	if inviteToken != "" && !transactional {
 		if err = s.invites.Consume(ctx, inviteToken, claims.IdentityID); err != nil {
 			revokeErr := s.repo.RevokeSession(ctx, claims.TenantID, claims.IdentityID, session.SessionIDHash, now)
 			var revertErr error
@@ -504,6 +529,9 @@ func (s *Service) CompleteLogin(ctx context.Context, state, code string, metadat
 	return LoginResult{SessionToken: rawSession, CustomerID: customerID, ExpiresAt: expires, ReturnPath: activation.ReturnPath}, nil
 }
 
+// validPortalAuthorization 复核门户单角色、精确角色目录与原数据范围。
+// 参数：claims为平台已验证声明，environmentCode为固定运行环境。
+// 返回值：是否满足完整门户授权边界。
 func validPortalAuthorization(claims Claims, environmentCode string) bool {
 	identityID := claims.IdentityID
 	if identityID == "" {
@@ -516,7 +544,7 @@ func validPortalAuthorization(claims Claims, environmentCode string) bool {
 	}
 	seen := make(map[string]struct{}, len(claims.Permissions))
 	for _, permission := range claims.Permissions {
-		if permission == "all" || !platformcatalog.HasPermission(manifest, permission) || strings.TrimSpace(permission) != permission {
+		if permission == "all" || !portalRolePermission(manifest, roleCode, permission) || strings.TrimSpace(permission) != permission {
 			return false
 		}
 		if _, duplicate := seen[permission]; duplicate {
@@ -614,6 +642,11 @@ func (s *Service) AuthenticateSession(ctx context.Context, tenantID, rawToken st
 		}
 		link = found
 	}
+	if s.localAuthority != nil && !isPortalSuperAdmin(session.Roles) {
+		if err := s.localAuthority.ValidateCustomer(ctx, tenantID, session.CustomerID, session.PlatformUserID, false); err != nil {
+			return nil, ErrIdentityDisabled
+		}
+	}
 	checkedAt := time.Time{}
 	if now.Sub(session.AuthorizationCheckedAt) >= authorizationCheckInterval {
 		accessToken, decryptErr := s.protector.Decrypt(ctx, session.AccessTokenCipher)
@@ -640,9 +673,9 @@ func (s *Service) AuthenticateSession(ctx context.Context, tenantID, rawToken st
 			s.revokeAuthorization(ctx, tenantID, session.PlatformUserID, now, "USERINFO_REJECTED")
 			return nil, ErrInvalidLoginState
 		}
-		if s.usePlatformBinding && !isPortalSuperAdmin(session.Roles) {
+		if (s.usePlatformBinding || s.localAuthority != nil) && !isPortalSuperAdmin(session.Roles) {
 			// 客户重绑定必须即时生效：customer_ref 与登录时建立的边界不一致即撤销会话。
-			parsed, parseErr := strconv.ParseUint(current.CustomerRef, 10, 64)
+			parsed, parseErr := s.resolveCustomerReference(ctx, tenantID, session.PlatformUserID, current.CustomerRef, false)
 			if parseErr != nil || parsed != session.CustomerID {
 				s.revokeAuthorization(ctx, tenantID, session.PlatformUserID, now, "CUSTOMER_REF_CHANGED")
 				return nil, ErrInvalidLoginState
@@ -882,4 +915,30 @@ func safeReturnPath(path string) bool {
 
 func newModel(tenantID, actorID string, now time.Time) database.Model {
 	return database.Model{TenantID: tenantID, CreatedBy: actorID, UpdatedBy: actorID, CreatedAt: now, UpdatedAt: now, Version: 1}
+}
+
+// portalRolePermission 阻止客户令牌携带仅授权门户超管的管理能力。
+// 参数：manifest 为本地目录，roleCode/permission 为已验证平台声明。
+// 返回值：该角色是否声明了精确权限。
+func portalRolePermission(manifest platformcatalog.Manifest, roleCode, permission string) bool {
+	for _, role := range manifest.Roles {
+		if role.Code == roleCode {
+			for _, code := range role.Permissions {
+				if code == permission {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// resolveCustomerReference 依据固定目录来源解析平台权威引用，不互认CRM与LOCAL身份。
+// 参数：ctx/tenant/subject为已认证范围，ref为权威引用，pending仅用于邀请激活。
+// 返回值：真实客户主键；来源、主体或本地权威不一致时拒绝。
+func (s *Service) resolveCustomerReference(ctx context.Context, tenant, subject, ref string, pending bool) (uint64, error) {
+	if s.localAuthority != nil {
+		return s.localAuthority.ResolveCustomerRef(ctx, tenant, subject, ref, pending)
+	}
+	return strconv.ParseUint(ref, 10, 64)
 }

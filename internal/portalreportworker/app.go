@@ -30,7 +30,16 @@ type App struct {
 	heartbeatType string
 }
 
+// New 装配真实投递与安全摄取，显式本地模式仅允许摄取现有LOCAL来源。
+// 参数：cfg为固定作业与来源配置。
+// 返回值：工作器或来源、依赖错误。
 func New(cfg Config) (*App, error) {
+	if cfg.LocalDirectoryMode != "" && cfg.LocalDirectoryMode != "crm" && cfg.LocalDirectoryMode != "local" {
+		return nil, fmt.Errorf("invalid PORTAL_CUSTOMER_DIRECTORY_MODE")
+	}
+	if cfg.LocalDirectoryMode == "local" && !cfg.IngestOnly {
+		return nil, fmt.Errorf("local directory mode requires ingest-only report worker")
+	}
 	var projectClient *projectServiceClient
 	var err error
 	if !cfg.IngestOnly {

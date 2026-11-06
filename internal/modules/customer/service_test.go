@@ -3,25 +3,57 @@ package customer
 import (
 	"context"
 	"encoding/csv"
+	"errors"
+	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/ownerdirectory"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/apperror"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/auth"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/database"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/pagination"
 )
 
+// exportRepositoryStub 记录导出实际下发的 ListQuery；pages 非空时按页码返回多页结果，
+// 用于验证导出翻页而不是依赖固定的第一页。
 type exportRepositoryStub struct {
 	Repository
-	page pagination.Page[Response]
+	page    pagination.Page[Response]
+	pages   []pagination.Page[Response]
+	queries []ListQuery
 }
 
-func (stub exportRepositoryStub) List(context.Context, auth.Principal, ListQuery) (pagination.Page[Response], error) {
+func (stub *exportRepositoryStub) List(_ context.Context, _ auth.Principal, query ListQuery) (pagination.Page[Response], error) {
+	stub.queries = append(stub.queries, query)
+	if len(stub.pages) > 0 {
+		if query.Page >= 1 && query.Page <= len(stub.pages) {
+			return stub.pages[query.Page-1], nil
+		}
+		return pagination.Page[Response]{Page: query.Page, PageSize: query.PageSize, Items: []Response{}}, nil
+	}
 	return stub.page, nil
+}
+
+// readCSVExport 读取导出文件并校验 UTF-8 BOM：Excel 中文环境依赖 BOM 识别 UTF-8。
+func readCSVExport(t *testing.T, file *os.File) [][]string {
+	t.Helper()
+	raw, err := io.ReadAll(file)
+	if err != nil {
+		t.Fatalf("read export = %v", err)
+	}
+	if !strings.HasPrefix(string(raw), "\xef\xbb\xbf") {
+		t.Fatalf("export missing UTF-8 BOM: %q", raw[:min(8, len(raw))])
+	}
+	records, err := csv.NewReader(strings.NewReader(strings.TrimPrefix(string(raw), "\xef\xbb\xbf"))).ReadAll()
+	if err != nil && err != io.EOF {
+		t.Fatalf("parse export = %v", err)
+	}
+	return records
 }
 
 func TestNormalizeName(t *testing.T) {
@@ -132,7 +164,7 @@ func TestCustomerResponseExposesMergeTraceWithoutSensitiveValues(t *testing.T) {
 
 func TestCreateExportUsesOwnerAndOrganizationNamesAndChineseStatus(t *testing.T) {
 	createdAt := time.Date(2026, 9, 4, 2, 3, 4, 0, time.UTC)
-	repository := exportRepositoryStub{page: pagination.Page[Response]{
+	repository := &exportRepositoryStub{page: pagination.Page[Response]{
 		Items: []Response{{
 			ID: 1, CustomerNo: "KH202609040001", Name: "示例客户", CustomerType: "企业", Industry: "软件",
 			Region: "华东", OwnerUserID: "owner-1", OwnerOrgID: "org-1", Status: StatusVoid, CreatedAt: createdAt,
@@ -144,17 +176,14 @@ func TestCreateExportUsesOwnerAndOrganizationNamesAndChineseStatus(t *testing.T)
 	}}
 	service := (&Service{repo: repository, now: func() time.Time { return createdAt }}).UseOwnerDirectory(directory).UseFreezeChecker(allowAllFreezeChecker{})
 	ctx := auth.WithPrincipal(context.Background(), auth.Principal{TenantID: "tenant-a", UserID: "exporter"})
-	file, err := service.CreateExport(ctx)
+	file, err := service.CreateExport(ctx, ListQuery{})
 	if err != nil {
 		t.Fatalf("CreateExport() error = %v", err)
 	}
 	defer os.Remove(file.Name())
 	defer file.Close()
 
-	records, err := csv.NewReader(file).ReadAll()
-	if err != nil && err != io.EOF {
-		t.Fatalf("read export = %v", err)
-	}
+	records := readCSVExport(t, file)
 	if len(records) != 2 {
 		t.Fatalf("record count = %d, want 2", len(records))
 	}
@@ -171,7 +200,7 @@ func TestCreateExportUsesOwnerAndOrganizationNamesAndChineseStatus(t *testing.T)
 
 func TestCreateExportEscapesCSVFormulaInjection(t *testing.T) {
 	createdAt := time.Date(2026, 9, 4, 2, 3, 4, 0, time.UTC)
-	repository := exportRepositoryStub{page: pagination.Page[Response]{
+	repository := &exportRepositoryStub{page: pagination.Page[Response]{
 		Items: []Response{{
 			// 名称携带 =HYPERLINK 载荷、编号带前导 tab，均来自 customer.create 可控输入。
 			ID: 1, CustomerNo: "\tKH202609040001", Name: `=HYPERLINK("https://evil.example","x")`, CustomerType: "企业", Industry: "软件",
@@ -184,17 +213,14 @@ func TestCreateExportEscapesCSVFormulaInjection(t *testing.T) {
 	}}
 	service := (&Service{repo: repository, now: func() time.Time { return createdAt }}).UseOwnerDirectory(directory).UseFreezeChecker(allowAllFreezeChecker{})
 	ctx := auth.WithPrincipal(context.Background(), auth.Principal{TenantID: "tenant-a", UserID: "exporter"})
-	file, err := service.CreateExport(ctx)
+	file, err := service.CreateExport(ctx, ListQuery{})
 	if err != nil {
 		t.Fatalf("CreateExport() error = %v", err)
 	}
 	defer os.Remove(file.Name())
 	defer file.Close()
 
-	records, err := csv.NewReader(file).ReadAll()
-	if err != nil && err != io.EOF {
-		t.Fatalf("read export = %v", err)
-	}
+	records := readCSVExport(t, file)
 	if len(records) != 2 {
 		t.Fatalf("record count = %d, want 2", len(records))
 	}
@@ -213,6 +239,256 @@ func TestCreateExportEscapesCSVFormulaInjection(t *testing.T) {
 	}
 	if got, want := records[1][8], "2026-09-04T02:03:04Z"; got != want {
 		t.Fatalf("created at cell = %q, want %q", got, want)
+	}
+}
+
+func TestCreateExportPassesFiltersAndUsesFixedPageSize(t *testing.T) {
+	createdAt := time.Date(2026, 9, 4, 2, 3, 4, 0, time.UTC)
+	createdFrom := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	createdTo := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	lastFollowupFrom := time.Date(2026, 8, 10, 0, 0, 0, 0, time.UTC)
+	lastFollowupTo := time.Date(2026, 8, 20, 0, 0, 0, 0, time.UTC)
+	repository := &exportRepositoryStub{page: pagination.Page[Response]{
+		Items: []Response{{ID: 1, CustomerNo: "KH202609040001", Name: "示例客户", Status: StatusActive, CreatedAt: createdAt}},
+		Page:  1, PageSize: 100, Total: 1,
+	}}
+	service := (&Service{repo: repository, now: func() time.Time { return createdAt }}).
+		UseOwnerDirectory(&ownerCatalogProbe{users: map[string]ownerdirectory.User{}}).
+		UseFreezeChecker(allowAllFreezeChecker{})
+	ctx := auth.WithPrincipal(context.Background(), auth.Principal{TenantID: "tenant-a", UserID: "exporter"})
+	file, err := service.CreateExport(ctx, ListQuery{
+		Keyword: "示例", CustomerType: "企业", Industry: "软件", Region: "华东", OwnerID: "owner-1",
+		Status: StatusActive, CreditLevel: "A", QuickFilter: QuickFilterNew,
+		CreatedFrom: &createdFrom, CreatedTo: &createdTo,
+		LastFollowupFrom: &lastFollowupFrom, LastFollowupTo: &lastFollowupTo,
+		Page: 7, PageSize: 20, SortBy: "name", SortOrder: "asc",
+	})
+	if err != nil {
+		t.Fatalf("CreateExport() error = %v", err)
+	}
+	defer os.Remove(file.Name())
+	defer file.Close()
+
+	if len(repository.queries) != 1 {
+		t.Fatalf("List() calls = %d, want 1", len(repository.queries))
+	}
+	got := repository.queries[0]
+	// 调用方的展示分页不生效：导出固定从第 1 页开始、每页 100 条。
+	if got.Page != 1 || got.PageSize != createExportPageSize {
+		t.Fatalf("pagination = %d/%d, want 1/%d", got.Page, got.PageSize, createExportPageSize)
+	}
+	if got.Keyword != "示例" || got.CustomerType != "企业" || got.Industry != "软件" || got.Region != "华东" || got.OwnerID != "owner-1" || got.Status != StatusActive || got.CreditLevel != "A" || got.QuickFilter != QuickFilterNew {
+		t.Fatalf("filters not forwarded: %#v", got)
+	}
+	if got.CreatedFrom == nil || !got.CreatedFrom.Equal(createdFrom) || got.CreatedTo == nil || !got.CreatedTo.Equal(createdTo) {
+		t.Fatalf("created range = %v~%v, want %v~%v", got.CreatedFrom, got.CreatedTo, createdFrom, createdTo)
+	}
+	if got.LastFollowupFrom == nil || !got.LastFollowupFrom.Equal(lastFollowupFrom) || got.LastFollowupTo == nil || !got.LastFollowupTo.Equal(lastFollowupTo) {
+		t.Fatalf("last followup range = %v~%v, want %v~%v", got.LastFollowupFrom, got.LastFollowupTo, lastFollowupFrom, lastFollowupTo)
+	}
+	if got.SortBy != "name" || got.SortOrder != "asc" {
+		t.Fatalf("sort = %q %q, want name asc", got.SortBy, got.SortOrder)
+	}
+}
+
+func TestCreateExportPaginatesWithFixedSizeAndStableDefaultSort(t *testing.T) {
+	createdAt := time.Date(2026, 9, 4, 2, 3, 4, 0, time.UTC)
+	buildPage := func(start, count int) pagination.Page[Response] {
+		items := make([]Response, 0, count)
+		for index := start; index < start+count; index++ {
+			items = append(items, Response{ID: uint64(index), CustomerNo: fmt.Sprintf("KH%04d", index), Name: fmt.Sprintf("客户%04d", index), Status: StatusActive, CreatedAt: createdAt})
+		}
+		return pagination.Page[Response]{Items: items, Page: 1, PageSize: createExportPageSize, Total: 150}
+	}
+	repository := &exportRepositoryStub{pages: []pagination.Page[Response]{buildPage(1, 100), buildPage(101, 50)}}
+	service := (&Service{repo: repository, now: func() time.Time { return createdAt }}).
+		UseOwnerDirectory(&ownerCatalogProbe{users: map[string]ownerdirectory.User{}}).
+		UseFreezeChecker(allowAllFreezeChecker{})
+	ctx := auth.WithPrincipal(context.Background(), auth.Principal{TenantID: "tenant-a", UserID: "exporter"})
+	file, err := service.CreateExport(ctx, ListQuery{Keyword: "客户"})
+	if err != nil {
+		t.Fatalf("CreateExport() error = %v", err)
+	}
+	defer os.Remove(file.Name())
+	defer file.Close()
+
+	records := readCSVExport(t, file)
+	if len(records) != 151 {
+		t.Fatalf("record count = %d, want 151", len(records))
+	}
+	if records[1][0] != "KH0001" || records[150][0] != "KH0150" {
+		t.Fatalf("rows out of order: first=%q last=%q", records[1][0], records[150][0])
+	}
+	// 两页都要保留筛选；未指定排序时固定 created_at asc，避免导出顺序漂移。
+	if len(repository.queries) != 2 {
+		t.Fatalf("List() calls = %d, want 2", len(repository.queries))
+	}
+	for index, query := range repository.queries {
+		if query.Page != index+1 || query.PageSize != createExportPageSize {
+			t.Fatalf("page %d query = %d/%d, want %d/%d", index, query.Page, query.PageSize, index+1, createExportPageSize)
+		}
+		if query.Keyword != "客户" {
+			t.Fatalf("page %d keyword = %q, want 客户", index, query.Keyword)
+		}
+		if query.SortBy != "created_at" || query.SortOrder != "asc" {
+			t.Fatalf("page %d sort = %q %q, want created_at asc", index, query.SortBy, query.SortOrder)
+		}
+	}
+}
+
+// exportTempFileNames 列出当前进程临时目录里的客户导出文件，用于断言失败路径没有留下临时文件。
+func exportTempFileNames(t *testing.T) map[string]struct{} {
+	t.Helper()
+	entries, err := os.ReadDir(os.TempDir())
+	if err != nil {
+		t.Fatalf("read temp dir = %v", err)
+	}
+	names := make(map[string]struct{}, len(entries))
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), "crm-customer-export-") {
+			names[entry.Name()] = struct{}{}
+		}
+	}
+	return names
+}
+
+func assertNoNewExportTempFile(t *testing.T, before map[string]struct{}) {
+	t.Helper()
+	for name := range exportTempFileNames(t) {
+		if _, existed := before[name]; !existed {
+			t.Fatalf("rejected export left temp file %q behind", name)
+		}
+	}
+}
+
+func TestExportRowLimitConstantAndMessage(t *testing.T) {
+	if createExportMaxRows != 50000 {
+		t.Fatalf("createExportMaxRows = %d, want 50000", createExportMaxRows)
+	}
+	if createExportRowLimit != createExportMaxRows {
+		t.Fatalf("runtime export limit = %d, want default %d", createExportRowLimit, createExportMaxRows)
+	}
+	appErr := apperror.As(newExportRowLimitError(createExportMaxRows))
+	if appErr.HTTPStatus != http.StatusUnprocessableEntity || appErr.Code != "CRM_CUSTOMER_EXPORT_ROW_LIMIT_EXCEEDED" {
+		t.Fatalf("limit error = %d/%s, want 422/CRM_CUSTOMER_EXPORT_ROW_LIMIT_EXCEEDED", appErr.HTTPStatus, appErr.Code)
+	}
+	if !strings.Contains(appErr.Message, "导出数据量超过上限（50000 行），请缩小筛选范围后重试") {
+		t.Fatalf("limit error message = %q", appErr.Message)
+	}
+}
+
+// TestCreateExportRejectsTotalAboveRowLimit 用 Total 直接超限的仓储桩验证提前拒绝：
+// 不必真的构造 5 万行，且失败后不能留下临时文件、也不能返回部分文件。
+func TestCreateExportRejectsTotalAboveRowLimit(t *testing.T) {
+	createdAt := time.Date(2026, 9, 4, 2, 3, 4, 0, time.UTC)
+	repository := &exportRepositoryStub{page: pagination.Page[Response]{
+		Items: []Response{{ID: 1, CustomerNo: "KH0001", Name: "客户0001", Status: StatusActive, CreatedAt: createdAt}},
+		Page:  1, PageSize: createExportPageSize, Total: createExportMaxRows + 1,
+	}}
+	service := (&Service{repo: repository, now: func() time.Time { return createdAt }}).
+		UseOwnerDirectory(&ownerCatalogProbe{users: map[string]ownerdirectory.User{}}).
+		UseFreezeChecker(allowAllFreezeChecker{})
+	ctx := auth.WithPrincipal(context.Background(), auth.Principal{TenantID: "tenant-a", UserID: "exporter"})
+
+	before := exportTempFileNames(t)
+	file, err := service.CreateExport(ctx, ListQuery{})
+	if file != nil {
+		_ = file.Close()
+		_ = os.Remove(file.Name())
+		t.Fatalf("CreateExport() returned a partial file for an over-limit export")
+	}
+	var appErr *apperror.Error
+	if !errors.As(err, &appErr) {
+		t.Fatalf("CreateExport() error = %v, want apperror", err)
+	}
+	if appErr.HTTPStatus != http.StatusUnprocessableEntity || appErr.Code != "CRM_CUSTOMER_EXPORT_ROW_LIMIT_EXCEEDED" {
+		t.Fatalf("error = %d/%s, want 422/CRM_CUSTOMER_EXPORT_ROW_LIMIT_EXCEEDED", appErr.HTTPStatus, appErr.Code)
+	}
+	if !strings.Contains(appErr.Message, "请缩小筛选范围后重试") {
+		t.Fatalf("error message = %q", appErr.Message)
+	}
+	assertNoNewExportTempFile(t, before)
+}
+
+// TestCreateExportStopsWhenAccumulatedRowsExceedLimit 注入较小的上限，验证分页过程中
+// Total 未能提前暴露规模（数据在翻页间增长）时，仍以累计已写行数为准整体失败。
+func TestCreateExportStopsWhenAccumulatedRowsExceedLimit(t *testing.T) {
+	createdAt := time.Date(2026, 9, 4, 2, 3, 4, 0, time.UTC)
+	original := createExportRowLimit
+	createExportRowLimit = 150
+	t.Cleanup(func() { createExportRowLimit = original })
+
+	// Total 仍是上限内的旧快照，但仓储实际返回了更多行：只能靠累计行数发现超限。
+	items := make([]Response, 0, 200)
+	for index := 1; index <= 200; index++ {
+		items = append(items, Response{ID: uint64(index), CustomerNo: fmt.Sprintf("KH%04d", index), Name: fmt.Sprintf("客户%04d", index), Status: StatusActive, CreatedAt: createdAt})
+	}
+	repository := &exportRepositoryStub{page: pagination.Page[Response]{Items: items, Page: 1, PageSize: createExportPageSize, Total: 150}}
+	service := (&Service{repo: repository, now: func() time.Time { return createdAt }}).
+		UseOwnerDirectory(&ownerCatalogProbe{users: map[string]ownerdirectory.User{}}).
+		UseFreezeChecker(allowAllFreezeChecker{})
+	ctx := auth.WithPrincipal(context.Background(), auth.Principal{TenantID: "tenant-a", UserID: "exporter"})
+
+	before := exportTempFileNames(t)
+	file, err := service.CreateExport(ctx, ListQuery{})
+	if file != nil {
+		_ = file.Close()
+		_ = os.Remove(file.Name())
+		t.Fatalf("CreateExport() returned a partial file instead of failing at the accumulated limit")
+	}
+	var appErr *apperror.Error
+	if !errors.As(err, &appErr) || appErr.HTTPStatus != http.StatusUnprocessableEntity || appErr.Code != "CRM_CUSTOMER_EXPORT_ROW_LIMIT_EXCEEDED" {
+		t.Fatalf("CreateExport() error = %v, want 422 CRM_CUSTOMER_EXPORT_ROW_LIMIT_EXCEEDED", err)
+	}
+	if !strings.Contains(appErr.Message, "（150 行）") {
+		t.Fatalf("error message = %q, want injected limit", appErr.Message)
+	}
+	assertNoNewExportTempFile(t, before)
+}
+
+// TestCreateExportWithinLimitKeepsEveryPageAndFilters 验证上限内多页导出依然完整，
+// 且每页都透传同一套筛选与稳定排序。
+func TestCreateExportWithinLimitKeepsEveryPageAndFilters(t *testing.T) {
+	createdAt := time.Date(2026, 9, 4, 2, 3, 4, 0, time.UTC)
+	buildPage := func(start, count int) pagination.Page[Response] {
+		items := make([]Response, 0, count)
+		for index := start; index < start+count; index++ {
+			items = append(items, Response{ID: uint64(index), CustomerNo: fmt.Sprintf("KH%04d", index), Name: fmt.Sprintf("客户%04d", index), Status: StatusActive, CreatedAt: createdAt})
+		}
+		return pagination.Page[Response]{Items: items, Page: 1, PageSize: createExportPageSize, Total: 250}
+	}
+	repository := &exportRepositoryStub{pages: []pagination.Page[Response]{buildPage(1, 100), buildPage(101, 100), buildPage(201, 50)}}
+	service := (&Service{repo: repository, now: func() time.Time { return createdAt }}).
+		UseOwnerDirectory(&ownerCatalogProbe{users: map[string]ownerdirectory.User{}}).
+		UseFreezeChecker(allowAllFreezeChecker{})
+	ctx := auth.WithPrincipal(context.Background(), auth.Principal{TenantID: "tenant-a", UserID: "exporter"})
+	file, err := service.CreateExport(ctx, ListQuery{Keyword: "客户", Region: "华东", Status: StatusActive, SortBy: "name", SortOrder: "asc"})
+	if err != nil {
+		t.Fatalf("CreateExport() error = %v", err)
+	}
+	defer os.Remove(file.Name())
+	defer file.Close()
+
+	records := readCSVExport(t, file)
+	if len(records) != 251 {
+		t.Fatalf("record count = %d, want 251", len(records))
+	}
+	if records[1][0] != "KH0001" || records[250][0] != "KH0250" {
+		t.Fatalf("rows out of order or truncated: first=%q last=%q", records[1][0], records[250][0])
+	}
+	if len(repository.queries) != 3 {
+		t.Fatalf("List() calls = %d, want 3", len(repository.queries))
+	}
+	for index, query := range repository.queries {
+		if query.Page != index+1 || query.PageSize != createExportPageSize {
+			t.Fatalf("page %d query = %d/%d, want %d/%d", index, query.Page, query.PageSize, index+1, createExportPageSize)
+		}
+		if query.Keyword != "客户" || query.Region != "华东" || query.Status != StatusActive {
+			t.Fatalf("page %d filters = %#v", index, query)
+		}
+		if query.SortBy != "name" || query.SortOrder != "asc" {
+			t.Fatalf("page %d sort = %q %q, want name asc", index, query.SortBy, query.SortOrder)
+		}
 	}
 }
 

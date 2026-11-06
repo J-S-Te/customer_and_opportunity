@@ -269,7 +269,7 @@ func validateCreate(in CreateRequestInput) error {
 		return ErrInvalidInput
 	}
 	if len([]rune(strings.TrimSpace(in.ServiceAddress))) > 500 || len([]rune(strings.TrimSpace(in.ContactName))) > 128 ||
-		len([]rune(strings.TrimSpace(in.ContactPhone))) > 64 || len([]rune(strings.TrimSpace(in.Description))) > 60000 {
+		len([]rune(strings.TrimSpace(in.ContactPhone))) > 64 || len([]rune(strings.TrimSpace(in.Description))) > maxDescriptionRunes {
 		return ErrInvalidInput
 	}
 	return nil

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/portal/sourceauthority"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/database"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/pagination"
 	"gorm.io/gorm"
@@ -144,6 +145,10 @@ func (r *GORMRepository) ListActivities(ctx context.Context, scope Scope, projec
 	err := db.Order("occurred_at DESC,id DESC").Offset((pageNo - 1) * pageSize).Limit(pageSize).Find(&page.Items).Error
 	return page, err
 }
+
+// UpsertBundle 仅接受既有CRM/PMS权威来源并原子应用真实快照。
+// 参数：ctx为请求，bundle为项目系统提供的客户投影。
+// 返回值：是否变更；本地权威、版本或存储失败返回错误。
 func (r *GORMRepository) UpsertBundle(ctx context.Context, bundle *Bundle) (bool, error) {
 	if bundle == nil {
 		return false, errors.New("project bundle is required")
@@ -151,6 +156,9 @@ func (r *GORMRepository) UpsertBundle(ctx context.Context, bundle *Bundle) (bool
 	changed := false
 	operation := func(txCtx context.Context) error {
 		tx := database.FromContext(txCtx, r.db)
+		if err := sourceauthority.Claim(tx, bundle.Snapshot.TenantID, "crm", "portal-project-source", time.Now()); err != nil {
+			return err
+		}
 		var existing Snapshot
 		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("tenant_id = ? AND customer_id = ? AND project_id = ?", bundle.Snapshot.TenantID, bundle.Snapshot.CustomerID, bundle.Snapshot.ProjectID).Take(&existing).Error
 		if err == nil && !isNewerSource(bundle.Snapshot.SourceUpdatedAt, existing.SourceUpdatedAt) {
@@ -225,13 +233,15 @@ func markProjectAccountsIsolated(tx *gorm.DB, tenantID string, customerID uint64
 	return nil
 }
 
-// SyncAccountBindings 在项目快照行锁保护下原子替换同步来源绑定；手工来源独立保留。
-// 事务失败时不会留下半套账号权限，重放同一 sourceVersion 也不会生成重复行。
-// 删除前，将曾有绑定的账号 ID 标记为 ISOLATED，
-// 避免后续空同步恢复旧版客户全范围回退。
+// SyncAccountBindings 在CRM权威及项目行锁内替换SYNC绑定并保留MANUAL来源。
+// 参数：ctx为请求，租户/客户/项目为原范围，版本/账号集合/时间为真实项目快照。
+// 返回值：原子同步结果；来源或版本错误拒绝，空集合仍保留ISOLATED边界。
 func (r *GORMRepository) SyncAccountBindings(ctx context.Context, tenantID string, customerID uint64, projectID, sourceVersion string, accountIDs []string, updatedAt time.Time) error {
 	operation := func(txCtx context.Context) error {
 		tx := database.FromContext(txCtx, r.db)
+		if err := sourceauthority.Claim(tx, tenantID, "crm", "portal-project-source", time.Now()); err != nil {
+			return err
+		}
 		var snapshot Snapshot
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("tenant_id = ? AND customer_id = ? AND project_id = ? AND deleted_at IS NULL", tenantID, customerID, projectID).Take(&snapshot).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {

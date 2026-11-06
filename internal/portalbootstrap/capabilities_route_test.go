@@ -39,11 +39,7 @@ func TestCapabilitiesRequireSessionAndExposeOnlyBoundedRuntimeState(t *testing.T
 		t.Fatalf("status=%d cache=%q body=%s", response.Code, response.Header().Get("Cache-Control"), response.Body.String())
 	}
 	var envelope struct {
-		Data map[string]struct {
-			Available  bool   `json:"available"`
-			Mode       string `json:"mode"`
-			ReasonCode string `json:"reason_code"`
-		} `json:"data"`
+		Data map[string]json.RawMessage `json:"data"`
 	}
 	if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
 		t.Fatal(err)
@@ -56,17 +52,25 @@ func TestCapabilitiesRequireSessionAndExposeOnlyBoundedRuntimeState(t *testing.T
 		"filing_export":             "FILING_EXPORT_NOT_CONFIGURED",
 		"filing_police_submission":  "FILING_CRM_REVIEW_REQUIRED",
 	}
-	if len(envelope.Data) != len(want)+1 {
+	if len(envelope.Data) != len(want)+2 {
 		t.Fatalf("capabilities=%#v", envelope.Data)
 	}
 	for name, reason := range want {
-		value, ok := envelope.Data[name]
+		raw, ok := envelope.Data[name]
+		var value runtimeCapability
+		if json.Unmarshal(raw, &value) != nil {
+			t.Fatalf("invalid capability %s", name)
+		}
 		if !ok || value.Available || value.ReasonCode != reason || (value.Mode != "UNAVAILABLE" && value.Mode != "LOCAL_ONLY" && value.Mode != "CRM_MANUAL_REVIEW") {
 			t.Fatalf("capability %s=%+v", name, value)
 		}
 	}
 	if _, ok := envelope.Data["customer"]; !ok {
 		t.Fatal("customer service options must be exposed in capabilities response")
+	}
+	var directory string
+	if json.Unmarshal(envelope.Data["customer_directory_mode"], &directory) != nil || directory != "crm" {
+		t.Fatal("default customer directory mode changed")
 	}
 	for _, forbidden := range []string{"client", "scope", "secret", "https://", "token", "url"} {
 		if strings.Contains(strings.ToLower(response.Body.String()), forbidden) {
@@ -104,19 +108,19 @@ func TestCapabilitiesExposeFreshWorkerEvidenceWithoutClaimingRemoteHealth(t *tes
 	response := httptest.NewRecorder()
 	router.ServeHTTP(response, request)
 	var envelope struct {
-		Data map[string]runtimeCapability `json:"data"`
+		Data runtimeCapabilities `json:"data"`
 	}
 	if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"report_request_submission", "project_export"} {
-		if value := envelope.Data[name]; !value.Available || value.Mode != "READY" || value.ReasonCode != "" {
+	for name, value := range map[string]runtimeCapability{"report_request_submission": envelope.Data.ReportRequestSubmission, "project_export": envelope.Data.ProjectExport} {
+		if !value.Available || value.Mode != "READY" || value.ReasonCode != "" {
 			t.Fatalf("capability %s=%+v", name, value)
 		}
 	}
 	// 报告下载仍不可用：工作器存活不能证明
 	// 对象存储、扫描、加密、水印或风险提供方可用。
-	if envelope.Data["report_download"].Available {
-		t.Fatalf("report download incorrectly inferred from worker heartbeat: %+v", envelope.Data["report_download"])
+	if envelope.Data.ReportDownload.Available {
+		t.Fatalf("report download incorrectly inferred from worker heartbeat: %+v", envelope.Data.ReportDownload)
 	}
 }

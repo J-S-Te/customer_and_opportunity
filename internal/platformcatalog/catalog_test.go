@@ -106,6 +106,112 @@ func roleHasPermission(manifest Manifest, roleCode, permissionCode string) bool 
 	return false
 }
 
+// TestCustomerReadAllPermissionIsLimitedToTheViewerRole 锁定“客户全量查看”目录项：
+// 权限码存在、只由 customer_all_viewer 携带（且该角色只带客户读取权限），
+// 且只有它声明 SUPER_ADMIN_ONLY 授予策略，其余权限保持平台默认授予。
+func TestCustomerReadAllPermissionIsLimitedToTheViewerRole(t *testing.T) {
+	crm := CRMManifest()
+	if !HasPermission(crm, "customer.read.all") {
+		t.Fatal("CRM manifest is missing customer.read.all")
+	}
+	if !HasRole(crm, "customer_all_viewer") {
+		t.Fatal("CRM manifest is missing the customer_all_viewer role")
+	}
+	var viewerPermissions []string
+	for _, role := range crm.Roles {
+		if role.Code == "customer_all_viewer" {
+			viewerPermissions = role.Permissions
+		}
+	}
+	// 只读放宽不能顺带下发任何写权限：角色映射必须恰好是读取与全量读取两条。
+	want := []string{"customer.read", "customer.read.all"}
+	if len(viewerPermissions) != len(want) {
+		t.Fatalf("customer_all_viewer permissions = %v, want %v", viewerPermissions, want)
+	}
+	for index := range want {
+		if viewerPermissions[index] != want[index] {
+			t.Fatalf("customer_all_viewer permissions = %v, want %v", viewerPermissions, want)
+		}
+	}
+	for _, roleCode := range []string{"sales", "sales_director", "customer_admin", "crm_super_admin", "auditor", "technical_director", "team_lead", "technician", "project_manager"} {
+		if roleHasPermission(crm, roleCode, "customer.read.all") {
+			t.Fatalf("CRM role %s received the tenant-wide customer read permission", roleCode)
+		}
+	}
+	for _, item := range crm.Permissions {
+		if item.Code == "customer.read.all" {
+			if item.GrantPolicy != "SUPER_ADMIN_ONLY" {
+				t.Fatalf("customer.read.all grant policy = %q, want SUPER_ADMIN_ONLY", item.GrantPolicy)
+			}
+			continue
+		}
+		if item.GrantPolicy != "" {
+			t.Fatalf("permission %s unexpectedly declares grant policy %q", item.Code, item.GrantPolicy)
+		}
+	}
+}
+
+// TestGrantPolicyIsValidatedAndOnlyMovesCatalogChecksum 锁定授予策略的校验与哈希边界：
+// 大小写/空白会被归一化，未知取值被拒绝；策略变化只改变完整目录校验和，
+// 不改变 Claims 兼容哈希（角色—权限映射没有变化，不应使活动会话失效）。
+func TestGrantPolicyIsValidatedAndOnlyMovesCatalogChecksum(t *testing.T) {
+	baselineChecksum, err := CatalogChecksum(CRMManifest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	baselineHash, err := ClaimsRoleConfigHash(CRMManifest())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	normalized := CRMManifest()
+	for index := range normalized.Permissions {
+		if normalized.Permissions[index].Code == "customer.create" {
+			normalized.Permissions[index].GrantPolicy = " super_admin_only "
+		}
+	}
+	payload, err := normalizeManifest(normalized)
+	if err != nil {
+		t.Fatalf("合法授予策略被拒绝：%v", err)
+	}
+	for _, item := range payload.Permissions {
+		if item.Code == "customer.create" && item.GrantPolicy != "SUPER_ADMIN_ONLY" {
+			t.Fatalf("授予策略未归一化为大写：%q", item.GrantPolicy)
+		}
+	}
+
+	invalid := CRMManifest()
+	for index := range invalid.Permissions {
+		if invalid.Permissions[index].Code == "customer.create" {
+			invalid.Permissions[index].GrantPolicy = "ANY_ONE"
+		}
+	}
+	if _, err := CatalogChecksum(invalid); err == nil || !strings.Contains(err.Error(), "customer.create") || !strings.Contains(err.Error(), "grant policy") {
+		t.Fatalf("非法授予策略未被拒绝：%v", err)
+	}
+
+	changed := CRMManifest()
+	for index := range changed.Permissions {
+		if changed.Permissions[index].Code == "customer.create" {
+			changed.Permissions[index].GrantPolicy = "SUPER_ADMIN_ONLY"
+		}
+	}
+	changedChecksum, err := CatalogChecksum(changed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changedChecksum == baselineChecksum {
+		t.Fatal("授予策略变化没有改变目录校验和")
+	}
+	changedHash, err := ClaimsRoleConfigHash(changed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changedHash != baselineHash {
+		t.Fatalf("授予策略变化不应改变 Claims 兼容哈希：%s != %s", changedHash, baselineHash)
+	}
+}
+
 func TestClaimsRoleConfigHashIsDeterministicAndMappingBound(t *testing.T) {
 	manifest := CRMManifest()
 	first, err := ClaimsRoleConfigHash(manifest)

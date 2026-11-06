@@ -15,6 +15,7 @@ import (
 
 // 报告 Worker 使用独立来源读取凭据；完整投递模式另需外部报告服务 report.request.write 凭据。
 type Config struct {
+	LocalDirectoryMode  string
 	MySQLDSN            string
 	WorkerID            string
 	PollInterval        time.Duration
@@ -42,7 +43,14 @@ type ProjectServiceConfig struct {
 	TLS          integrationhttp.TLSOptions
 }
 
+// LoadConfig 读取固定来源与既有工作器配置，不把非法值降级为旧流程。
+// 参数：无。
+// 返回值：通过原安全校验的配置或缺依赖、来源错误。
 func LoadConfig() (Config, error) {
+	mode := os.Getenv("PORTAL_CUSTOMER_DIRECTORY_MODE")
+	if mode != "" && mode != "crm" && mode != "local" {
+		return Config{}, fmt.Errorf("invalid PORTAL_CUSTOMER_DIRECTORY_MODE")
+	}
 	ingestDescriptorKey, err := base64.StdEncoding.DecodeString(os.Getenv("PORTAL_REPORT_INGEST_DESCRIPTOR_KEY_BASE64"))
 	if err != nil || len(ingestDescriptorKey) != 32 {
 		return Config{}, fmt.Errorf("PORTAL_REPORT_INGEST_DESCRIPTOR_KEY_BASE64 must decode to 32 bytes")
@@ -50,6 +58,9 @@ func LoadConfig() (Config, error) {
 	ingestOnly, err := strconv.ParseBool(env("PORTAL_REPORT_WORKER_INGEST_ONLY", "true"))
 	if err != nil {
 		return Config{}, fmt.Errorf("invalid Portal report worker mode")
+	}
+	if mode == "local" && !ingestOnly {
+		return Config{}, fmt.Errorf("local directory mode requires PORTAL_REPORT_WORKER_INGEST_ONLY=true")
 	}
 	var requireMTLS bool
 	if !ingestOnly {
@@ -66,7 +77,7 @@ func LoadConfig() (Config, error) {
 	if err != nil {
 		return Config{}, fmt.Errorf("invalid Portal report content key")
 	}
-	cfg := Config{
+	cfg := Config{LocalDirectoryMode: mode,
 		MySQLDSN:            os.Getenv("PORTAL_REPORT_WORKER_MYSQL_DSN"),
 		WorkerID:            env("PORTAL_REPORT_WORKER_ID", hostname()),
 		PollInterval:        durationEnv("PORTAL_REPORT_WORKER_POLL_INTERVAL", time.Second),

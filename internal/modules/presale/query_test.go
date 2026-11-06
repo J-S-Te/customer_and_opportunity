@@ -25,6 +25,11 @@ type queryRepository struct {
 	historical       map[uint64]bool
 	filterOptions    RequestFilterOptions
 	approval         *ApprovalInstance
+	display          OpportunityDisplay
+}
+
+func (r *queryRepository) OpportunityDisplay(context.Context, string, uint64) (OpportunityDisplay, error) {
+	return r.display, nil
 }
 
 func (r *queryRepository) FindApprovalInstanceForUpdate(context.Context, string, uint64) (*ApprovalInstance, error) {
@@ -440,6 +445,29 @@ func TestRequestDetailExposesConfiguredPersonAssignment(t *testing.T) {
 	}
 	if !timelineContains(value.AvailableActions, "ASSIGN") {
 		t.Fatalf("available actions=%v, want configured technical-director assignment", value.AvailableActions)
+	}
+}
+
+func TestRequestDetailCarriesOpportunityAndCustomerDisplayNames(t *testing.T) {
+	t.Parallel()
+	repo := &queryRepository{
+		request: requestFixture(),
+		display: OpportunityDisplay{Name: "某集团数据中台建设", CustomerName: "某集团有限公司"},
+	}
+	service := NewService(repo, nil, nil, fixedClock{}, fixedIDs{})
+	value, err := service.RequestDetail(context.Background(), managerActor("auditor"), repo.request.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value.OpportunityName != "某集团数据中台建设" || value.CustomerName != "某集团有限公司" {
+		t.Fatalf("detail display=%q/%q, want opportunity and customer names", value.OpportunityName, value.CustomerName)
+	}
+	encoded, marshalErr := json.Marshal(value)
+	if marshalErr != nil {
+		t.Fatal(marshalErr)
+	}
+	if !strings.Contains(string(encoded), `"opportunity_name":"某集团数据中台建设"`) || !strings.Contains(string(encoded), `"customer_name":"某集团有限公司"`) {
+		t.Fatalf("detail payload missing display names: %s", encoded)
 	}
 }
 

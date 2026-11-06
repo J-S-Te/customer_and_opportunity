@@ -27,6 +27,11 @@ type mutationRepository struct {
 	findCalls       int
 	txCalls         int
 	approvalUpdates []map[string]any
+	display         OpportunityDisplay
+}
+
+func (r *mutationRepository) OpportunityDisplay(context.Context, string, uint64) (OpportunityDisplay, error) {
+	return r.display, nil
 }
 
 func (r *mutationRepository) UpdateApprovalInstance(_ context.Context, value *ApprovalInstance, fields map[string]any) error {

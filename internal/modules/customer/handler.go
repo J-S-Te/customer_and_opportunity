@@ -1,6 +1,9 @@
 package customer
 
 import (
+	"bytes"
+	"encoding/json"
+	"errors"
 	"io"
 	"mime"
 	"net/http"
@@ -16,7 +19,10 @@ import (
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/response"
 )
 
-const importMultipartBodyLimit = (10 << 20) + (64 << 10)
+const (
+	importMultipartBodyLimit = (10 << 20) + (64 << 10)
+	customerExportBodyLimit  = 1 << 20
+)
 
 type Handler struct{ service *Service }
 
@@ -309,7 +315,12 @@ func validProjectHistoryKeys(c *gin.Context) bool {
 }
 
 func (h *Handler) CreateExport(c *gin.Context) {
-	file, err := h.service.CreateExport(c.Request.Context())
+	query, err := customerExportListQuery(c)
+	if err != nil {
+		response.Error(c, err)
+		return
+	}
+	file, err := h.service.CreateExport(c.Request.Context(), query)
 	if err != nil {
 		response.Error(c, err)
 		return
@@ -323,6 +334,86 @@ func (h *Handler) CreateExport(c *gin.Context) {
 	c.Header("Content-Type", "text/csv; charset=utf-8")
 	c.Header("Content-Disposition", `attachment; filename="customers.csv"`)
 	c.File(name)
+}
+
+// customerExportFilters 是导出端点接受的筛选负载，键与客户列表查询参数一一对应。
+// page/page_size 仍被接受但不参与导出：导出固定 100 条/页，由服务端自行翻页。
+type customerExportFilters struct {
+	Keyword          string          `json:"keyword"`
+	CustomerType     string          `json:"type"`
+	Industry         string          `json:"industry"`
+	Region           string          `json:"region"`
+	OwnerID          string          `json:"owner_id"`
+	Status           string          `json:"status"`
+	CreditLevel      string          `json:"credit_level"`
+	QuickFilter      string          `json:"quick_filter"`
+	CreatedFrom      string          `json:"created_from"`
+	CreatedTo        string          `json:"created_to"`
+	LastFollowupFrom string          `json:"last_followup_from"`
+	LastFollowupTo   string          `json:"last_followup_to"`
+	SortBy           string          `json:"sort_by"`
+	SortOrder        string          `json:"sort_order"`
+	Page             json.RawMessage `json:"page"`
+	PageSize         json.RawMessage `json:"page_size"`
+}
+
+type customerExportRequest struct {
+	Filters *customerExportFilters `json:"filters"`
+}
+
+// customerExportListQuery 把可选的 {"filters":{...}} 请求体映射成列表查询。
+// 空体保留旧调用兼容性（等价于不带筛选的导出）；一旦提供请求体则沿用严格 JSON 口径：
+// 1 MiB 上限、只允许一个 JSON 对象、未知字段与尾随内容一律拒绝。日期必须为 RFC3339，
+// 非法日期返回 422 而不是静默忽略，避免用户以为按条件导出、实际却拿到全量数据。
+func customerExportListQuery(c *gin.Context) (ListQuery, error) {
+	if c == nil || c.Request == nil || c.Request.Body == nil {
+		return ListQuery{}, nil
+	}
+	reader := http.MaxBytesReader(c.Writer, c.Request.Body, customerExportBodyLimit)
+	raw, err := io.ReadAll(reader)
+	if err != nil {
+		return ListQuery{}, invalidCustomerBody()
+	}
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 {
+		return ListQuery{}, nil
+	}
+	if trimmed[0] != '{' || trimmed[len(trimmed)-1] != '}' {
+		return ListQuery{}, invalidCustomerBody()
+	}
+	decoder := json.NewDecoder(bytes.NewReader(trimmed))
+	decoder.DisallowUnknownFields()
+	var payload customerExportRequest
+	if err = decoder.Decode(&payload); err != nil {
+		return ListQuery{}, invalidCustomerBody()
+	}
+	if err = decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return ListQuery{}, invalidCustomerBody()
+	}
+	// {"filters":null} 与空体等价，继续按旧调用处理。
+	if payload.Filters == nil {
+		return ListQuery{}, nil
+	}
+	filters := payload.Filters
+	query := ListQuery{
+		Keyword: filters.Keyword, CustomerType: filters.CustomerType, Industry: filters.Industry,
+		Region: filters.Region, OwnerID: filters.OwnerID, Status: filters.Status,
+		CreditLevel: filters.CreditLevel, QuickFilter: filters.QuickFilter,
+		SortBy: filters.SortBy, SortOrder: filters.SortOrder,
+	}
+	if query.CreatedFrom, err = parseOptionalTime(filters.CreatedFrom); err != nil {
+		return ListQuery{}, ErrInvalidExportFilters
+	}
+	if query.CreatedTo, err = parseOptionalTime(filters.CreatedTo); err != nil {
+		return ListQuery{}, ErrInvalidExportFilters
+	}
+	if query.LastFollowupFrom, err = parseOptionalTime(filters.LastFollowupFrom); err != nil {
+		return ListQuery{}, ErrInvalidExportFilters
+	}
+	if query.LastFollowupTo, err = parseOptionalTime(filters.LastFollowupTo); err != nil {
+		return ListQuery{}, ErrInvalidExportFilters
+	}
+	return query, nil
 }
 
 func (h *Handler) PreviewImport(c *gin.Context) {
@@ -428,7 +519,7 @@ func (h *Handler) ImportErrors(c *gin.Context) {
 	}
 	c.Header("Cache-Control", "no-store")
 	c.Header("X-Content-Type-Options", "nosniff")
-	c.Header("Content-Disposition", `attachment; filename="`+filename+`"`)
+	c.Header("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": filename}))
 	c.Data(http.StatusOK, "text/csv; charset=utf-8", contents)
 }
 

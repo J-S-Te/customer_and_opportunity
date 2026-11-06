@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"mime"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -187,7 +188,8 @@ func TestReportGrantResponseDoesNotExposeStoredTokenHash(t *testing.T) {
 }
 
 func TestReportDownloadContractKeepsTokenOutOfURLAndUsesSafeDisposition(t *testing.T) {
-	if got := contentDisposition("交付报告.pdf"); strings.ContainsAny(got, "\r\n") || !strings.HasPrefix(got, "attachment; filename=report.pdf; filename*=UTF-8''") {
+	got := contentDisposition("交付报告.pdf")
+	if strings.ContainsAny(got, "\r\n") || !strings.Contains(got, "filename*=utf-8''") {
 		t.Fatalf("unsafe content disposition: %q", got)
 	}
 	router := NewRouter(RouterDependencies{Config: Config{PathPrefix: "/customer-portal", PublicOrigin: "https://portal.example"}})
@@ -195,6 +197,54 @@ func TestReportDownloadContractKeepsTokenOutOfURLAndUsesSafeDisposition(t *testi
 		if strings.Contains(route.Path, ":token") || strings.Contains(route.Path, "{token}") {
 			t.Fatalf("download credential must not be a URL parameter: %s", route.Path)
 		}
+	}
+}
+
+func TestContentDispositionEncodesReportProjectAndFilingFileNames(t *testing.T) {
+	for _, tt := range []struct {
+		name        string
+		fileName    string
+		wantName    string
+		wantRFC5987 bool
+	}{
+		{"ascii report", "report.pdf", "report.pdf", false},
+		{"chinese report", "交付报告.pdf", "交付报告.pdf", true},
+		{"chinese project", "网络安全等级保护项目（2026）.pdf", "网络安全等级保护项目（2026）.pdf", true},
+		{"chinese filing", "备案材料（定级报告）.pdf", "备案材料（定级报告）.pdf", true},
+		{"ascii quoted name", `bad"name.pdf`, `bad"name.pdf`, false},
+		{"control characters", "bad\"name\r\n.pdf", "bad\"name\r\n.pdf", true},
+		{"empty fallback", "", "report.pdf", false},
+		{"blank fallback", "   ", "report.pdf", false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got := contentDisposition(tt.fileName)
+			if strings.ContainsAny(got, "\r\n") || strings.Contains(got, `bad"name`) {
+				t.Fatalf("content disposition contains raw control or quote characters: %q", got)
+			}
+			mediaType, params, err := mime.ParseMediaType(got)
+			if err != nil {
+				t.Fatalf("content disposition is not parseable: %q: %v", got, err)
+			}
+			if mediaType != "attachment" || params["filename"] != tt.wantName {
+				t.Fatalf("content disposition=%q parsed type=%q filename=%q want filename=%q", got, mediaType, params["filename"], tt.wantName)
+			}
+			rfc5987 := strings.Contains(got, "filename*=utf-8''")
+			if rfc5987 != tt.wantRFC5987 {
+				t.Fatalf("content disposition=%q rfc5987=%t want %t", got, rfc5987, tt.wantRFC5987)
+			}
+			if !tt.wantRFC5987 && !strings.HasPrefix(got, "attachment; filename=") {
+				t.Fatalf("ascii file name must use filename=: %q", got)
+			}
+			if tt.wantRFC5987 && strings.Contains(got, "report.pdf") {
+				t.Fatalf("non-ascii file name must not fall back to report.pdf: %q", got)
+			}
+		})
+	}
+	if got := contentDisposition("交付报告.pdf"); got != "attachment; filename*=utf-8''%E4%BA%A4%E4%BB%98%E6%8A%A5%E5%91%8A.pdf" {
+		t.Fatalf("chinese file name must be strictly percent-encoded: %q", got)
+	}
+	if got := contentDisposition("report.pdf"); got != "attachment; filename=report.pdf" {
+		t.Fatalf("ascii file name must stay filename=report.pdf: %q", got)
 	}
 }
 

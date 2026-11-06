@@ -74,11 +74,12 @@ type Callback struct {
 }
 
 type FileDescriptor struct {
-	ObjectRef string
-	FileName  string
-	MIME      string
-	FileHash  string
-	Size      int64
+	SourceType string `json:",omitempty"`
+	ObjectRef  string
+	FileName   string
+	MIME       string
+	FileHash   string
+	Size       int64
 }
 
 // IngestResult 只包含 Portal 自有可信入库器产生的元数据；回调不能提供加密密钥引用。
@@ -386,6 +387,9 @@ func (s *Service) MarkApprovalStarted(ctx context.Context, tenantID string, requ
 	})
 }
 
+// ApplyCallback 在既有审批版本规则内核验CRM来源并接收真实项目回执。
+// 参数：ctx为原事务上下文，cb为已认证机器回调。
+// 返回值：真实状态推进；本地权威、非法审批或存储错误时拒绝。
 func (s *Service) ApplyCallback(ctx context.Context, cb Callback) error {
 	// 回调状态机由版本和幂等键共同约束；对象引用只先加密入队，不在回调事务中执行网络下载或扫描。
 	cb.TenantID = strings.TrimSpace(cb.TenantID)
@@ -412,6 +416,14 @@ func (s *Service) ApplyCallback(ctx context.Context, cb Callback) error {
 	}
 	callbackHash := hashCallback(cb)
 	return s.repo.WithTransaction(ctx, func(tx context.Context) error {
+		if guard, ok := s.repo.(interface {
+			ClaimCallbackSource(context.Context, string) error
+		}); ok {
+			if err := guard.ClaimCallbackSource(tx, cb.TenantID); err != nil {
+				return err
+			}
+		}
+
 		value, err := s.repo.FindForUpdate(tx, cb.TenantID, cb.RequestID)
 		if err != nil {
 			return err

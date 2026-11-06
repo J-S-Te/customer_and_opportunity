@@ -60,6 +60,9 @@ type PortalConfig struct {
 	TLS          integrationhttp.TLSOptions
 }
 
+// LoadConfig 读取既有恢复任务配置及平台实际登记的精确绑定scope。
+// 参数：无。
+// 返回值：受控配置或非法scope、缺依赖错误，不执行任务。
 func LoadConfig() (Config, error) {
 	requireMTLS, err := boolEnv("PORTAL_INVITE_COMPENSATION_PLATFORM_TLS_REQUIRE_MTLS", false)
 	if err != nil {
@@ -94,11 +97,11 @@ func LoadConfig() (Config, error) {
 			TokenURL:            os.Getenv("PORTAL_INVITE_COMPENSATION_BINDING_TOKEN_URL"),
 			ClientID:            os.Getenv("PORTAL_INVITE_COMPENSATION_BINDING_CLIENT_ID"),
 			ClientSecret:        os.Getenv("PORTAL_INVITE_COMPENSATION_BINDING_CLIENT_SECRET"),
-			Scope:               env("PORTAL_INVITE_COMPENSATION_BINDING_SCOPE", "portal_mapping_provision"),
+			Scope:               env("PORTAL_INVITE_COMPENSATION_BINDING_SCOPE", "portal.identity_mapping.provision"),
 			ApplicationCode:     os.Getenv("PORTAL_INVITE_COMPENSATION_BINDING_APPLICATION_CODE"),
 			DisableClientID:     os.Getenv("PORTAL_INVITE_COMPENSATION_BINDING_DISABLE_CLIENT_ID"),
 			DisableClientSecret: os.Getenv("PORTAL_INVITE_COMPENSATION_BINDING_DISABLE_CLIENT_SECRET"),
-			DisableScope:        env("PORTAL_INVITE_COMPENSATION_BINDING_DISABLE_SCOPE", "portal_mapping_disable"),
+			DisableScope:        env("PORTAL_INVITE_COMPENSATION_BINDING_DISABLE_SCOPE", "portal.identity_mapping.disable"),
 			TLS: integrationhttp.TLSOptions{
 				RootCAFile: os.Getenv("PORTAL_INVITE_COMPENSATION_BINDING_TLS_ROOT_CA_FILE"), ClientCertFile: os.Getenv("PORTAL_INVITE_COMPENSATION_BINDING_TLS_CLIENT_CERT_FILE"),
 				ClientKeyFile: os.Getenv("PORTAL_INVITE_COMPENSATION_BINDING_TLS_CLIENT_KEY_FILE"), ServerName: os.Getenv("PORTAL_INVITE_COMPENSATION_BINDING_TLS_SERVER_NAME"),
@@ -124,6 +127,9 @@ func LoadConfig() (Config, error) {
 	return cfg, nil
 }
 
+// validate 按原安全边界核验任务配置，绑定scope不能用服务用途名替代。
+// 参数：无。
+// 返回值：缺依赖、权限scope或传输配置错误。
 func (c Config) validate() error {
 	for key, value := range map[string]string{
 		"PORTAL_INVITE_COMPENSATION_MYSQL_DSN":                 c.MySQLDSN,
@@ -179,15 +185,15 @@ func (c Config) validate() error {
 				return fmt.Errorf("%s is required when PORTAL_INVITE_COMPENSATION_BINDING_ENABLED=true", key)
 			}
 		}
-		if strings.TrimSpace(c.Binding.Scope) != "portal_mapping_provision" {
-			return fmt.Errorf("PORTAL_INVITE_COMPENSATION_BINDING_SCOPE must be portal_mapping_provision")
+		if strings.TrimSpace(c.Binding.Scope) != "portal.identity_mapping.provision" {
+			return fmt.Errorf("PORTAL_INVITE_COMPENSATION_BINDING_SCOPE must be portal.identity_mapping.provision")
 		}
 		if c.Binding.DisableClientID != "" || c.Binding.DisableClientSecret != "" {
 			if c.Binding.DisableClientID == "" || c.Binding.DisableClientSecret == "" {
 				return fmt.Errorf("PORTAL_INVITE_COMPENSATION_BINDING_DISABLE_CLIENT_ID/SECRET must be set together")
 			}
-			if strings.TrimSpace(c.Binding.DisableScope) != "portal_mapping_disable" {
-				return fmt.Errorf("PORTAL_INVITE_COMPENSATION_BINDING_DISABLE_SCOPE must be portal_mapping_disable")
+			if strings.TrimSpace(c.Binding.DisableScope) != "portal.identity_mapping.disable" {
+				return fmt.Errorf("PORTAL_INVITE_COMPENSATION_BINDING_DISABLE_SCOPE must be portal.identity_mapping.disable")
 			}
 		}
 		for key, raw := range map[string]string{

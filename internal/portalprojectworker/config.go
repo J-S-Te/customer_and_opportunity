@@ -15,31 +15,39 @@ const requiredProjectScope = "project.snapshot.read"
 
 // 项目同步配置与浏览器 Portal 及其他机器集成隔离；其 OAuth 凭据只读项目快照，不能复用于报告提交。
 type Config struct {
-	MySQLDSN       string
-	TenantID       string
-	WorkerID       string
-	PollInterval   time.Duration
-	SyncInterval   time.Duration
-	LeaseDuration  time.Duration
-	RetryInterval  time.Duration
-	PageSize       int
-	TokenURL       string
-	ClientID       string
-	ClientSecret   string
-	Scope          string
-	SnapshotsURL   string
-	TokenTimeout   time.Duration
-	RequestTimeout time.Duration
-	TLS            integrationhttp.TLSOptions
+	LocalDirectoryMode string
+	MySQLDSN           string
+	TenantID           string
+	WorkerID           string
+	PollInterval       time.Duration
+	SyncInterval       time.Duration
+	LeaseDuration      time.Duration
+	RetryInterval      time.Duration
+	PageSize           int
+	TokenURL           string
+	ClientID           string
+	ClientSecret       string
+	Scope              string
+	SnapshotsURL       string
+	TokenTimeout       time.Duration
+	RequestTimeout     time.Duration
+	TLS                integrationhttp.TLSOptions
 }
 
+// LoadConfig 读取固定来源与既有工作器配置，不把非法值降级为旧流程。
+// 参数：无。
+// 返回值：通过原安全校验的配置或缺依赖、来源错误。
 func LoadConfig() (Config, error) {
+	mode := os.Getenv("PORTAL_CUSTOMER_DIRECTORY_MODE")
+	if err := validateDirectoryMode(mode); err != nil {
+		return Config{LocalDirectoryMode: mode}, err
+	}
 	requireMTLS, err := boolEnv("PORTAL_PROJECT_TLS_REQUIRE_MTLS", false)
 	if err != nil {
 		return Config{}, err
 	}
 	cfg := Config{
-		MySQLDSN: os.Getenv("PORTAL_PROJECT_MYSQL_DSN"), TenantID: os.Getenv("PORTAL_PROJECT_TENANT_ID"),
+		LocalDirectoryMode: mode, MySQLDSN: os.Getenv("PORTAL_PROJECT_MYSQL_DSN"), TenantID: os.Getenv("PORTAL_PROJECT_TENANT_ID"),
 		WorkerID:      env("PORTAL_PROJECT_WORKER_ID", hostname()),
 		PollInterval:  durationEnv("PORTAL_PROJECT_POLL_INTERVAL", 5*time.Second),
 		SyncInterval:  durationEnv("PORTAL_PROJECT_SYNC_INTERVAL", 5*time.Minute),

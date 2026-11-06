@@ -27,6 +27,7 @@ var systemFilingStatuses = map[string]struct{}{"NOT_FILED": {}, "FILING": {}, "F
 type ProfileRepository interface {
 	LockActiveCustomerForProfile(context.Context, auth.Principal, uint64) (*Customer, error)
 	FindByID(context.Context, auth.Principal, uint64, bool) (*Customer, error)
+	FindReadableByID(context.Context, auth.Principal, uint64, bool) (*Customer, error)
 	ListStakeholders(context.Context, string, uint64) ([]Stakeholder, error)
 	ReplaceStakeholders(context.Context, string, uint64, string, []Stakeholder) error
 	ListInformationSystems(context.Context, string, uint64) ([]InformationSystem, error)
@@ -41,10 +42,11 @@ func (s *Service) ListStakeholders(ctx context.Context, customerID uint64) (*Sta
 		return nil, err
 	}
 	// 查询子记录前先按数据范围解析父客户，不能仅凭 customer_id 直接读取子表。
+	// 该路径只读，父客户可见性使用放宽口径（含 customer.read.all）。
 	if s.profile == nil {
 		return nil, ErrProfileUnavailable
 	}
-	customer, err := s.profile.FindByID(ctx, principal, customerID, false)
+	customer, err := s.profile.FindReadableByID(ctx, principal, customerID, false)
 	if err != nil {
 		return nil, err
 	}
@@ -172,7 +174,8 @@ func (s *Service) ListInformationSystems(ctx context.Context, customerID uint64)
 	if s.profile == nil {
 		return nil, ErrProfileUnavailable
 	}
-	customer, err := s.profile.FindByID(ctx, principal, customerID, false)
+	// 与干系人读取同口径：只读子资源使用放宽后的父客户可见性。
+	customer, err := s.profile.FindReadableByID(ctx, principal, customerID, false)
 	if err != nil {
 		return nil, err
 	}

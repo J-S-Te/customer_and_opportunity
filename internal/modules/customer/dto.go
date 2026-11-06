@@ -39,7 +39,7 @@ type CreateRequest struct {
 	// 不信任客户端指定的负责人。
 	OwnerUserID             string         `json:"owner_user_id,omitempty" binding:"omitempty,max=64"`
 	OwnerOrgID              string         `json:"owner_org_id" binding:"omitempty,max=64"`
-	Contacts                []ContactInput `json:"contacts" binding:"required,min=1,dive"`
+	Contacts                []ContactInput `json:"contacts" binding:"required,min=1,max=50,dive"`
 	DuplicateOverride       bool           `json:"duplicate_override"`
 	DuplicateOverrideReason string         `json:"duplicate_override_reason" binding:"omitempty,max=500"`
 	// Reason 用于与旧客户端滚动兼容。新客户
@@ -58,7 +58,7 @@ type UpdateRequest struct {
 	Region                  string               `json:"region" binding:"required,max=64"`
 	OwnerUserID             string               `json:"owner_user_id" binding:"required,max=64"`
 	OwnerOrgID              string               `json:"owner_org_id" binding:"omitempty,max=64"`
-	Contacts                []UpdateContactInput `json:"contacts" binding:"required,min=1,dive"`
+	Contacts                []UpdateContactInput `json:"contacts" binding:"required,min=1,max=50,dive"`
 	DuplicateOverride       bool                 `json:"duplicate_override"`
 	DuplicateOverrideReason string               `json:"duplicate_override_reason" binding:"omitempty,max=500"`
 	Version                 uint64               `json:"version" binding:"required"`

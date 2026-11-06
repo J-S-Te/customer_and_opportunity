@@ -9,12 +9,17 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/middleware"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/auth"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/requestbody"
 )
 
 // HandoverMachineScope 是平台为人员离职交接签发的专用机器 scope。
 // 交接端点在机器身份认证之外还必须持有该 scope（BIZ-XAPI-01），
 // 否则任何已登记的机器凭据都能驱动离职冻结/责任转移。
 const HandoverMachineScope = "handover.machine"
+
+// handoverWriteBodyLimit 限制交接写接口请求体。交接载荷是固定字段的小对象，
+// 32 KiB 足够覆盖重试元数据，同时关闭无界读取；解码仍走全站统一严格语义。
+const handoverWriteBodyLimit int64 = 32 << 10
 
 // Handler 暴露人员离职交接的机器协议端点。租户边界来自机器身份，不接受请求体覆盖。
 type Handler struct{ service *Service }
@@ -78,7 +83,7 @@ func tenantOf(c *gin.Context, requested string) (string, bool) {
 
 func (h *Handler) freeze(c *gin.Context) {
 	var payload freezePayload
-	if err := c.ShouldBindJSON(&payload); err != nil {
+	if err := requestbody.DecodeJSONWithLimit(c, &payload, handoverWriteBodyLimit); err != nil {
 		writeHandoverError(c, ErrValidation)
 		return
 	}
@@ -114,7 +119,7 @@ func (h *Handler) responsibilities(c *gin.Context) {
 
 func (h *Handler) transfer(c *gin.Context) {
 	var payload transferPayload
-	if err := c.ShouldBindJSON(&payload); err != nil {
+	if err := requestbody.DecodeJSONWithLimit(c, &payload, handoverWriteBodyLimit); err != nil {
 		writeHandoverError(c, ErrValidation)
 		return
 	}
@@ -158,7 +163,7 @@ func (h *Handler) receipt(c *gin.Context) {
 
 func (h *Handler) complete(c *gin.Context) {
 	var payload completePayload
-	if err := c.ShouldBindJSON(&payload); err != nil {
+	if err := requestbody.DecodeJSONWithLimit(c, &payload, handoverWriteBodyLimit); err != nil {
 		writeHandoverError(c, ErrValidation)
 		return
 	}

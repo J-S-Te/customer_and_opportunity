@@ -104,6 +104,34 @@ func TestHandoverEndpointsRequireMachineTenant(t *testing.T) {
 	}
 }
 
+// 交接写接口此前用 ShouldBindJSON（无体积上限、不拒未知字段）。改为统一严格解码后，
+// 未知字段、重复键和超大请求体都必须在进入服务层前按交接校验错误（422）拒绝。
+func TestHandoverWritesRejectNonStrictJSONBodies(t *testing.T) {
+	router := handoverTestRouter(t, handoverMachinePrincipal("tenant-machine", HandoverMachineScope))
+	bodies := map[string]string{
+		"unknown field": `{"batch_id":"batch-1","request_id":"request-1","user_id":"user-leaver","unexpected":"secret"}`,
+		"duplicate key": `{"batch_id":"batch-1","batch_id":"batch-2","request_id":"request-1","user_id":"user-leaver"}`,
+		"over limit":    `{"batch_id":"batch-1","request_id":"request-1","user_id":"user-leaver","padding":"` + strings.Repeat("x", 33<<10) + `"}`,
+	}
+	for name, body := range bodies {
+		t.Run(name, func(t *testing.T) {
+			status, payload := handoverCall(t, router, http.MethodPost, "/internal/handover/freeze", body)
+			if status != http.StatusUnprocessableEntity || payload["code"] != "HANDOVER_VALIDATION" {
+				t.Fatalf("case=%s → %d %v", name, status, payload)
+			}
+			encoded, err := json.Marshal(payload)
+			if err != nil {
+				t.Fatalf("marshal payload: %v", err)
+			}
+			for _, leaked := range []string{"secret", "unexpected"} {
+				if strings.Contains(string(encoded), leaked) {
+					t.Fatalf("decoder details leaked %q in %s", leaked, encoded)
+				}
+			}
+		})
+	}
+}
+
 // BIZ-XAPI-01：交接五类端点除机器身份外必须持有 handover.machine scope，
 // 其它合法机器 scope 不能驱动离职冻结/责任转移。
 func TestHandoverEndpointsRequireHandoverMachineScope(t *testing.T) {

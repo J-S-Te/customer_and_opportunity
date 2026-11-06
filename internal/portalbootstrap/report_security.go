@@ -21,20 +21,13 @@ type reportDownloadProviders struct {
 	Watermark report.DownloadWatermarker
 }
 
+// newReportDownloadProviders 保留默认CRM身份服务与原报告安全链。
+// 参数：ctx/db/c/protector为既有门户装配依赖。
+// 返回值：扫描、加密存储、风险和水印提供器；缺配置时不启用。
 func newReportDownloadProviders(ctx context.Context, db *gorm.DB, c Config, protector report.DescriptorProtector) (*reportDownloadProviders, error) {
 	if len(c.ReportContentKey) == 0 {
 		return nil, nil
 	}
-	store, err := reportsecurity.NewEncryptedStore(c.ReportStoreRoot, c.ReportContentKey, c.TenantID, protector)
-	if err != nil {
-		return nil, err
-	}
-	initialized := false
-	defer func() {
-		if !initialized {
-			_ = store.Close()
-		}
-	}()
 	tls := integrationhttp.TLSOptions{}
 	if err := tls.ValidateEndpoints(c.ReportIdentityURL, c.CRMInviteTokenURL); err != nil {
 		return nil, err
@@ -52,6 +45,29 @@ func newReportDownloadProviders(ctx context.Context, db *gorm.DB, c Config, prot
 		}
 		return token.AccessToken, nil
 	}}
+	return newReportDownloadProvidersWithIdentity(ctx, db, c, protector, identity)
+}
+
+// newReportDownloadProvidersWithIdentity 显式替换身份权威，复用既有安全存储与下载链。
+// 参数：ctx/db/c/protector为既有依赖，identity为固定模式的真实客户权威。
+// 返回值：完整安全提供器；本地权威或安全配置缺失时失败关闭。
+func newReportDownloadProvidersWithIdentity(ctx context.Context, db *gorm.DB, c Config, protector report.DescriptorProtector, identity reportsecurity.IdentitySource) (*reportDownloadProviders, error) {
+	if len(c.ReportContentKey) == 0 {
+		return nil, nil
+	}
+	if db == nil || protector == nil || identity == nil {
+		return nil, reportsecurity.ErrUnavailable
+	}
+	store, err := reportsecurity.NewEncryptedStore(c.ReportStoreRoot, c.ReportContentKey, c.TenantID, protector)
+	if err != nil {
+		return nil, err
+	}
+	initialized := false
+	defer func() {
+		if !initialized {
+			_ = store.Close()
+		}
+	}()
 	watermark, err := reportsecurity.NewPDFWatermarker(c.PDFConfigRoot, c.CJKFontPath, identity, reportsecurity.GORMRequestNumbers{DB: db})
 	if err != nil {
 		return nil, err
@@ -64,6 +80,23 @@ func newReportDownloadProviders(ctx context.Context, db *gorm.DB, c Config, prot
 	return &reportDownloadProviders{Store: store, Risk: risk, Watermark: watermark}, nil
 }
 
+// validateLocalReportDownloadConfig 校验本地报告安全配置且不要求CRM身份URL。
+// 参数：c为受控启动配置。
+// 返回值：密钥、vault及PDF配置错误；不读取或放宽客户ACL。
+func validateLocalReportDownloadConfig(c Config) error {
+	configured := len(c.ReportContentKey) > 0 || c.ReportStoreRoot != ""
+	if !configured {
+		return nil
+	}
+	if len(c.ReportContentKey) != 32 || c.ReportStoreRoot == "" || c.PDFConfigRoot == "" || c.CJKFontPath == "" || !strings.HasPrefix(c.ReportStoreRoot, "/") || string(c.ReportContentKey) == string(c.ReportIngestDescriptorKey) || string(c.ReportContentKey) == string(c.EncryptionKey) {
+		return reportsecurity.ErrInvalid
+	}
+	return nil
+}
+
+// validateReportDownloadConfig 保留CRM默认报告依赖校验。
+// 参数：c为既有启动配置。
+// 返回值：缺失、混用密钥或端点错误。
 func validateReportDownloadConfig(c Config) error {
 	configured := len(c.ReportContentKey) > 0 || c.ReportStoreRoot != "" || c.ReportIdentityURL != "" || c.ReportIdentityClientID != "" || c.ReportIdentityClientSecret != ""
 	if !configured {

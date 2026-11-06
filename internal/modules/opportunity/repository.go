@@ -55,8 +55,8 @@ type Repository interface {
 
 func (r *GORMRepository) Board(ctx context.Context, principal auth.Principal, query ListQuery) ([]Response, error) {
 	db := scoped(database.FromContext(ctx, r.db).Model(&Opportunity{}), principal).Where("opp_status <> ?", "VOID")
-	if query.Keyword != "" {
-		db = db.Where("opportunity_no LIKE ? OR name LIKE ?", "%"+query.Keyword+"%", "%"+query.Keyword+"%")
+	if keyword := strings.TrimSpace(query.Keyword); keyword != "" {
+		db = applyOpportunityBoardKeyword(db, keyword)
 	}
 	if query.OwnerID != "" {
 		db = db.Where("owner_user_id = ?", query.OwnerID)
@@ -474,8 +474,11 @@ func (r *GORMRepository) VoidBlockers(ctx context.Context, tenantID string, oppo
 }
 
 // ApplyDataScope 用途：统一商机查询的租户、删除及个人或组织范围谓词。
-// 参数：db 已绑定 crm_opportunities；principal 为已认证主体及有效范围。
+// 参数：db 已绑定 crm_opportunities（Model(&Opportunity{}) 或 Table("crm_opportunities")，
+// 谓词使用全限定列名）；principal 为已认证主体及有效范围，未携带数据范围时按本人范围收窄。
 // 返回值：追加数据范围的查询；空组织失败收窄。
+// 不变量：本函数是 CRM 商机数据范围的唯一权威实现，商机读取、看板、客户模块的商机历史
+// 子资源都必须复用，不得各自复制一份，否则组织/个人范围会在多份实现之间漂移。
 func ApplyDataScope(db *gorm.DB, principal auth.Principal) *gorm.DB {
 	db = db.Where("crm_opportunities.tenant_id=? AND crm_opportunities.deleted_at IS NULL", principal.TenantID)
 	switch principal.ScopeMode {
@@ -528,13 +531,7 @@ func (r *GORMRepository) List(ctx context.Context, principal auth.Principal, que
 	db := scoped(database.FromContext(ctx, r.db).Model(&Opportunity{}), principal)
 	db = db.Joins("LEFT JOIN crm_customers ON crm_customers.tenant_id = crm_opportunities.tenant_id AND crm_customers.id = crm_opportunities.customer_id AND crm_customers.deleted_at IS NULL")
 	if keyword := strings.TrimSpace(query.Keyword); keyword != "" {
-		// 使查询同时适用于列表及创建、售前选择器。
-		// 规范化表达式也使搜索能够容忍中文或拉丁文名称、
-		// 商机编号中的意外空格。
-		normalized := strings.ToLower(strings.Join(strings.Fields(keyword), ""))
-		pattern := "%" + keyword + "%"
-		normalizedPattern := "%" + normalized + "%"
-		db = db.Where(`crm_opportunities.opportunity_no LIKE ? OR crm_opportunities.name LIKE ? OR crm_customers.customer_no LIKE ? OR crm_customers.name LIKE ? OR LOWER(REPLACE(crm_opportunities.name, ' ', '')) LIKE ? OR LOWER(REPLACE(crm_customers.name, ' ', '')) LIKE ?`, pattern, pattern, pattern, pattern, normalizedPattern, normalizedPattern)
+		db = applyOpportunityListKeyword(db, keyword)
 	}
 	if query.Stage != "" {
 		db = db.Where("crm_opportunities.current_stage=?", query.Stage)
@@ -573,6 +570,24 @@ func (r *GORMRepository) List(ctx context.Context, principal auth.Principal, que
 		items = append(items, item)
 	}
 	return pagination.Page[Response]{Items: items, Page: query.Page, PageSize: query.PageSize, Total: total}, nil
+}
+
+// applyOpportunityBoardKeyword 让看板与列表共享同一关键字语义：
+// LikeContains 转义 %、_ 和反斜杠，按字面子串匹配，避免用户输入放大扫描范围。
+func applyOpportunityBoardKeyword(db *gorm.DB, keyword string) *gorm.DB {
+	pattern := database.LikeContains(keyword)
+	return db.Where(`opportunity_no LIKE ? ESCAPE '\\' OR name LIKE ? ESCAPE '\\'`, pattern, pattern)
+}
+
+// applyOpportunityListKeyword 为列表与选择器追加关键字条件。
+// 规范化表达式使搜索能够容忍中文或拉丁文名称、商机编号中的意外空格；
+// 关键字仍按字面子串匹配：LikeContains 转义 %、_ 和反斜杠，SQL 侧用 ESCAPE
+// 声明转义字符，避免用户输入变成通配符放大扫描范围。
+func applyOpportunityListKeyword(db *gorm.DB, keyword string) *gorm.DB {
+	normalized := strings.ToLower(strings.Join(strings.Fields(keyword), ""))
+	pattern := database.LikeContains(keyword)
+	normalizedPattern := database.LikeContains(normalized)
+	return db.Where(`crm_opportunities.opportunity_no LIKE ? ESCAPE '\\' OR crm_opportunities.name LIKE ? ESCAPE '\\' OR crm_customers.customer_no LIKE ? ESCAPE '\\' OR crm_customers.name LIKE ? ESCAPE '\\' OR LOWER(REPLACE(crm_opportunities.name, ' ', '')) LIKE ? ESCAPE '\\' OR LOWER(REPLACE(crm_customers.name, ' ', '')) LIKE ? ESCAPE '\\'`, pattern, pattern, pattern, pattern, normalizedPattern, normalizedPattern)
 }
 
 func (r *GORMRepository) UpdateStage(ctx context.Context, model *Opportunity, expectedVersion uint64) error {

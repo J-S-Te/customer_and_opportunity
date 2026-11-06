@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/portal/sourceauthority"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/database"
 	requestctx "github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/request"
 	"gorm.io/gorm"
@@ -16,8 +17,9 @@ import (
 )
 
 type GORMRepository struct {
-	db      *gorm.DB
-	central bool
+	db             *gorm.DB
+	central        bool
+	localDirectory bool
 }
 
 func NewGORMRepository(db *gorm.DB) *GORMRepository       { return &GORMRepository{db: db} }
@@ -42,7 +44,35 @@ VALUES(?,?,?,'ISOLATED','portal-provision','portal-provision',?,?,1)
 ON DUPLICATE KEY UPDATE mode='ISOLATED',updated_by='portal-provision',updated_at=VALUES(updated_at),version=version+1`, tenantID, customerID, accountID, at.UTC(), at.UTC()).Error
 }
 
+// UpsertPendingLink 在原事务中登记来源锁、映射及项目隔离。
+// 参数：ctx为请求，value为通过来源服务构造的真实映射。
+// 返回值：真实映射；来源、身份或事务失败时整体回滚。
 func (r *GORMRepository) UpsertPendingLink(ctx context.Context, value *IdentityLink) (*IdentityLink, error) {
+	var result *IdentityLink
+	err := r.tx(ctx).Transaction(func(tx *gorm.DB) error {
+		mode := "crm"
+		if r.localDirectory {
+			mode = "local"
+		}
+		if err := sourceauthority.Claim(tx, value.TenantID, mode, "portal-identity-source", value.UpdatedAt); err != nil {
+			return err
+		}
+		var err error
+		result, err = r.upsertPendingLink(database.WithHandle(ctx, tx), value)
+		return err
+	})
+	return result, err
+}
+
+// UseLocalDirectory 仅由显式本地组合根选择，不能从请求切换来源。
+// 参数：无。
+// 返回值：固定本地来源的仓储。
+func (r *GORMRepository) UseLocalDirectory() *GORMRepository { r.localDirectory = true; return r }
+
+// upsertPendingLink 保留原映射预配规则，复用外层来源事务。
+// 参数：ctx为原事务，value为真实映射。
+// 返回值：原映射结果及存储错误。
+func (r *GORMRepository) upsertPendingLink(ctx context.Context, value *IdentityLink) (*IdentityLink, error) {
 	var current IdentityLink
 	err := r.tx(ctx).Where("tenant_id = ? AND platform_user_id = ?", value.TenantID, value.PlatformUserID).Take(&current).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -129,8 +159,9 @@ type identityDisableOperation struct {
 
 func (identityDisableOperation) TableName() string { return "portal_identity_disable_operations" }
 
-// DisableLink 在一个事务中冻结精确的客户/主体映射，并撤销该主体的全部活动会话。
-// 相同业务幂等键的精确重放返回稳定结果；载荷冲突或映射属于其他客户时按拒绝处理。
+// DisableLink 在原事务内限定来源、冻结精确客户映射并撤销其全部会话。
+// 参数：ctx为请求，command为真实来源服务的原停用操作，now为服务器时间。
+// 返回值：精确幂等停用结果；来源、载荷或客户冲突时拒绝。
 func (r *GORMRepository) DisableLink(ctx context.Context, command DisableCommand, now time.Time) (DisableResult, error) {
 	requestHash := disableRequestHash(command)
 	requestID := strings.TrimSpace(requestctx.ID(ctx))
@@ -143,6 +174,13 @@ func (r *GORMRepository) DisableLink(ctx context.Context, command DisableCommand
 	}
 	result := DisableResult{}
 	err := r.tx(ctx).Transaction(func(tx *gorm.DB) error {
+		mode := "crm"
+		if r.localDirectory {
+			mode = "local"
+		}
+		if err := sourceauthority.Claim(tx, command.TenantID, mode, command.ActorID, now); err != nil {
+			return err
+		}
 		var replay identityDisableOperation
 		replayErr := tx.Where("tenant_id=? AND oauth_client_subject=? AND idempotency_key=?", command.TenantID, command.ActorID, command.IdempotencyKey).Take(&replay).Error
 		if replayErr == nil {
