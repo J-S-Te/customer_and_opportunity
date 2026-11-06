@@ -158,6 +158,8 @@ paths:
     post: {$ref: '#/components/x-operations/changeOpportunityStage'}
   /api/v1/opportunities/{id}/stage-history:
     get: {$ref: '#/components/x-operations/listOpportunityStageHistory'}
+  /api/v1/opportunities/{id}/win-confirmation:
+    get: {$ref: '#/components/x-operations/getOpportunityWinConfirmation'}
   /api/v1/opportunities/{id}/followups:
     get: {$ref: '#/components/x-operations/listOpportunityFollowups'}
     post: {$ref: '#/components/x-operations/createOpportunityFollowup'}
@@ -734,6 +736,7 @@ components:
     listOpportunityFollowups: {<<: *opportunityIDRead, operationId: listOpportunityFollowups}
     createOpportunityFollowup: {<<: *opportunityIDRead, operationId: createOpportunityFollowup, x-permission: opportunity.update}
     getOpportunityExternalStatus: {<<: *opportunityIDRead, operationId: getOpportunityExternalStatus, description: Active quote/bid query Provider contract and environment remain pending.}
+    getOpportunityWinConfirmation: {<<: *opportunityIDRead, operationId: getOpportunityWinConfirmation, x-permission: opportunity.read, description: Returns the latest win confirmation evidence recorded for a closed-won opportunity.}
     launchQuotation: {<<: *opportunityIDRead, operationId: launchQuotation, x-permission: opportunity.update, description: Returns 503 unless the signed short-lived launch adapter is configured.}
     launchBid: {<<: *opportunityIDRead, operationId: launchBid, x-permission: opportunity.update, description: Returns 503 unless the signed short-lived launch adapter is configured.}
     completeOpportunityTerminalTodo: {<<: *opportunityIDRead, operationId: completeOpportunityTerminalTodo, x-permission: opportunity.stage.change}
