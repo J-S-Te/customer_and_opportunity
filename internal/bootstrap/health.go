@@ -13,15 +13,32 @@ func livenessHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "alive"})
 }
 
-// readinessHandler 支持注入依赖检查，使路由测试不必建立数据库连接。
-// 可选集成仍由能力开关控制，不会被静默提升为强制就绪条件。
-func readinessHandler(check func(context.Context) bool) gin.HandlerFunc {
+// readinessHandler 组合数据库就绪判定、C14 能力快照与审计 Outbox 中间态。
+// 可选集成仍由能力开关控制，不会被静默提升为强制就绪条件；
+// audit_outbox 只观测投递器状态与积压计数，查询失败标 query_error 但不改变就绪结论，
+// 也不新增指标端点或外部依赖。
+// 参数：config 为运行配置（决定能力快照）；databaseHealthy 为必需的数据库健康判定；
+// auditOutbox 为审计 Outbox 观测状态，nil 时省略该字段。
+// 返回值：就绪端点处理器。
+func readinessHandler(config Config, databaseHealthy func(context.Context) bool, auditOutbox *auditOutboxState) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if check == nil || !check(c.Request.Context()) {
+		if databaseHealthy == nil || !databaseHealthy(c.Request.Context()) {
 			c.JSON(http.StatusServiceUnavailable, gin.H{"status": "not_ready"})
 			return
 		}
-		c.JSON(http.StatusOK, gin.H{"status": "ready"})
+		winReady := config.WinConfirmationMode == "contract" || config.WinConfirmationMode == "local_evidence"
+		body := gin.H{
+			"status": "ready",
+			"capabilities": gin.H{
+				"win_confirmation":      gin.H{"mode": config.WinConfirmationMode, "state": winReadyState(winReady)},
+				"contract_verification": gin.H{"enabled": config.ContractVerificationEnabled, "state": capabilityState(config.ContractVerificationEnabled)},
+				"contract_transfer":     gin.H{"subscribed": config.ContractTransferSubscribed, "state": capabilityState(config.ContractTransferSubscribed)},
+			},
+		}
+		if field := auditOutbox.snapshot(c.Request.Context()); field != nil {
+			body["audit_outbox"] = field
+		}
+		c.JSON(http.StatusOK, body)
 	}
 }
 

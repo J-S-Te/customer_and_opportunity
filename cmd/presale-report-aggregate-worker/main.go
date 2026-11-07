@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shutdown"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/workerlicense"
 	"log"
 	"os/signal"
@@ -41,7 +42,8 @@ func main() {
 		}
 		return
 	}
-	if err = app.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+	// 停机顺序：信号取消后台循环 → 按预算 join；超预算时列出未退出组件并以非零码退出（不 panic）。
+	if err = shutdown.RunWorker(ctx, "presale-report-aggregate-worker-loop", app.Run); err != nil && !errors.Is(err, context.Canceled) {
 		log.Fatal(err)
 	}
 }

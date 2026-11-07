@@ -30,17 +30,19 @@ import (
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/request"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/requestaudit"
 	central "github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/sessiongovernance"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shutdown"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
 )
 
 type App struct {
-	licenseCancel   context.CancelFunc
-	Config          Config
-	DB              *gorm.DB
-	Server          *http.Server
-	auditCancel     context.CancelFunc
-	auditDone       chan struct{}
+	licenseCancel context.CancelFunc
+	Config        Config
+	DB            *gorm.DB
+	Server        *http.Server
+	auditCancel   context.CancelFunc
+	// background 统一登记本进程启动的中后台 goroutine，停机时按预算 join。
+	background      *shutdown.Group
 	reportProviders *reportDownloadProviders
 }
 
@@ -263,39 +265,48 @@ func New(ctx context.Context, config Config) (*App, error) {
 			"trusted_proxy_prefixes", len(config.TrustedProxies))
 	}
 	auditContext, auditCancel := context.WithCancel(context.Background())
-	auditDone := make(chan struct{})
-	go func() {
-		defer close(auditDone)
-		auditDispatcher.Run(auditContext)
-	}()
+	// 中后台 goroutine 统一登记，停机时由 App.Close 取消并按预算 join：
+	// 任何组件超预算未退出都会以组件名回报，而不是让进程无限期挂住。
+	background := shutdown.NewGroup()
+	background.Go("request-audit-dispatcher", func() { auditDispatcher.Run(auditContext) })
 	// 审计平台临时故障期间仍保持 Portal 可启动。
 	// 预检仅使用发布者 OAuth 令牌及平台只读
 	// 校验端点，不能影响用户会话或 Keycloak。
-	go func() {
+	background.Go("audit-publisher-preflight", func() {
 		preflightCtx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 		defer cancel()
 		if err := auditDispatcher.ValidateConfiguration(preflightCtx); err != nil {
 			slog.Default().Warn("Portal audit publisher preflight failed", "error_code", requestaudit.DeliveryErrorCode(err))
 		}
-	}()
+	})
 	started = true
-	return &App{Config: config, DB: db, Server: &http.Server{Addr: config.Address, Handler: router, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second}, auditCancel: auditCancel, auditDone: auditDone, licenseCancel: licenseCancel, reportProviders: reportProviders}, nil
+	return &App{Config: config, DB: db, Server: &http.Server{Addr: config.Address, Handler: router, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second}, auditCancel: auditCancel, background: background, licenseCancel: licenseCancel, reportProviders: reportProviders}, nil
 }
 
+// Close 的停机顺序固定为：许可运行时取消 → HTTP 在途请求收敛（既有 10s）→ 取消后台组件
+// → 后台组件在既有 10s 内 join → 释放连接池与报告下载依赖。
+// 参数 ctx 为调用方的整体停机预算（默认 20s，可用 CUSTOMER_OPPORTUNITY_SHUTDOWN_DRAIN_SECONDS 覆盖），
+// 它只作为整段停机的兜底上限；超预算仍未退出的组件以 *shutdown.StuckError 返回组件名，
+// 由进程打印后以非零码退出，不 panic。
 func (a *App) Close(ctx context.Context) error {
 	if a.licenseCancel != nil {
 		a.licenseCancel()
 	}
 	// HTTP 停机与连接池关闭的错误都要保留，便于编排器区分在途请求超时和数据库释放失败。
-	shutdownErr := a.Server.Shutdown(ctx)
+	httpCtx, cancelHTTP := context.WithTimeout(ctx, shutdown.HTTPServeTimeout)
+	shutdownErr := a.Server.Shutdown(httpCtx)
+	cancelHTTP()
 	if a.auditCancel != nil {
 		a.auditCancel()
 	}
-	if a.auditDone != nil {
-		select {
-		case <-a.auditDone:
-		case <-ctx.Done():
-			shutdownErr = errors.Join(shutdownErr, ctx.Err())
+	// 审计投递器仍走既有 10s 预算，不随整体停机预算放大；
+	// 这里不额外触发取消，避免与 App.Close 自身争抢关闭同一批组件。
+	if a.background != nil {
+		joinCtx, cancelJoin := context.WithTimeout(ctx, shutdown.BackgroundJoinTimeout)
+		stuck := a.background.Join(joinCtx)
+		cancelJoin()
+		if len(stuck) > 0 {
+			shutdownErr = errors.Join(shutdownErr, &shutdown.StuckError{Budget: shutdown.BackgroundJoinTimeout, Components: stuck})
 		}
 	}
 	sqlDB, err := a.DB.DB()
