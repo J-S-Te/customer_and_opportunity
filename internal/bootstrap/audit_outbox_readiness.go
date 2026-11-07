@@ -10,9 +10,12 @@ import (
 )
 
 // auditOutboxPendingCounter 是就绪端点读取本地审计 Outbox 积压量的最小能力。
-// 只取一个聚合计数，使就绪端点既不接触审计载荷，也不引入新的存储依赖或指标端口。
+// 只取聚合计数，使就绪端点既不接触审计载荷，也不引入新的存储依赖或指标端口。
+// PendingCount 是尚未投递完成（PENDING/RETRY/PROCESSING）的积压；
+// HeldCount 是其中被人工挂起、Claim 永不认领的行（RETRY 且无下次尝试时间）。
 type auditOutboxPendingCounter interface {
 	PendingCount(ctx context.Context) (int64, error)
+	HeldCount(ctx context.Context) (int64, error)
 }
 
 // auditOutboxState 记录请求审计投递器是否在运行，并为 /readyz 生成 audit_outbox 中间态。
@@ -44,7 +47,8 @@ func (s *auditOutboxState) MarkStopped() { s.running.Store(false) }
 
 // snapshot 返回 /readyz 的 audit_outbox 字段：
 //   - dispatcher：running|disabled，投递器是否在运行；
-//   - pending：最新一次积压计数，仅在查询成功时出现；
+//   - pending：最新一次未投递完成积压计数（PENDING/RETRY/PROCESSING），仅在查询成功时出现；
+//   - held：人工挂起行数（RETRY 且 next_attempt_at 为 NULL，永不重投），仅在查询成功时出现；
 //   - query_error：计数查询失败标记，失败不改变就绪结论。
 //
 // 返回值：字段映射；接收者为 nil 时返回 nil，由调用方省略该字段。
@@ -74,5 +78,12 @@ func (s *auditOutboxState) snapshot(ctx context.Context) gin.H {
 		return field
 	}
 	field["pending"] = pending
+	held, err := s.counter.HeldCount(ctx)
+	if err != nil {
+		// 与 pending 同一处理：失败只标 query_error，不伪装 0，也不返回原始错误细节。
+		field["query_error"] = true
+		return field
+	}
+	field["held"] = held
 	return field
 }

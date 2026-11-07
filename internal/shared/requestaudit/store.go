@@ -185,14 +185,30 @@ func (s *Store) Retry(ctx context.Context, workerID string, values []Record, cod
 		}).Error
 }
 
-// PendingCount 返回整表尚未开始投递（PENDING）的积压量，供就绪端点观测投递器是否在推进积压。
+// PendingCount 返回整表尚未投递完成的积压量，供就绪端点观测投递器是否在推进积压。
+// PENDING、RETRY、PROCESSING 都算未完成（与 DA/PM 同一口径）：投递链路故障时事件会进入
+// RETRY 退避或滞留在 PROCESSING，如果只数 PENDING，就绪端点反而会把故障报成接近 0 的积压。
 // 只返回聚合计数，不返回审计载荷、租户内容或原始数据库错误。
 // 参数：ctx 为查询上下文。
 // 返回值：积压计数；查询失败时返回错误。
 func (s *Store) PendingCount(ctx context.Context) (int64, error) {
 	var count int64
 	if err := s.db.WithContext(ctx).Table(s.tableName).
-		Where("delivery_status=?", StatusPending).Count(&count).Error; err != nil {
+		Where("delivery_status IN (?,?,?)", StatusPending, StatusRetry, StatusProcessing).Count(&count).Error; err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
+// HeldCount 返回整表被人工挂起（人工介入）的行数：RETRY 且 next_attempt_at 为 NULL。
+// HoldSourceMismatch 就是这样落库的，Claim 明确排除 next_attempt_at IS NULL，
+// 所以这些行永不重投、也不会出现在任何「会被推进」的计数里；单独计数才能让就绪端点暴露这个黑洞。
+// 参数：ctx 为查询上下文。
+// 返回值：挂起计数；查询失败时返回错误。
+func (s *Store) HeldCount(ctx context.Context) (int64, error) {
+	var count int64
+	if err := s.db.WithContext(ctx).Table(s.tableName).
+		Where("delivery_status=? AND next_attempt_at IS NULL", StatusRetry).Count(&count).Error; err != nil {
 		return 0, err
 	}
 	return count, nil
