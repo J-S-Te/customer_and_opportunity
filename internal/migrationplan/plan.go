@@ -72,6 +72,7 @@ var baseFiles = map[Schema][]string{
 		"000126_crm_oidc_session_idle.up.sql",
 		"000127_crm_handover_gate.up.sql",
 		"000128_crm_opportunity_win_confirmations.up.sql",
+		"000130_crm_request_audit_outbox_delivered_index.up.sql",
 	},
 	Portal: {
 		"000008_create_portal_core.up.sql", "000011_portal_session_claims.up.sql", "000016_portal_project_sync.up.sql",
@@ -93,6 +94,7 @@ var baseFiles = map[Schema][]string{
 		"000125_portal_central_session_governance.up.sql",
 		"000126_portal_activation_expiry_index.up.sql",
 		"000129_portal_local_identity.up.sql",
+		"000131_portal_request_audit_outbox_delivered_index.up.sql",
 	},
 }
 
