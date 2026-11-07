@@ -13,6 +13,9 @@ import (
 const (
 	crmTableName    = "application_request_audit_outbox"
 	portalTableName = "portal_application_request_audit_outbox"
+	// purgeBatchSize 是单批清理行数上限（与 dispatcher 注释一致：每批最多 1000 行，
+	// 每轮最多 20 批）。无界 DELETE 在百万级 DELIVERED 行上会形成长事务并锁表。
+	purgeBatchSize = 1000
 )
 
 type Store struct {
@@ -142,8 +145,14 @@ func (s *Store) Delivered(ctx context.Context, workerID string, values []Record,
 // PurgeDelivered 清理已成功投递且 delivered_at 早于 cutoff 的 Outbox 行
 // （审计 P1：DELIVERED 行此前永不清理，表会无限增长）。仅删除 DELIVERED 状态；
 // 失败/重试/挂起事件一律保留。返回删除行数。条件全部参数化。
+//
+// 单次调用最多删除 purgeBatchSize（1000）行：此前这里是无界 DELETE，与
+// dispatcher "单批最多 1000 行" 的注释不符，百万级已投递行会在一个长事务里
+// 锁住整张表。分批由 dispatcher 的循环负责（调用方循环到返回 0）。
 func (s *Store) PurgeDelivered(ctx context.Context, olderThan time.Time) (int64, error) {
+	limit := purgeBatchSize
 	result := s.db.WithContext(ctx).Table(s.tableName).
+		Clauses(clause.Limit{Limit: &limit}).
 		Where("delivery_status = ? AND delivered_at IS NOT NULL AND delivered_at < ?", StatusDelivered, olderThan.UTC()).
 		Delete(map[string]any{})
 	return result.RowsAffected, result.Error

@@ -251,3 +251,41 @@ func TestDispatcherEmitsLoginClientAndSourceIP(t *testing.T) {
 		}
 	}
 }
+
+// TestDispatcherPurgeRetentionDefaultsToDisabled 证明 DELIVERED 行清理默认关闭：
+// 清理删除的是审计证据，只有显式配置正数保留期才允许启用。
+func TestDispatcherPurgeRetentionDefaultsToDisabled(t *testing.T) {
+	base := DispatcherOptions{
+		PlatformBaseURL: "https://platform.example", ClientID: "audit-client", ClientSecret: "audit-secret",
+		ApplicationCode: "customer_and_opportunity", EnvironmentCode: "test", WorkerID: "worker-a",
+	}
+	build := func(retention time.Duration) *Dispatcher {
+		options := base
+		options.DeliveredRetention = retention
+		dispatcher, err := NewDispatcher(NewStore(nil), options)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return dispatcher
+	}
+	// 缺省（选项零值且环境变量未设置）必须关闭清理。
+	t.Setenv("AUDIT_OUTBOX_DELIVERED_RETENTION_DAYS", "")
+	if got := build(0).deliveredRetention; got != 0 {
+		t.Fatalf("default retention = %v, want 0 (purge disabled)", got)
+	}
+	// 环境变量非正数或非法值同样保持关闭，不得意外删除审计证据。
+	for _, raw := range []string{"0", "-1", "not-a-number"} {
+		t.Setenv("AUDIT_OUTBOX_DELIVERED_RETENTION_DAYS", raw)
+		if got := build(0).deliveredRetention; got != 0 {
+			t.Fatalf("env %q retention = %v, want 0 (purge disabled)", raw, got)
+		}
+	}
+	// 只有显式正数才启用：环境变量天数生效，显式正值选项优先于环境变量。
+	t.Setenv("AUDIT_OUTBOX_DELIVERED_RETENTION_DAYS", "7")
+	if got := build(0).deliveredRetention; got != 7*24*time.Hour {
+		t.Fatalf("env retention = %v, want 168h", got)
+	}
+	if got := build(48 * time.Hour).deliveredRetention; got != 48*time.Hour {
+		t.Fatalf("explicit retention = %v, want 48h", got)
+	}
+}

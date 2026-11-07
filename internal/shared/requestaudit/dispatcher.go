@@ -25,8 +25,9 @@ type DispatcherOptions struct {
 	PollInterval                                                                        time.Duration
 	BatchSize                                                                           int
 	HTTPClient                                                                          *http.Client
-	// DeliveredRetention 是 DELIVERED 行的保留时长（审计 P1）。零值默认 30 天；
-	// 负值关闭清理。过期行由 Run 循环周期性删除。
+	// DeliveredRetention 控制是否清理已投递（DELIVERED）的本地审计留档行。
+	// 注意：被删除的是审计证据本身，一旦清理即不可恢复，因此缺省（零值）关闭清理，
+	// 只有显式配置正数才启用。过期行由 Run 循环分批删除。
 	DeliveredRetention time.Duration
 }
 
@@ -86,12 +87,14 @@ func NewDispatcher(store *Store, options DispatcherOptions) (*Dispatcher, error)
 	if options.BatchSize <= 0 || options.BatchSize > 100 {
 		options.BatchSize = 100
 	}
-	// DELIVERED 行保留时长（审计 P1）：默认 30 天；可用 AUDIT_OUTBOX_DELIVERED_RETENTION_DAYS
-	// 覆盖（单位天，负值关闭清理）；显式正值选项优先于环境变量。
+	// DELIVERED 行保留时长（审计 P1）：缺省关闭（0）。
+	// 清理删除的是已投递事件的本地审计证据，自动删除会永久丢失取证材料，
+	// 因此默认不清理，只有显式配置正数才启用：显式正值选项优先；
+	// 选项为零值时读取 AUDIT_OUTBOX_DELIVERED_RETENTION_DAYS（单位天），
+	// 仅当它解析为正数才启用，0、负数或非法值一律保持关闭。
 	if options.DeliveredRetention == 0 {
-		options.DeliveredRetention = 30 * 24 * time.Hour
 		if raw := strings.TrimSpace(os.Getenv("AUDIT_OUTBOX_DELIVERED_RETENTION_DAYS")); raw != "" {
-			if days, err := strconv.Atoi(raw); err == nil {
+			if days, err := strconv.Atoi(raw); err == nil && days > 0 {
 				options.DeliveredRetention = time.Duration(days) * 24 * time.Hour
 			}
 		}
@@ -124,7 +127,8 @@ func (d *Dispatcher) Run(ctx context.Context) {
 				lastFailureLog = time.Now()
 			}
 		}
-		// DELIVERED 行周期清理（审计 P1）：保留 deliveredRetention，单批最多 1000 行，
+		// DELIVERED 行周期清理（审计 P1）：仅在显式配置正数保留期时启用（缺省关闭），
+		// 删除的是已投递事件的本地审计证据。保留 deliveredRetention，单批最多 1000 行，
 		// 连续删到清空或 20 批为止；清理失败不影响投递主流程，只记结构化日志。
 		if d.deliveredRetention > 0 {
 			olderThan := time.Now().UTC().Add(-d.deliveredRetention)
