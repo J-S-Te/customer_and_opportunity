@@ -91,6 +91,8 @@
 77. `000124_central_session_governance.up.sql`（已发布的中央会话绑定、刷新材料和登录票据结构，文件及内容保持不变。）
 78. `000126_crm_oidc_session_idle.up.sql`（在中央迁移之后新增 `last_interactive_at`，以 `created_at` 回填；刷新材料与访问令牌到期列沿用 000124，不重复创建。中央模式使用平台权威窗口，旧模式使用本地空闲窗口。）
 79. `000127_crm_handover_gate.up.sql`（人员离职交接门闩行：新增 `(tenant_id, user_id)` 主键的 `crm_handover_gate`，把冻结落库与责任写入串行化；先迁移再发布镜像。）
+80. `000128_crm_opportunity_win_confirmations.up.sql`（main 已合入：人工赢单证据与合同核验证据分离；本清单补登，内容未改动。）
+81. `000130_crm_request_audit_outbox_delivered_index.up.sql`（审计清理索引门禁：`requestaudit.Store.PurgeDelivered` 按 `delivery_status='DELIVERED' AND delivered_at < cutoff` 每小时分批删除，补 `idx_request_audit_delivered_at (delivery_status, delivered_at)`；只加二级索引，不改清理逻辑与保留期，清理默认关闭，启用前须先执行本迁移并用 `SHOW INDEX` 核对定义。）
 
 本次集成保留 main 已发布的 000124/000125；上传分支尚未发布 main 的旧 000124 空闲模型、000125 交接门闩分别重编号为 000126/000127。若独立本地库曾执行上传分支旧编号，须单独核对结构和迁移账本再制定升级映射，不能直接复用本清单、改账本或忽略 duplicate column。
 
@@ -140,6 +142,8 @@
 40. `000123_portal_session_username.up.sql`
 41. `000125_portal_central_session_governance.up.sql`（已发布，文件及内容保持不变。）
 42. `000126_portal_activation_expiry_index.up.sql`（安全审计 M-10：为无租户条件的 `expires_at <= now` 清理新增 `idx_portal_activation_expiry_scan (expires_at, consumed_at)`；只加二级索引、不改列与约束，不改 state 唯一键和一次性消费语义。上线顺序为「先执行本迁移 → 再发布启用机会式清理的 Portal 镜像」，旧镜像不读该索引、可安全共库灰度；在存量表上新增索引仍需按在线变更方案评估 metadata lock，回退只删索引、不删 activation 证据。）
+43. `000129_portal_local_identity.up.sql`（main 已合入：Portal 本地客户权威表与本地身份；本清单补登，内容未改动。）
+44. `000131_portal_request_audit_outbox_delivered_index.up.sql`（Portal 审计清理索引门禁：与 CRM `000130` 同一清理谓词，补 `idx_request_audit_delivered_at (delivery_status, delivered_at)`；只加二级索引，清理默认关闭，启用前须先执行本迁移。）
 
 ## 规则
 
@@ -232,3 +236,5 @@ Portal `000067`（`000067_portal_feedback_customer_notifications`）为 `portal_
 2026-11 安全审计 M-10 静态登记：Portal 计划新增 `000126_portal_activation_expiry_index.up.sql`，源码计划变为 CRM 79 文件、Portal 42 文件（`internal/migrationplan/plan.go` 为准，`go test ./internal/migrationplan/` 校验归属、顺序与 checksum）。本轮只在源码层登记并运行静态计划测试，未连接 MySQL、未执行 DDL，因此不构成空库执行或存量升级证据；`000126` 在存量 `portal_activation_contexts` 上新增索引仍须按在线变更方案评估 metadata lock、复制延迟与回退条件（down 仅删索引）。
 
 2026-11 本地在途改动登记：CRM 计划新增 `000128_crm_opportunity_win_confirmations.up.sql`，Portal 计划新增 `000129_portal_local_identity.up.sql`，与主线 M-10 的 `000126_portal_activation_expiry_index` 合并后源码计划为 CRM 80 文件、Portal 43 文件（`internal/migrationplan/plan.go` 为准，`go test ./internal/migrationplan/` 校验归属、顺序与 checksum）。本轮只做源码层登记与静态计划测试，未连接 MySQL、未执行 DDL；`000129` 与 `000128` 在存量库上的执行仍须按发布门禁单独验证在线 DDL、metadata lock、复制延迟与回退条件。
+
+2026-11 审计清理索引门禁（只读核查 + 仅索引迁移）：CRM 计划新增 `000130_crm_request_audit_outbox_delivered_index.up.sql`、Portal 计划新增 `000131_portal_request_audit_outbox_delivered_index.up.sql`，源码计划变为 CRM 81 文件、Portal 44 文件（`internal/migrationplan/plan.go` 为准，`go test ./internal/migrationplan/` 校验归属、顺序与 checksum）。核查依据：`internal/shared/requestaudit/store.go` 的 `PurgeDelivered` 生成 `DELETE FROM <outbox> WHERE delivery_status = 'DELIVERED' AND delivered_at IS NOT NULL AND delivered_at < ? LIMIT 1000`（GORM `clause.Limit`，无 ORDER BY）；`000075`/`000076` 只建了领取索引 `idx_request_audit_delivery (delivery_status, next_attempt_at, id)`，`delivered_at` 既不在索引列也不在范围条件里，每轮清理都要扫过全部已投递行并逐行回表。已在一次性 MySQL 8.4.13 空库分别执行两条完整 `up` 链（local 与 production 两个 runner 各一遍，`000130`/`000131` 各 4 条语句按语句级 checkpoint 执行成功），并以 12 万行（10.8 万已投递）实测：加索引前 `EXPLAIN DELETE` 命中 `idx_request_audit_delivery`、`type=range`、`rows≈59161`、`Extra="Using where"`；加索引后（稳态 540 行过期）命中 `idx_request_audit_delivered_at`、`rows=540`，`EXPLAIN ANALYZE` 覆盖索引范围扫描读 540 个索引项约 0.4 ms，强制旧索引则扫 108000 个索引项约 109 ms。首次清理积压（过期占比约 45%）时优化器会回落旧索引，属一次性排空成本。删除本地账本行后重跑两条迁移均为 `SELECT 1` 空操作、索引列数仍为 2，未重复建键。临时库与容器已删除。本结果不替代存量库在线 DDL、metadata lock、复制延迟与回退演练。

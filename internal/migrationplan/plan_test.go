@@ -23,7 +23,7 @@ func TestRepositoryMigrationsAreAssignedExactlyOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(crm.Entries) != 80 || len(portal.Entries) != 43 {
+	if len(crm.Entries) != 81 || len(portal.Entries) != 44 {
 		t.Fatalf("unexpected plan lengths: crm=%d portal=%d", len(crm.Entries), len(portal.Entries))
 	}
 	for _, plan := range []Plan{crm, portal} {
@@ -97,9 +97,9 @@ func TestIntegratedSessionMigrationsPreservePublishedDDL(t *testing.T) {
 		}
 	}
 	last := plan.Entries[len(plan.Entries)-3:]
-	if last[0].File != "000126_crm_oidc_session_idle.up.sql" ||
-		last[1].File != "000127_crm_handover_gate.up.sql" ||
-		last[2].File != "000128_crm_opportunity_win_confirmations.up.sql" {
+	if last[0].File != "000127_crm_handover_gate.up.sql" ||
+		last[1].File != "000128_crm_opportunity_win_confirmations.up.sql" ||
+		last[2].File != "000130_crm_request_audit_outbox_delivered_index.up.sql" {
 		t.Fatalf("new migrations must follow published main: %v", last)
 	}
 }
