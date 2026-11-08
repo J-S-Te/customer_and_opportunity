@@ -23,8 +23,13 @@ func TestRepositoryMigrationsAreAssignedExactlyOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(crm.Entries) != 81 || len(portal.Entries) != 44 {
+	if len(crm.Entries) != 81 || len(portal.Entries) != 45 {
 		t.Fatalf("unexpected plan lengths: crm=%d portal=%d", len(crm.Entries), len(portal.Entries))
+	}
+	last := portal.Entries[len(portal.Entries)-2:]
+	if last[0].File != "000131_portal_request_audit_outbox_delivered_index.up.sql" ||
+		last[1].File != "000132_portal_report_notification_revisions.up.sql" {
+		t.Fatalf("portal revisions must follow published audit index: %v", last)
 	}
 	for _, plan := range []Plan{crm, portal} {
 		checksum := CombinedChecksum(plan)

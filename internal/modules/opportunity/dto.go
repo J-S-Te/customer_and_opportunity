@@ -186,6 +186,7 @@ type ContractTransferResponse struct {
 
 // ContractLinkRequest 是合同系统在完成接入核对后回写 CRM 的最小权威投影。
 type ContractLinkRequest struct {
+	OpportunityID  uint64     `json:"opportunity_id"`
 	EventID        string     `json:"event_id" binding:"required,max=128"`
 	IntakeID       string     `json:"intake_id" binding:"required,max=64"`
 	ContractID     string     `json:"contract_id" binding:"omitempty,max=26"`

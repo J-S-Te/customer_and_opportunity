@@ -160,14 +160,15 @@ type Detail struct {
 
 // NotificationView 刻意排除租户、客户、账号身份、加密邮箱和对象存储元数据。
 type NotificationView struct {
-	ID         uint64     `json:"id"`
-	RequestID  uint64     `json:"request_id"`
-	RequestNo  string     `json:"request_no"`
-	ReportType string     `json:"report_type"`
-	Kind       string     `json:"kind"`
-	Status     string     `json:"status"`
-	CreatedAt  time.Time  `json:"created_at"`
-	ReadAt     *time.Time `json:"read_at,omitempty"`
+	ID             uint64     `json:"id"`
+	RequestID      uint64     `json:"request_id"`
+	ReportRevision uint64     `json:"report_revision"`
+	RequestNo      string     `json:"request_no"`
+	ReportType     string     `json:"report_type"`
+	Kind           string     `json:"kind"`
+	Status         string     `json:"status"`
+	CreatedAt      time.Time  `json:"created_at"`
+	ReadAt         *time.Time `json:"read_at,omitempty"`
 }
 
 func (s *Service) ListNotifications(ctx context.Context, actor Actor, unreadOnly bool, page, pageSize int) (pagination.Page[NotificationView], error) {
@@ -356,7 +357,9 @@ func (s *Service) Create(ctx context.Context, actor Actor, cmd CreateCommand) (*
 	return value, err
 }
 
-// MarkApprovalStarted 仅在项目服务持久接受幂等申请后推进本地投影；相同下游身份可重放，不同身份视为冲突。
+// MarkApprovalStarted 绑定已受理申请，允许相同身份在后续状态幂等确认。
+// 参数：ctx为投递上下文，tenantID/requestID为聚合身份，downstreamRequestID为下游受理身份。
+// 返回值：无；身份冲突或非法迁移返回错误，不回退已推进状态。
 func (s *Service) MarkApprovalStarted(ctx context.Context, tenantID string, requestID uint64, downstreamRequestID string) error {
 	tenantID, downstreamRequestID = strings.TrimSpace(tenantID), strings.TrimSpace(downstreamRequestID)
 	if tenantID == "" || requestID == 0 || downstreamRequestID == "" {
@@ -367,8 +370,8 @@ func (s *Service) MarkApprovalStarted(ctx context.Context, tenantID string, requ
 		if err != nil {
 			return err
 		}
-		if value.Status == StatusApproving {
-			if value.DownstreamRequestID == downstreamRequestID {
+		if value.DownstreamRequestID != "" {
+			if value.DownstreamRequestID == downstreamRequestID && deliveryAccepted(value.Status) {
 				return nil
 			}
 			return ErrCallbackConflict
@@ -534,7 +537,9 @@ func (s *Service) ApplyCallback(ctx context.Context, cb Callback) error {
 	})
 }
 
-// CompleteIngest 原子发布可信入库器返回的证据；对象获取、扫描和加密在事务前完成，不延长回调或数据库锁时间。
+// CompleteIngest 原子发布可信入库证据及按修订唯一的通知，网络与扫描在事务外完成。
+// 参数：ctx为任务上下文，job为持有租约的任务，descriptor为原描述符，ingested为可信入库证据。
+// 返回值：无；身份、租约、安全证据或存储错误时回滚，已完成任务精确重放成功。
 func (s *Service) CompleteIngest(ctx context.Context, job IngestJob, descriptor FileDescriptor, ingested IngestResult) error {
 	if job.ID == 0 || job.RequestID == 0 || !validBoundedText(job.EventID, 64) || descriptorHash(descriptor) != job.DescriptorHash {
 		return ErrInvalidCallback
@@ -588,7 +593,11 @@ func (s *Service) CompleteIngest(ctx context.Context, job IngestJob, descriptor 
 		if err = s.repo.CreateStatusEvent(tx, statusEvent(value, "REPORT_ISSUED", value.Version+1, StatusIngestPending, StatusIssued, "SYSTEM", "portal-file-ingestor", "INGEST", job.EventID, job.DescriptorHash, requestctx.ID(tx), now)); err != nil {
 			return err
 		}
-		if err = s.repo.CreateNotification(tx, &Notification{TenantID: value.TenantID, CustomerID: value.CustomerID, RequestID: value.ID, AccountID: value.AccountID, Kind: NotificationKindIssued, Status: NotificationUnread, CreatedAt: now}); err != nil {
+		if err = s.repo.CreateNotification(tx, &Notification{
+			TenantID: value.TenantID, CustomerID: value.CustomerID, RequestID: value.ID,
+			ReportRevision: job.ReportRevision, AccountID: value.AccountID,
+			Kind: NotificationKindIssued, Status: NotificationUnread, CreatedAt: now,
+		}); err != nil {
 			return err
 		}
 		return s.repo.UpdateIngestJob(tx, currentJob, map[string]any{"status": IngestCompleted, "completed_at": &now, "locked_by": "", "locked_until": nil, "next_retry_at": nil, "last_error_summary": ""})
@@ -633,11 +642,9 @@ func (s *Service) MarkIngestDeadLetter(ctx context.Context, job IngestJob) error
 	})
 }
 
-// MarkDeliveryDeadLetter 在投递退避耗尽时把申请收敛到终止失败态 SUBMISSION_FAILED：
-// 只允许 SUBMITTED → SUBMISSION_FAILED，并写一条系统状态事件和一条客户可见站内通知。
-// 调用方必须在同一事务内先调用本方法再落投递死信，因此“死信一定伴随申请终态”；
-// 租约丢失、事件身份不符或申请已被其他路径推进时返回错误，由调用方整体回滚。
-// 死信期精确重放安全：申请已处于 SUBMISSION_FAILED 时直接成功且不重复追加事件或通知。
+// MarkDeliveryDeadLetter 原子记录投递失败，已绑定下游的申请交由Worker收口成功。
+// 参数：ctx为外层投递事务，outbox为当前租约持有者及事件身份。
+// 返回值：已受理时返回ErrDeliveryAlreadyAccepted；身份、租约或写入失败时回滚。
 func (s *Service) MarkDeliveryDeadLetter(ctx context.Context, outbox Outbox) error {
 	tenantID := strings.TrimSpace(outbox.TenantID)
 	eventID := strings.TrimSpace(outbox.EventID)
@@ -668,19 +675,19 @@ func (s *Service) MarkDeliveryDeadLetter(ctx context.Context, outbox Outbox) err
 		if value.TenantID != tenantID {
 			return ErrNotFound
 		}
+		if value.DownstreamRequestID != "" && deliveryAccepted(value.Status) {
+			return ErrDeliveryAlreadyAccepted
+		}
 		if value.Status == StatusSubmissionFailed {
 			return nil
 		}
-		if value.Status != StatusSubmitted {
+		if value.Status != StatusSubmitted || value.DownstreamRequestID != "" {
 			return ErrInvalidTransition
 		}
 		if err = s.repo.Update(tx, value, value.Version, map[string]any{"status": StatusSubmissionFailed, "updated_by": "portal-report-worker", "updated_at": now}); err != nil {
 			return err
 		}
-		if err = s.repo.CreateStatusEvent(tx, statusEvent(value, "SUBMISSION_FAILED", value.Version+1, StatusSubmitted, StatusSubmissionFailed, "SYSTEM", "portal-report-worker", "DELIVERY_DEAD_LETTER", eventID, "", requestctx.ID(tx), now)); err != nil {
-			return err
-		}
-		return s.repo.CreateNotification(tx, &Notification{TenantID: value.TenantID, CustomerID: value.CustomerID, RequestID: value.ID, AccountID: value.AccountID, Kind: NotificationKindSubmissionFailed, Status: NotificationUnread, CreatedAt: now})
+		return s.recordDeliveryFailure(tx, value, eventID, now)
 	})
 }
 

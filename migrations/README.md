@@ -144,6 +144,7 @@
 42. `000126_portal_activation_expiry_index.up.sql`（安全审计 M-10：为无租户条件的 `expires_at <= now` 清理新增 `idx_portal_activation_expiry_scan (expires_at, consumed_at)`；只加二级索引、不改列与约束，不改 state 唯一键和一次性消费语义。上线顺序为「先执行本迁移 → 再发布启用机会式清理的 Portal 镜像」，旧镜像不读该索引、可安全共库灰度；在存量表上新增索引仍需按在线变更方案评估 metadata lock，回退只删索引、不删 activation 证据。）
 43. `000129_portal_local_identity.up.sql`（main 已合入：Portal 本地客户权威表与本地身份；本清单补登，内容未改动。）
 44. `000131_portal_request_audit_outbox_delivered_index.up.sql`（Portal 审计清理索引门禁：与 CRM `000130` 同一清理谓词，补 `idx_request_audit_delivered_at (delivery_status, delivered_at)`；只加二级索引，清理默认关闭，启用前须先执行本迁移。）
+45. `000132_portal_report_notification_revisions.up.sql`（报告签发通知绑定修订，保留历史通知及已读证据；升级前停止报告与通知写入。）
 
 ## 规则
 
@@ -238,3 +239,11 @@ Portal `000067`（`000067_portal_feedback_customer_notifications`）为 `portal_
 2026-11 本地在途改动登记：CRM 计划新增 `000128_crm_opportunity_win_confirmations.up.sql`，Portal 计划新增 `000129_portal_local_identity.up.sql`，与主线 M-10 的 `000126_portal_activation_expiry_index` 合并后源码计划为 CRM 80 文件、Portal 43 文件（`internal/migrationplan/plan.go` 为准，`go test ./internal/migrationplan/` 校验归属、顺序与 checksum）。本轮只做源码层登记与静态计划测试，未连接 MySQL、未执行 DDL；`000129` 与 `000128` 在存量库上的执行仍须按发布门禁单独验证在线 DDL、metadata lock、复制延迟与回退条件。
 
 2026-11 审计清理索引门禁（只读核查 + 仅索引迁移）：CRM 计划新增 `000130_crm_request_audit_outbox_delivered_index.up.sql`、Portal 计划新增 `000131_portal_request_audit_outbox_delivered_index.up.sql`，源码计划变为 CRM 81 文件、Portal 44 文件（`internal/migrationplan/plan.go` 为准，`go test ./internal/migrationplan/` 校验归属、顺序与 checksum）。核查依据：`internal/shared/requestaudit/store.go` 的 `PurgeDelivered` 生成 `DELETE FROM <outbox> WHERE delivery_status = 'DELIVERED' AND delivered_at IS NOT NULL AND delivered_at < ? LIMIT 1000`（GORM `clause.Limit`，无 ORDER BY）；`000075`/`000076` 只建了领取索引 `idx_request_audit_delivery (delivery_status, next_attempt_at, id)`，`delivered_at` 既不在索引列也不在范围条件里，每轮清理都要扫过全部已投递行并逐行回表。已在一次性 MySQL 8.4.13 空库分别执行两条完整 `up` 链（local 与 production 两个 runner 各一遍，`000130`/`000131` 各 4 条语句按语句级 checkpoint 执行成功），并以 12 万行（10.8 万已投递）实测：加索引前 `EXPLAIN DELETE` 命中 `idx_request_audit_delivery`、`type=range`、`rows≈59161`、`Extra="Using where"`；加索引后（稳态 540 行过期）命中 `idx_request_audit_delivered_at`、`rows=540`，`EXPLAIN ANALYZE` 覆盖索引范围扫描读 540 个索引项约 0.4 ms，强制旧索引则扫 108000 个索引项约 109 ms。首次清理积压（过期占比约 45%）时优化器会回落旧索引，属一次性排空成本。删除本地账本行后重跑两条迁移均为 `SELECT 1` 空操作、索引列数仍为 2，未重复建键。临时库与容器已删除。本结果不替代存量库在线 DDL、metadata lock、复制延迟与回退演练。
+
+## 2026-11-08 Portal 修订通知迁移
+
+Portal 计划追加 `000132_portal_report_notification_revisions.up.sql`（Portal 45文件，CRM仍81文件）；主线 `000130` CRM 与 `000131` Portal 审计清理索引迁移保持原样。通知新增 `report_revision`，签发通知唯一范围变为租户/客户/申请/账号/种类/修订；同时允许已有服务使用的 `REPORT_SUBMISSION_FAILED`（修订0）。原通知ID、状态、已读时间、通知scope索引及已读审计外键均保留，不合成历史通知。
+
+升级前停止Portal报告/通知写入者。旧签发通知仅按同租户/申请、完全相同 `created_at` 的唯一原文件回填；缺失或多候选将在任何持久DDL前触发 `chk_portal_notice_revision_requires_manual_review`，必须依据原始签发证据人工核对，不能按当前修订或文件顺序猜测。最早可用实现与当前摄取事务都将文件/通知写入同一个 `now`；不存在该证据的其他历史来源仍会阻断。
+
+该文件遵循既有迁移账本，成功后第二次运行执行器全部skip，不支持脱离账本原样重复SQL。部分DDL故障仍按既有RUNNING检查点要求人工核对，不宣称自动恢复；运行新二进制前须完成迁移。回退应使用受控前向修复，不能删除多修订通知或已读证据来恢复旧唯一键。存量线上metadata lock/规模与受控发布另验；本次仅隔离MySQL验证，不代表已部署。

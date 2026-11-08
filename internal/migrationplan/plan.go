@@ -95,6 +95,7 @@ var baseFiles = map[Schema][]string{
 		"000126_portal_activation_expiry_index.up.sql",
 		"000129_portal_local_identity.up.sql",
 		"000131_portal_request_audit_outbox_delivered_index.up.sql",
+		"000132_portal_report_notification_revisions.up.sql",
 	},
 }
 
