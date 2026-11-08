@@ -1414,8 +1414,9 @@ func (s *Service) ContractTransfer(ctx context.Context, id uint64, input Contrac
 	return &responseValue, nil
 }
 
-// ContractLinkCallback 原子接收合同系统的最终关联投影。幂等记录和商机更新
-// 共用同一事务，合同系统重试不会重复推进商机版本。
+// ContractLinkCallback 按原转交事件原子接收合同系统的最终关联投影。
+// 参数：ctx为可信机器身份上下文，id为路径商机，input为同事件关联回调。
+// 返回值：关联投影；身份、引用、事件或版本不匹配时返回错误。
 func (s *Service) ContractLinkCallback(ctx context.Context, id uint64, input ContractLinkRequest) (*Response, error) {
 	principal, err := requirePrincipal(ctx)
 	if err != nil {
@@ -1430,6 +1431,9 @@ func (s *Service) ContractLinkCallback(ctx context.Context, id uint64, input Con
 	input.Status = strings.TrimSpace(input.Status)
 	if input.EventID == "" || input.IntakeID == "" || input.ContractNumber == "" || input.SyncVersion == 0 {
 		return nil, apperror.New(422, "CRM_CONTRACT_LINK_INVALID", "contract link callback is invalid")
+	}
+	if input.OpportunityID != 0 && input.OpportunityID != id {
+		return nil, apperror.New(422, "CRM_CONTRACT_LINK_INVALID", "callback opportunity does not match request path")
 	}
 	if input.Status != "LINK_CONFIRMED" && input.Status != "LINK_EXCEPTION" {
 		return nil, apperror.New(422, "CRM_CONTRACT_LINK_INVALID", "contract link status is invalid")
@@ -1464,8 +1468,15 @@ func (s *Service) ContractLinkCallback(ctx context.Context, id uint64, input Con
 			}
 			return nil
 		}
-		if model.ContractRef == nil || strings.TrimSpace(*model.ContractRef) != strings.TrimSpace(input.ContractNumber) {
-			return apperror.New(409, "CRM_CONTRACT_LINK_REFERENCE_MISMATCH", "contract number does not match opportunity contract reference")
+		if err := s.validateContractLinkEvent(txCtx, principal, model, input); err != nil {
+			return err
+		}
+		ref := ""
+		if model.ContractRef != nil {
+			ref = strings.TrimSpace(*model.ContractRef)
+		}
+		if ref == "" || (ref != input.ContractNumber && ref != input.ContractID) {
+			return apperror.New(409, "CRM_CONTRACT_LINK_REFERENCE_MISMATCH", "contract does not match opportunity contract reference")
 		}
 		if input.SyncVersion <= model.ContractSyncVersion {
 			return apperror.New(409, "CRM_CONTRACT_LINK_STALE", "contract link callback is stale")
@@ -1498,6 +1509,47 @@ func (s *Service) ContractLinkCallback(ctx context.Context, id uint64, input Con
 		return nil, err
 	}
 	return &result, nil
+}
+
+// validateContractLinkEvent 将可信机器回调绑定至原转交事件及已签约商机。
+// 参数：ctx为事务上下文，principal为机器租户身份，model为锁定商机，input为回调。
+// 返回值：绑定一致时为空；缺事件、客户或接入身份漂移时拒绝关联。
+func (s *Service) validateContractLinkEvent(
+	ctx context.Context, principal auth.Principal, model *Opportunity, input ContractLinkRequest,
+) error {
+	event, err := s.repo.FindOutboxEvent(ctx, principal.TenantID, input.EventID)
+	if err != nil {
+		return err
+	}
+	mismatch := apperror.New(409, "CRM_CONTRACT_LINK_EVENT_MISMATCH",
+		"contract link callback does not match the original transfer event")
+	if event == nil || event.TenantID != principal.TenantID || model.TenantID != principal.TenantID ||
+		event.EventID != input.EventID || event.EventType != contractTransferEventType ||
+		event.AggregateType != "opportunity" || event.AggregateID != uintString(model.ID) {
+		return mismatch
+	}
+	var snapshot struct {
+		OpportunityID uint64 `json:"opportunity_id"`
+		CustomerID    uint64 `json:"customer_id"`
+		ContractRef   string `json:"contract_ref"`
+		EventVersion  uint64 `json:"event_version"`
+	}
+	if err := json.Unmarshal(event.Payload, &snapshot); err != nil ||
+		snapshot.OpportunityID != model.ID || snapshot.CustomerID != model.CustomerID ||
+		snapshot.CustomerID == 0 || snapshot.EventVersion == 0 || model.ContractRef == nil ||
+		strings.TrimSpace(snapshot.ContractRef) != strings.TrimSpace(*model.ContractRef) ||
+		contractTransferEventID(principal.TenantID, model.ID, snapshot.EventVersion) != input.EventID {
+		return mismatch
+	}
+	if model.ContractIntakeID != nil && strings.TrimSpace(*model.ContractIntakeID) != "" &&
+		strings.TrimSpace(*model.ContractIntakeID) != input.IntakeID {
+		return mismatch
+	}
+	if model.ContractLinkEventID != nil && strings.TrimSpace(*model.ContractLinkEventID) != "" &&
+		strings.TrimSpace(*model.ContractLinkEventID) != input.EventID {
+		return mismatch
+	}
+	return nil
 }
 
 func mustJSON(value any) []byte      { encoded, _ := json.Marshal(value); return encoded }

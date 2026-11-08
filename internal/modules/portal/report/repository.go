@@ -16,8 +16,12 @@ type GORMRepository struct{ db *gorm.DB }
 
 func NewGORMRepository(db *gorm.DB) *GORMRepository       { return &GORMRepository{db: db} }
 func (r *GORMRepository) tx(ctx context.Context) *gorm.DB { return database.FromContext(ctx, r.db) }
+
+// WithTransaction 复用外层事务，确保Worker死信投影与事件收口共同提交。
+// 参数：ctx为可能带事务的上下文，fn为事务内业务操作。
+// 返回值：无；操作或提交失败时返回错误并回滚。
 func (r *GORMRepository) WithTransaction(ctx context.Context, fn func(context.Context) error) error {
-	return database.WithTransaction(ctx, r.db, fn)
+	return database.WithTransaction(ctx, r.tx(ctx), fn)
 }
 func (r *GORMRepository) Create(ctx context.Context, value *Request) error {
 	return r.tx(ctx).Create(value).Error
@@ -133,6 +137,10 @@ func (r *GORMRepository) ListStatusEvents(ctx context.Context, tenant string, cu
 func (r *GORMRepository) CreateNotification(ctx context.Context, value *Notification) error {
 	return r.tx(ctx).Create(value).Error
 }
+
+// ListNotifications 按账号分页读取包含签发修订的站内通知。
+// 参数：ctx为请求上下文，actor为已认证客户账号，unreadOnly过滤未读，pageNo/pageSize为分页。
+// 返回值：账号范围内通知及总数；查询错误原样返回。
 func (r *GORMRepository) ListNotifications(ctx context.Context, actor Actor, unreadOnly bool, pageNo, pageSize int) (pagination.Page[NotificationView], error) {
 	page := pagination.Page[NotificationView]{Items: []NotificationView{}, Page: pageNo, PageSize: pageSize}
 	base := r.tx(ctx).Table("portal_report_notifications AS n").
@@ -144,7 +152,7 @@ func (r *GORMRepository) ListNotifications(ctx context.Context, actor Actor, unr
 	if err := base.Count(&page.Total).Error; err != nil {
 		return page, err
 	}
-	err := base.Select("n.id,n.request_id,r.request_no,r.report_type,n.kind,n.status,n.created_at,n.read_at").
+	err := base.Select("n.id,n.request_id,n.report_revision,r.request_no,r.report_type,n.kind,n.status,n.created_at,n.read_at").
 		Order("n.created_at DESC,n.id DESC").Offset((pageNo - 1) * pageSize).Limit(pageSize).Scan(&page.Items).Error
 	return page, err
 }

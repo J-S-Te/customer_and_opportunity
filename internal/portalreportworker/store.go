@@ -10,7 +10,7 @@ import (
 	"gorm.io/gorm"
 )
 
-// deadLetterProjection 在同一事务内把申请收敛到 SUBMISSION_FAILED。
+// deadLetterProjection 在同一事务内标记提交失败，或确认已受理申请应收口成功。
 // 只声明写终态所需的最小能力，Worker 仍以 Outbox 事件身份作为幂等依据。
 type deadLetterProjection interface {
 	MarkDeliveryDeadLetter(context.Context, report.Outbox) error
@@ -93,8 +93,9 @@ func (s *outboxStore) failed(ctx context.Context, event report.Outbox, workerID 
 	return s.writeFailure(ctx, event, workerID, fields)
 }
 
-// commitDeadLetter 保证“死信一定伴随申请终态”：同一事务内先写申请 SUBMISSION_FAILED，再落 Outbox 死信。
-// 申请已被其他路径推进或租约丢失时整体回滚，不留下没有终态的孤立死信。
+// commitDeadLetter 将投递终止与领域投影共同提交，已受理申请直接收口SENT。
+// 参数：ctx为任务上下文，event为租约事件，workerID为持有者，fields为失败字段。
+// 返回值：无；身份、租约或写入失败时整体回滚，不回退已推进业务状态。
 func (s *outboxStore) commitDeadLetter(ctx context.Context, event report.Outbox, workerID string, fields map[string]any) error {
 	if event.AggregateID == 0 {
 		// 结构无效的 Outbox 没有可绑定的申请，只能落死信交由运维清理，避免租约过期后无限重投。
@@ -111,7 +112,11 @@ func (s *outboxStore) commitDeadLetter(ctx context.Context, event report.Outbox,
 	}
 	return run(ctx, func(txCtx context.Context) error {
 		if err := s.deadLetters.MarkDeliveryDeadLetter(txCtx, event); err != nil {
-			return err
+			if !errors.Is(err, report.ErrDeliveryAlreadyAccepted) {
+				return err
+			}
+			fields["status"], fields["sent_at"] = report.OutboxSent, time.Now().UTC()
+			fields["next_retry_at"], fields["last_error_summary"] = nil, ""
 		}
 		return s.writeFailure(txCtx, event, workerID, fields)
 	})

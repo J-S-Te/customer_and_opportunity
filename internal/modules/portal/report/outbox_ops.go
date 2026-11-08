@@ -13,7 +13,7 @@ import (
 )
 
 // 本文件只承载投递死信的运维面（列表/重试）与死信租约复核所需的最小仓储访问。
-// 申请状态机仍由 Service 的领域方法维护，运维面不能直接改写申请状态。
+// 恢复必须复核持久化事件与申请身份，并在同一事务内更新申请和投递状态。
 
 var (
 	// ErrDeliveryFailureNotFound 对跨租户或不存在的事件保持同一响应，避免枚举其他租户的死信。
@@ -73,8 +73,9 @@ func (s *Service) ListDeliveryFailures(ctx context.Context, tenantID string, pag
 	return value, nil
 }
 
-// RetryDeliveryFailure 只把当前租户的死信事件重置为可重试（RETRY_WAIT + retry_count=0）。
-// 不修改载荷、事件身份或申请状态：客户侧的恢复方式仍是新建申请并使用新幂等键。
+// RetryDeliveryFailure 恢复当前租户死信及可恢复申请，保留原有下游幂等身份。
+// 参数：ctx为管理请求上下文，tenantID为已认证租户，eventID为原投递事件。
+// 返回值：无；跨租户或不存在返回未找到，已恢复或身份不一致返回冲突。
 func (s *Service) RetryDeliveryFailure(ctx context.Context, tenantID, eventID string) error {
 	tenantID, eventID = strings.TrimSpace(tenantID), strings.TrimSpace(eventID)
 	if !validBoundedText(tenantID, maxTenantIDBytes) || !validBoundedText(eventID, 64) {
@@ -121,26 +122,56 @@ func (r *GORMRepository) ListOutboxDeadLetters(ctx context.Context, tenantID str
 	return page, err
 }
 
-// RetryOutboxDeadLetter 只在当前租户、当前事件仍处死信态时原子重置退避计数。
+// RetryOutboxDeadLetter 在行锁事务内恢复同租户申请和原投递事件。
+// 参数：ctx为管理上下文，tenantID为已认证租户，eventID为原死信事件。
+// 返回值：恢复结果；身份冲突、状态冲突或存储错误不产生部分更新。
 func (r *GORMRepository) RetryOutboxDeadLetter(ctx context.Context, tenantID, eventID string) (OutboxRetryResult, error) {
-	result := r.tx(ctx).Model(&Outbox{}).
-		Where("tenant_id=? AND event_id=? AND event_type=? AND status=?", tenantID, eventID, OutboxEventSubmitted, OutboxDeadLetter).
-		Updates(map[string]any{
-			"status": OutboxRetryWait, "retry_count": 0, "next_retry_at": nil,
-			"locked_by": "", "locked_until": nil,
-		})
-	if result.Error != nil {
-		return OutboxRetryNotFound, result.Error
-	}
-	if result.RowsAffected == 1 {
-		return OutboxRetryApplied, nil
-	}
-	var count int64
-	if err := r.tx(ctx).Model(&Outbox{}).Where("tenant_id=? AND event_id=?", tenantID, eventID).Count(&count).Error; err != nil {
-		return OutboxRetryNotFound, err
-	}
-	if count == 0 {
-		return OutboxRetryNotFound, nil
-	}
-	return OutboxRetryNotRetryable, nil
+	result := OutboxRetryNotFound
+	err := r.WithTransaction(ctx, func(tx context.Context) error {
+		var event Outbox
+		err := r.tx(tx).Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("tenant_id=? AND event_id=?", tenantID, eventID).Take(&event).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		result = OutboxRetryNotRetryable
+		if event.EventType != OutboxEventSubmitted || event.Status != OutboxDeadLetter {
+			return nil
+		}
+		value, err := r.FindForUpdate(tx, tenantID, event.AggregateID)
+		if errors.Is(err, ErrNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if !deliveryPayloadMatches(event, value) {
+			return nil
+		}
+		if err = r.restoreDeliveryRequest(tx, value, event); errors.Is(err, ErrInvalidTransition) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		update := r.tx(tx).Model(&Outbox{}).
+			Where("id=? AND tenant_id=? AND event_id=? AND status=?",
+				event.ID, tenantID, eventID, OutboxDeadLetter).
+			Updates(map[string]any{
+				"status": OutboxRetryWait, "retry_count": 0, "next_retry_at": nil,
+				"locked_by": "", "locked_until": nil,
+			})
+		if update.Error != nil {
+			return update.Error
+		}
+		if update.RowsAffected != 1 {
+			return ErrDeliveryFailureNotRetryable
+		}
+		result = OutboxRetryApplied
+		return nil
+	})
+	return result, err
 }

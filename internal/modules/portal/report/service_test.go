@@ -760,9 +760,15 @@ func TestGetDetailRejectsMissingTenantScope(t *testing.T) {
 	}
 }
 
+// deliveryDeadLetterFixture 准备与状态一致的申请和Worker租约。
+// 参数：status为申请起点状态。
+// 返回值：内存仓储和持久化事件身份。
 func deliveryDeadLetterFixture(status Status) (*reportRepoStub, Outbox) {
 	request := callbackRequest()
 	request.Status, request.AccountID = status, "oidc-sub-1"
+	if status == StatusSubmitted {
+		request.DownstreamRequestID = ""
+	}
 	outbox := Outbox{ID: 21, EventID: "outbox-event-1", TenantID: request.TenantID, EventType: OutboxEventSubmitted, AggregateID: request.ID, Status: OutboxProcessing, LockedBy: "worker-1", RetryCount: 6}
 	return &reportRepoStub{request: request, outbox: &outbox}, outbox
 }
@@ -788,9 +794,13 @@ func TestMarkDeliveryDeadLetterConvergesSubmittedRequestToVisibleTerminalFailure
 	}
 }
 
+// TestMarkDeliveryDeadLetterRejectsNonSubmittedRequest 拒绝未绑定下游的非法后续状态。
+// 参数：t为测试上下文。
+// 返回值：无；非法状态被接受或修改时失败。
 func TestMarkDeliveryDeadLetterRejectsNonSubmittedRequest(t *testing.T) {
 	for _, status := range []Status{StatusApproving, StatusApprovedProcessing, StatusIngestPending, StatusIssued, StatusRejected, StatusProcessingFailed} {
 		repo, outbox := deliveryDeadLetterFixture(status)
+		repo.request.DownstreamRequestID = ""
 		service := NewService(repo, nil, nil, nil, reportClock{now: time.Now()}, nil)
 		if err := service.MarkDeliveryDeadLetter(context.Background(), outbox); !errors.Is(err, ErrInvalidTransition) {
 			t.Fatalf("status=%s err=%v, want invalid transition", status, err)
