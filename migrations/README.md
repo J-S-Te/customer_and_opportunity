@@ -232,3 +232,12 @@ Portal `000067`（`000067_portal_feedback_customer_notifications`）为 `portal_
 2026-11 安全审计 M-10 静态登记：Portal 计划新增 `000126_portal_activation_expiry_index.up.sql`，源码计划变为 CRM 79 文件、Portal 42 文件（`internal/migrationplan/plan.go` 为准，`go test ./internal/migrationplan/` 校验归属、顺序与 checksum）。本轮只在源码层登记并运行静态计划测试，未连接 MySQL、未执行 DDL，因此不构成空库执行或存量升级证据；`000126` 在存量 `portal_activation_contexts` 上新增索引仍须按在线变更方案评估 metadata lock、复制延迟与回退条件（down 仅删索引）。
 
 2026-11 本地在途改动登记：CRM 计划新增 `000128_crm_opportunity_win_confirmations.up.sql`，Portal 计划新增 `000129_portal_local_identity.up.sql`，与主线 M-10 的 `000126_portal_activation_expiry_index` 合并后源码计划为 CRM 80 文件、Portal 43 文件（`internal/migrationplan/plan.go` 为准，`go test ./internal/migrationplan/` 校验归属、顺序与 checksum）。本轮只做源码层登记与静态计划测试，未连接 MySQL、未执行 DDL；`000129` 与 `000128` 在存量库上的执行仍须按发布门禁单独验证在线 DDL、metadata lock、复制延迟与回退条件。
+
+
+## 2026-11-08 Portal 修订通知迁移
+
+Portal 计划追加 `000130_portal_report_notification_revisions.up.sql`（Portal 44文件，CRM仍80文件）。通知新增 `report_revision`，签发通知唯一范围变为租户/客户/申请/账号/种类/修订；同时允许已有服务使用的 `REPORT_SUBMISSION_FAILED`（修订0）。原通知ID、状态、已读时间、通知scope索引及已读审计外键均保留，不合成历史通知。
+
+升级前停止Portal报告/通知写入者。旧签发通知仅按同租户/申请、完全相同 `created_at` 的唯一原文件回填；缺失或多候选将在任何持久DDL前触发 `chk_portal_notice_revision_requires_manual_review`，必须依据原始签发证据人工核对，不能按当前修订或文件顺序猜测。最早可用实现与当前摄取事务都将文件/通知写入同一个 `now`；不存在该证据的其他历史来源仍会阻断。
+
+该文件遵循既有迁移账本，成功后第二次运行执行器全部skip，不支持脱离账本原样重复SQL。部分DDL故障仍按既有RUNNING检查点要求人工核对，不宣称自动恢复；运行新二进制前须完成迁移。回退应使用受控前向修复，不能删除多修订通知或已读证据来恢复旧唯一键。存量线上metadata lock/规模与受控发布另验；本次仅隔离MySQL验证，不代表已部署。

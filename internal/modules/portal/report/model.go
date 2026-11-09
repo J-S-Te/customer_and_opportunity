@@ -30,8 +30,8 @@ const (
 	StatusIssued             Status = "ISSUED"
 	StatusRejected           Status = "REJECTED"
 	StatusProcessingFailed   Status = "PROCESSING_FAILED"
-	// StatusSubmissionFailed 是投递死信写入的终态：申请从未被下游受理。
-	// 客户恢复方式是新建申请并使用新的幂等键，不复用旧下游幂等键。
+	// StatusSubmissionFailed 表示投递耗尽且尚无可信下游绑定。
+	// 管理员可核验原事件后恢复投递，继续复用原始下游幂等身份。
 	StatusSubmissionFailed Status = "SUBMISSION_FAILED"
 )
 
@@ -98,15 +98,16 @@ const (
 // Notification 是账号范围内的 Portal 站内信，只在可信报告入库成功或申请投递进入终止失败态时创建，
 // 不代表邮件或外部消息已送达。
 type Notification struct {
-	ID         uint64     `gorm:"primaryKey;autoIncrement;uniqueIndex:uq_portal_report_notification_scope,priority:3"`
-	TenantID   string     `gorm:"size:64;not null;uniqueIndex:uq_portal_report_notification_scope,priority:1"`
-	CustomerID uint64     `gorm:"not null;uniqueIndex:uq_portal_report_notification_scope,priority:2"`
-	RequestID  uint64     `gorm:"not null;uniqueIndex:uq_portal_report_notification_scope,priority:4"`
-	AccountID  string     `gorm:"size:128;not null;uniqueIndex:uq_portal_report_notification_scope,priority:5"`
-	Kind       string     `gorm:"size:32;not null"`
-	Status     string     `gorm:"size:16;not null"`
-	CreatedAt  time.Time  `gorm:"precision:3;not null"`
-	ReadAt     *time.Time `gorm:"precision:3"`
+	ID             uint64     `gorm:"primaryKey;autoIncrement;uniqueIndex:uq_portal_report_notification_scope,priority:3"`
+	TenantID       string     `gorm:"size:64;not null;uniqueIndex:uq_portal_report_notification_scope,priority:1;uniqueIndex:uq_portal_report_notification_kind,priority:1"`
+	CustomerID     uint64     `gorm:"not null;uniqueIndex:uq_portal_report_notification_scope,priority:2;uniqueIndex:uq_portal_report_notification_kind,priority:2"`
+	RequestID      uint64     `gorm:"not null;uniqueIndex:uq_portal_report_notification_scope,priority:4;uniqueIndex:uq_portal_report_notification_kind,priority:3"`
+	ReportRevision uint64     `gorm:"type:int unsigned;not null;default:0;uniqueIndex:uq_portal_report_notification_kind,priority:6"`
+	AccountID      string     `gorm:"size:128;not null;uniqueIndex:uq_portal_report_notification_scope,priority:5;uniqueIndex:uq_portal_report_notification_kind,priority:4"`
+	Kind           string     `gorm:"size:32;not null;uniqueIndex:uq_portal_report_notification_kind,priority:5"`
+	Status         string     `gorm:"size:16;not null"`
+	CreatedAt      time.Time  `gorm:"precision:3;not null"`
+	ReadAt         *time.Time `gorm:"precision:3"`
 }
 
 func (Notification) TableName() string { return "portal_report_notifications" }

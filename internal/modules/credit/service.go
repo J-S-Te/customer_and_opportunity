@@ -488,6 +488,9 @@ func (s *Service) ProcessPayment(ctx context.Context, event PaymentEvent) (Payme
 	return result, err
 }
 
+// processReversal 在原付款锁内验证身份并补偿其实际信用效果。
+// 参数：ctx为上下文，p为可信主体，event为补偿事件，paid为已校验金额。
+// 返回值：幂等补偿记录；身份、快照或最新事件保护不符时返回错误。
 func (s *Service) processReversal(ctx context.Context, p auth.Principal, event PaymentEvent, paid decimal.Decimal) (PaymentRecord, error) {
 	if paid.Sign() != 0 {
 		return PaymentRecord{}, apperror.New(400, "CRM_CREDIT_EVENT_INVALID", "reversal paid_amount must be zero")
@@ -516,11 +519,21 @@ func (s *Service) processReversal(ctx context.Context, p auth.Principal, event P
 			}
 			return err
 		}
-		if original.Evaluation != "ONTIME" && original.Evaluation != "LATE" {
-			return apperror.New(409, "CRM_CREDIT_REVERSAL_UNSUPPORTED", "only an evaluated payment can be reversed")
+		if !sameReversalTarget(original, event) {
+			return apperror.New(409, "CRM_CREDIT_REVERSAL_IDENTITY_CONFLICT", "reversal does not match original payment identity")
 		}
 		if original.ReversedAt != nil {
 			return apperror.New(409, "CRM_CREDIT_PAYMENT_ALREADY_REVERSED", "credit payment was already reversed")
+		}
+		if paymentHadNoCreditEffect(original.Evaluation) {
+			// 原事件没有修改信用；只登记补偿身份，不恢复过时快照或伪造信用变更。
+			if err = tx.Model(&creditPaymentRecord{}).Where("tenant_id=? AND id=? AND reversed_at IS NULL", p.TenantID, original.ID).Updates(map[string]any{"reversed_at": now, "reversal_event_id": event.EventID}).Error; err != nil {
+				return err
+			}
+			return s.insertRecord(tx, p.TenantID, event, "REVERSED", "IGNORED_PAYMENT_REVERSED", original.GraceDays, now, nil, nil, &result)
+		}
+		if original.Evaluation != "ONTIME" && original.Evaluation != "LATE" {
+			return apperror.New(409, "CRM_CREDIT_REVERSAL_UNSUPPORTED", "only an evaluated payment can be reversed")
 		}
 		if original.ResultLevel == nil || original.PrevLevel == nil || original.ResultOntimeCount == nil || original.ResultLateCount == nil || original.PrevOntimeCount == nil || original.PrevLateCount == nil {
 			return apperror.New(409, "CRM_CREDIT_REVERSAL_UNSUPPORTED", "credit payment has no reversal snapshot")
