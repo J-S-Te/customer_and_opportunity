@@ -168,7 +168,7 @@ func (ChangeIdempotency) TableName() string { return "crm_opportunity_change_ide
 type CreateIdempotency struct {
 	ID             uint64    `gorm:"primaryKey;autoIncrement"`
 	TenantID       string    `gorm:"size:64;not null;uniqueIndex:uq_opportunity_create_idem,priority:1"`
-	ActorID        string    `gorm:"size:64;not null;uniqueIndex:uq_opportunity_create_idem,priority:2"`
+	ActorID        string    `gorm:"size:128;not null;uniqueIndex:uq_opportunity_create_idem,priority:2"`
 	Key            string    `gorm:"column:idempotency_key;size:128;not null;uniqueIndex:uq_opportunity_create_idem,priority:3"`
 	CustomerID     uint64    `gorm:"not null"`
 	OpportunityID  uint64    `gorm:"not null"`

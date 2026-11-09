@@ -94,6 +94,8 @@
 80. `000128_crm_opportunity_win_confirmations.up.sql`（main 已合入：人工赢单证据与合同核验证据分离；本清单补登，内容未改动。）
 81. `000130_crm_request_audit_outbox_delivered_index.up.sql`（审计清理索引门禁：`requestaudit.Store.PurgeDelivered` 按 `delivery_status='DELIVERED' AND delivered_at < cutoff` 每小时分批删除，补 `idx_request_audit_delivered_at (delivery_status, delivered_at)`；只加二级索引，不改清理逻辑与保留期，清理默认关闭，启用前须先执行本迁移并用 `SHOW INDEX` 核对定义。）
 
+82. `000133_import_provision_machine_actor.up.sql`（客户/商机创建幂等表及业务审计的 actor_id 扩为128，与请求审计链路对齐；保持完整机器身份、排序规则和既有幂等键。先备份并迁移，再发布；回滚应用保留扩容，不缩列。）
+
 本次集成保留 main 已发布的 000124/000125；上传分支尚未发布 main 的旧 000124 空闲模型、000125 交接门闩分别重编号为 000126/000127。若独立本地库曾执行上传分支旧编号，须单独核对结构和迁移账本再制定升级映射，不能直接复用本清单、改账本或忽略 duplicate column。
 
 ## customer_portal schema
