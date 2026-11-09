@@ -151,7 +151,7 @@ func (MergeIdempotency) TableName() string { return "crm_customer_merge_idempote
 type CreateIdempotency struct {
 	ID           uint64    `gorm:"primaryKey;autoIncrement"`
 	TenantID     string    `gorm:"size:64;not null;uniqueIndex:uq_customer_create_idempotency,priority:1"`
-	ActorID      string    `gorm:"size:64;not null;uniqueIndex:uq_customer_create_idempotency,priority:2"`
+	ActorID      string    `gorm:"size:128;not null;uniqueIndex:uq_customer_create_idempotency,priority:2"`
 	Key          string    `gorm:"column:idempotency_key;size:128;not null;uniqueIndex:uq_customer_create_idempotency,priority:3"`
 	RequestHash  string    `gorm:"size:64;not null"`
 	CustomerID   uint64    `gorm:"not null;index"`

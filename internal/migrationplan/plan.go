@@ -73,6 +73,7 @@ var baseFiles = map[Schema][]string{
 		"000127_crm_handover_gate.up.sql",
 		"000128_crm_opportunity_win_confirmations.up.sql",
 		"000130_crm_request_audit_outbox_delivered_index.up.sql",
+		"000133_import_provision_machine_actor.up.sql",
 	},
 	Portal: {
 		"000008_create_portal_core.up.sql", "000011_portal_session_claims.up.sql", "000016_portal_project_sync.up.sql",

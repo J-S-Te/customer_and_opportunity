@@ -19,6 +19,7 @@ import (
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/audit"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/auth"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/businessclock"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/idempotency"
 	requestctx "github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/request"
 	"gorm.io/gorm"
 )
@@ -464,8 +465,8 @@ func provisionCreateRequestHash(input CreateRequest, actorIdentityID, externalRe
 }
 
 // replayProvisionCreate 校验幂等坐标并回放既有结果。
-// 与交互式创建不同：业务记录的 created_by 是操作者平台身份（X-Actor-Identity-ID），
-// 幂等表的 actor_id 是机器凭据主体，两者都要在重放时精确匹配。
+// 参数：上下文、机器身份、冻结请求、负责人组织、请求摘要及已存幂等记录。
+// 返回值：坐标和响应摘要均匹配时返回原商机，否则拒绝；不重复创建商机。
 func (s *Service) replayProvisionCreate(ctx context.Context, principal auth.Principal, request ProvisionCreateRequest, ownerOrgID, requestHash string, prior *CreateIdempotency) (*Response, error) {
 	if err := validateCreateReplay(prior, principal, request.CustomerID, request.IdempotencyKey, requestHash); err != nil {
 		return nil, err
@@ -477,11 +478,8 @@ func (s *Service) replayProvisionCreate(ctx context.Context, principal auth.Prin
 	if model.CustomerID != request.CustomerID || model.CreatedBy != request.ActorIdentityID || model.OwnerUserID != request.OwnerIdentityID || model.OwnerOrgID != ownerOrgID {
 		return nil, ErrIdempotencyConflict
 	}
-	if bytesHash(prior.ResponseJSON) != prior.ResponseHash {
-		return nil, ErrIdempotencyConflict
-	}
 	var result Response
-	if err = json.Unmarshal(prior.ResponseJSON, &result); err != nil {
+	if err = idempotency.DecodeSnapshot(prior.ResponseJSON, prior.ResponseHash, &result); err != nil {
 		return nil, ErrIdempotencyConflict
 	}
 	if result.ID != prior.OpportunityID || result.CustomerID != request.CustomerID {

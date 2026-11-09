@@ -16,6 +16,7 @@ import (
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/auth"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/businessclock"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/database"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/idempotency"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/security"
 )
 
@@ -407,8 +408,8 @@ func (s *Service) persistProvisionCustomer(ctx context.Context, principal auth.P
 }
 
 // replayProvisionCreate 校验幂等坐标并回放既有结果。
-// 与交互式创建不同：业务记录的 created_by 是操作者平台身份（X-Actor-Identity-ID），
-// 幂等表的 actor_id 是机器凭据主体，两者都必须在重放时精确匹配。
+// 参数：上下文、机器身份、冻结请求、请求摘要及已保存的幂等记录。
+// 返回值：坐标和响应摘要均匹配时返回原响应，否则拒绝；不重复创建客户。
 func (s *Service) replayProvisionCreate(ctx context.Context, principal auth.Principal, request ProvisionCreateRequest, requestHash string, prior *CreateIdempotency) (*Response, error) {
 	if prior == nil || prior.TenantID != principal.TenantID || prior.ActorID != principal.UserID || prior.Key != request.IdempotencyKey || prior.RequestHash != requestHash || prior.Status != "COMPLETED" {
 		return nil, ErrIdempotencyConflict
@@ -420,11 +421,8 @@ func (s *Service) replayProvisionCreate(ctx context.Context, principal auth.Prin
 	if resource.ID != prior.CustomerID || resource.TenantID != principal.TenantID {
 		return nil, ErrCreateReplayInvalid
 	}
-	if responseDigest(prior.ResponseJSON) != prior.ResponseHash {
-		return nil, ErrCreateReplayInvalid
-	}
 	var response Response
-	if err = json.Unmarshal(prior.ResponseJSON, &response); err != nil || response.ID != prior.CustomerID || response.CustomerNo != resource.CustomerNo {
+	if err = idempotency.DecodeSnapshot(prior.ResponseJSON, prior.ResponseHash, &response); err != nil || response.ID != prior.CustomerID || response.CustomerNo != resource.CustomerNo {
 		return nil, ErrCreateReplayInvalid
 	}
 	return &response, nil
