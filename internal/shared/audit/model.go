@@ -21,7 +21,7 @@ type Event struct {
 	Operation         string    `gorm:"size:64;not null"`
 	ResourceType      string    `gorm:"size:64;not null"`
 	ResourceID        string    `gorm:"size:64;not null;index"`
-	ActorID           string    `gorm:"size:64;not null"`
+	ActorID           string    `gorm:"size:128;not null"`
 	ActorNameSnapshot string    `gorm:"size:200"`
 	BeforeJSON        []byte    `gorm:"type:json"`
 	AfterJSON         []byte    `gorm:"type:json"`

@@ -19,7 +19,7 @@ import (
 	"gorm.io/gorm/logger"
 )
 
-const revisionNotificationMigration = "000130_portal_report_notification_revisions.up.sql"
+const revisionNotificationMigration = "000132_portal_report_notification_revisions.up.sql"
 
 // openDisposableReportMySQL 创建本任务专用的空库，拒绝非隔离测试入口。
 // 参数：t为测试上下文。

@@ -23,8 +23,13 @@ func TestRepositoryMigrationsAreAssignedExactlyOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(crm.Entries) != 80 || len(portal.Entries) != 44 {
+	if len(crm.Entries) != 82 || len(portal.Entries) != 45 {
 		t.Fatalf("unexpected plan lengths: crm=%d portal=%d", len(crm.Entries), len(portal.Entries))
+	}
+	last := portal.Entries[len(portal.Entries)-2:]
+	if last[0].File != "000131_portal_request_audit_outbox_delivered_index.up.sql" ||
+		last[1].File != "000132_portal_report_notification_revisions.up.sql" {
+		t.Fatalf("portal revisions must follow published audit index: %v", last)
 	}
 	for _, plan := range []Plan{crm, portal} {
 		checksum := CombinedChecksum(plan)
@@ -96,10 +101,11 @@ func TestIntegratedSessionMigrationsPreservePublishedDDL(t *testing.T) {
 			t.Fatalf("column %s is added %d times", column, columns[column])
 		}
 	}
-	last := plan.Entries[len(plan.Entries)-3:]
-	if last[0].File != "000126_crm_oidc_session_idle.up.sql" ||
-		last[1].File != "000127_crm_handover_gate.up.sql" ||
-		last[2].File != "000128_crm_opportunity_win_confirmations.up.sql" {
+	last := plan.Entries[len(plan.Entries)-4:]
+	if last[0].File != "000127_crm_handover_gate.up.sql" ||
+		last[1].File != "000128_crm_opportunity_win_confirmations.up.sql" ||
+		last[2].File != "000130_crm_request_audit_outbox_delivered_index.up.sql" ||
+		last[3].File != "000133_import_provision_machine_actor.up.sql" {
 		t.Fatalf("new migrations must follow published main: %v", last)
 	}
 }
