@@ -65,7 +65,7 @@ func TestCustomerWritesFailClosedBeforePersistenceWhenOwnerDirectoryRejectsSelec
 		t.Fatalf("rejected owner selection reached persistence: %#v", repository)
 	}
 
-	request := UpdateRequest{OwnerUserID: " owner-b ", OwnerOrgID: " org-b ", Contacts: []UpdateContactInput{{Name: "联系人", Phone: stringPointer("13800138000"), IsRegistration: true}}}
+	request := UpdateRequest{OwnerUserID: " owner-b ", OwnerOrgID: " org-b ", Contacts: &[]UpdateContactInput{{Name: "联系人", Phone: stringPointer("13800138000"), IsRegistration: true}}}
 	if result, err := service.Update(ctx, 71, request); result != nil || !errors.Is(err, directoryErr) {
 		t.Fatalf("update result=%#v err=%v", result, err)
 	}

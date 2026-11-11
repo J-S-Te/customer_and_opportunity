@@ -49,20 +49,29 @@ type CreateRequest struct {
 	IdempotencyKey string `json:"-"`
 }
 
-// UpdateRequest 全量替换可编辑主数据和联系人集合；Version 显式处理并发编辑，Reason 写入审计链路。
+// UpdateRequest 全量替换可编辑主数据；Version 显式处理并发编辑，Reason 写入审计链路。
+// 联系人集合是可选子资源，见 Contacts 字段注释。
 type UpdateRequest struct {
-	Name                    string               `json:"name" binding:"required,max=200"`
-	UnifiedCreditCode       *string              `json:"unified_credit_code" binding:"omitempty,max=64"`
-	CustomerType            string               `json:"customer_type" binding:"required,max=64"`
-	Industry                string               `json:"industry" binding:"required,max=64"`
-	Region                  string               `json:"region" binding:"required,max=64"`
-	OwnerUserID             string               `json:"owner_user_id" binding:"required,max=64"`
-	OwnerOrgID              string               `json:"owner_org_id" binding:"omitempty,max=64"`
-	Contacts                []UpdateContactInput `json:"contacts" binding:"required,min=1,max=50,dive"`
-	DuplicateOverride       bool                 `json:"duplicate_override"`
-	DuplicateOverrideReason string               `json:"duplicate_override_reason" binding:"omitempty,max=500"`
-	Version                 uint64               `json:"version" binding:"required"`
-	Reason                  string               `json:"reason" binding:"required,max=500"`
+	Name                    string  `json:"name" binding:"required,max=200"`
+	UnifiedCreditCode       *string `json:"unified_credit_code" binding:"omitempty,max=64"`
+	CustomerType            string  `json:"customer_type" binding:"required,max=64"`
+	Industry                string  `json:"industry" binding:"required,max=64"`
+	Region                  string  `json:"region" binding:"required,max=64"`
+	OwnerUserID             string  `json:"owner_user_id" binding:"required,max=64"`
+	OwnerOrgID              string  `json:"owner_org_id" binding:"omitempty,max=64"`
+	DuplicateOverride       bool    `json:"duplicate_override"`
+	DuplicateOverrideReason string  `json:"duplicate_override_reason" binding:"omitempty,max=500"`
+	// Contacts 用指针区分“未提交”和“整表替换”：
+	//   - nil（字段缺省或显式 null）：本次更新不触碰数据库中的既有联系人，不校验数量，
+	//     因而“只改客户名称”不再被迫重传完整联系人清单；
+	//   - 非空数组：沿用整表替换语义（软删除旧行后重建），继续执行注册联系人唯一性校验；
+	//   - 空数组：同样按“未提交”处理，即保留既有联系人。这是刻意取舍：空数组既不能证明
+	//     调用方确实要清空联系人，也可能是尚未回填联系人的旧前端提交的结果；把它当清空会
+	//     静默丢失联系人和 is_registration 标记，因此宁可忽略。真正的清空能力应通过显式
+	//     接口提供，不能由缺省值/空数组隐式触发。
+	Contacts *[]UpdateContactInput `json:"contacts" binding:"omitempty,max=50,dive"`
+	Version  uint64                `json:"version" binding:"required"`
+	Reason   string                `json:"reason" binding:"required,max=500"`
 }
 
 type StatusChangeRequest struct {

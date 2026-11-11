@@ -62,7 +62,7 @@ func TestCustomerUpdateWithoutOwnerDirectoryRejectsOwnerChange(t *testing.T) {
 			result, err := service.Update(ctx, 7, UpdateRequest{
 				Name: "客户甲", CustomerType: "企业", Industry: "软件", Region: "华东",
 				OwnerUserID: tc.ownerUserID, OwnerOrgID: tc.ownerOrgID,
-				Contacts: []UpdateContactInput{{Name: "张三", IsRegistration: true}},
+				Contacts: &[]UpdateContactInput{{Name: "张三", IsRegistration: true}},
 				Version:  2, Reason: "调整负责人",
 			})
 			if result != nil || !errors.Is(err, ownerdirectory.ErrUnavailable) {
@@ -84,7 +84,7 @@ func TestCustomerUpdateWithoutOwnerDirectoryKeepsNonOwnerUpdates(t *testing.T) {
 	_, err := service.Update(ctx, 7, UpdateRequest{
 		Name: "客户甲", CustomerType: "企业", Industry: "软件", Region: "华东",
 		OwnerUserID: "sales-a", OwnerOrgID: "org-a",
-		Contacts: []UpdateContactInput{{Name: "张三", IsRegistration: true}},
+		Contacts: &[]UpdateContactInput{{Name: "张三", IsRegistration: true}},
 		Version:  2, Reason: "更新客户资料",
 	})
 	// 已作废客户在负责人门禁之后的既有校验处被拒绝，证明未因目录缺失提前 fail-closed。
