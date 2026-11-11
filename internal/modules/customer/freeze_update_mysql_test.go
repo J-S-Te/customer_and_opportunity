@@ -51,7 +51,7 @@ func TestCustomerUpdateOwnerChangeRejectsFrozenOwnerOnMySQL(t *testing.T) {
 	_, err = service.Update(ctx, customer.ID, UpdateRequest{
 		Name: "冻结验收客户", CustomerType: "ENTERPRISE", Industry: "IT", Region: "CN",
 		OwnerUserID: "frozen-owner", OwnerOrgID: "org-2", Version: 1, Reason: "更换负责人",
-		Contacts: []UpdateContactInput{{Name: "联系人", IsRegistration: true}},
+		Contacts: &[]UpdateContactInput{{Name: "联系人", IsRegistration: true}},
 	})
 	if !errors.Is(err, ErrOwnerFrozenByHandover) {
 		t.Fatalf("update err=%v, want ErrOwnerFrozenByHandover", err)

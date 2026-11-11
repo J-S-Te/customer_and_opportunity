@@ -155,7 +155,7 @@ func TestCustomerUpdateHiddenDuplicateDoesNotDiscloseCandidateSummary(t *testing
 	request := UpdateRequest{
 		Name: "本人客户", CustomerType: "企业", Industry: "软件", Region: "华东",
 		OwnerUserID: "sales-a", OwnerOrgID: "org-a",
-		Contacts: []UpdateContactInput{{Name: "张三", IsRegistration: true}},
+		Contacts: &[]UpdateContactInput{{Name: "张三", IsRegistration: true}},
 		Version:  2, Reason: "更新客户资料",
 	}
 

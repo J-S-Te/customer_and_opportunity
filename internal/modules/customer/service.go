@@ -44,6 +44,9 @@ type Service struct {
 	importGateway ImportFileGateway
 	importSources ImportSourceRepository
 	now           func() time.Time
+	// 更新事务在生产环境绑定 GORM 事务；保留该接缝以便聚焦测试用假仓储验证完整更新路径，
+	// 与 opportunity.Service 的事务接缝保持同一约定。
+	updateTransaction func(context.Context, func(context.Context) error) error
 }
 
 type ImportFileGateway interface {
@@ -52,6 +55,9 @@ type ImportFileGateway interface {
 
 func NewService(db *gorm.DB, repo Repository, auditWriter audit.Writer, codec *security.SensitiveCodec) *Service {
 	service := &Service{db: db, repo: repo, audit: auditWriter, codec: codec, now: func() time.Time { return time.Now().UTC() }}
+	service.updateTransaction = func(ctx context.Context, fn func(context.Context) error) error {
+		return database.WithTransaction(ctx, db, fn)
+	}
 	// XLSX 安全边界由进程内的有界 ZIP/OOXML 校验和业务字段校验承担。
 	// 外部杀毒引擎不是客户导入可用性的前置条件。
 	service.scanner = CodeImportScanner{}
@@ -408,6 +414,13 @@ func (s *Service) persistCreatedCustomer(ctx context.Context, principal auth.Pri
 	return s.audit.Write(ctx, audit.Event{TenantID: principal.TenantID, Module: "customer", Operation: "CREATE", ResourceType: "customer", ResourceID: stringUint(model.ID), ActorID: principal.UserID, ActorNameSnapshot: principal.DisplayName, AfterJSON: audit.JSON(toResponse(model)), Reason: reason, Result: "SUCCESS"})
 }
 
+func (s *Service) runUpdateTransaction(ctx context.Context, fn func(context.Context) error) error {
+	if s.updateTransaction != nil {
+		return s.updateTransaction(ctx, fn)
+	}
+	return database.WithTransaction(ctx, s.db, fn)
+}
+
 func (s *Service) Update(ctx context.Context, id uint64, request UpdateRequest) (*Response, error) {
 	principal, err := principalFromContext(ctx)
 	if err != nil {
@@ -420,8 +433,13 @@ func (s *Service) Update(ctx context.Context, id uint64, request UpdateRequest) 
 	request.OwnerUserID = strings.TrimSpace(request.OwnerUserID)
 	request.OwnerOrgID = strings.TrimSpace(request.OwnerOrgID)
 	request.Reason = strings.TrimSpace(request.Reason)
-	if err = validateUpdateRegistrationContacts(request.Contacts); err != nil {
-		return nil, err
+	// 联系人集合是可选子资源：只有提交非空数组才表示整表替换。nil（缺省/null）和空数组
+	// 都保留数据库既有联系人，因此不能对它们执行“恰好一个注册联系人”的集合校验。
+	replaceContacts := request.Contacts != nil && len(*request.Contacts) > 0
+	if replaceContacts {
+		if err = validateUpdateRegistrationContacts(*request.Contacts); err != nil {
+			return nil, err
+		}
 	}
 	if s.owners != nil {
 		if err = s.owners.Validate(ctx, request.OwnerUserID, request.OwnerOrgID); err != nil {
@@ -488,42 +506,46 @@ func (s *Service) Update(ctx context.Context, id uint64, request UpdateRequest) 
 	current.CustomerType, current.Industry, current.Region, current.OwnerUserID, current.OwnerOrgID, current.UpdatedBy = request.CustomerType, request.Industry, request.Region, request.OwnerUserID, request.OwnerOrgID, principal.UserID
 	// 更新 DTO 的敏感字段使用指针表达“未提交”；未提交时沿用旧密文，避免前端只拿到脱敏值后
 	// 又把掩码覆盖回数据库。全量替换仍通过 ID 校验阻止挂接其他客户的联系人。
-	existingContacts := make(map[uint64]Contact, len(current.Contacts))
-	for _, contact := range current.Contacts {
-		existingContacts[contact.ID] = contact
-	}
-	current.Contacts = nil
-	for index, item := range request.Contacts {
-		previous, exists := existingContacts[item.ID]
-		if item.ID != 0 && !exists {
-			return nil, ErrInvalidContact
+	// 未提交联系人（nil 或空数组）时完全跳过这段重建：current.Contacts 保持 FindByID 预加载的
+	// 既有行，因此记录 ID、is_registration 标记、version 与审计 diff 都不被改动。
+	if replaceContacts {
+		existingContacts := make(map[uint64]Contact, len(current.Contacts))
+		for _, contact := range current.Contacts {
+			existingContacts[contact.ID] = contact
 		}
-		phoneCipher, phoneMasked := previous.PhoneCipher, previous.PhoneMasked
-		if item.Phone != nil {
-			if strings.TrimSpace(*item.Phone) == "" {
+		current.Contacts = nil
+		for index, item := range *request.Contacts {
+			previous, exists := existingContacts[item.ID]
+			if item.ID != 0 && !exists {
 				return nil, ErrInvalidContact
 			}
-			var encryptErr error
-			phoneCipher, encryptErr = s.codec.Encrypt(*item.Phone)
-			if encryptErr != nil {
-				return nil, encryptErr
+			phoneCipher, phoneMasked := previous.PhoneCipher, previous.PhoneMasked
+			if item.Phone != nil {
+				if strings.TrimSpace(*item.Phone) == "" {
+					return nil, ErrInvalidContact
+				}
+				var encryptErr error
+				phoneCipher, encryptErr = s.codec.Encrypt(*item.Phone)
+				if encryptErr != nil {
+					return nil, encryptErr
+				}
+				phoneMasked = security.MaskPhone(*item.Phone)
+			} else if !exists {
+				return nil, ErrInvalidContact
 			}
-			phoneMasked = security.MaskPhone(*item.Phone)
-		} else if !exists {
-			return nil, ErrInvalidContact
-		}
-		emailCipher, emailMasked := previous.EmailCipher, previous.EmailMasked
-		if item.Email != nil {
-			var encryptErr error
-			emailCipher, encryptErr = s.codec.Encrypt(*item.Email)
-			if encryptErr != nil {
-				return nil, encryptErr
+			emailCipher, emailMasked := previous.EmailCipher, previous.EmailMasked
+			if item.Email != nil {
+				var encryptErr error
+				emailCipher, encryptErr = s.codec.Encrypt(*item.Email)
+				if encryptErr != nil {
+					return nil, encryptErr
+				}
+				emailMasked = maskEmail(*item.Email)
 			}
-			emailMasked = maskEmail(*item.Email)
+			current.Contacts = append(current.Contacts, Contact{Model: database.Model{TenantID: principal.TenantID, CreatedBy: principal.UserID, UpdatedBy: principal.UserID, Version: 1}, CustomerID: id, Name: strings.TrimSpace(item.Name), PhoneCipher: phoneCipher, PhoneMasked: phoneMasked, EmailCipher: emailCipher, EmailMasked: emailMasked, IsRegistration: item.IsRegistration, SortOrder: index})
 		}
-		current.Contacts = append(current.Contacts, Contact{Model: database.Model{TenantID: principal.TenantID, CreatedBy: principal.UserID, UpdatedBy: principal.UserID, Version: 1}, CustomerID: id, Name: strings.TrimSpace(item.Name), PhoneCipher: phoneCipher, PhoneMasked: phoneMasked, EmailCipher: emailCipher, EmailMasked: emailMasked, IsRegistration: item.IsRegistration, SortOrder: index})
 	}
-	err = database.WithTransaction(ctx, s.db, func(txCtx context.Context) error {
+	err = s.runUpdateTransaction(ctx, func(txCtx context.Context) error {
 		// 负责人变更同样在事务内加门闩复核：预检与写入之间可能刚好落库冻结。
 		if ownerChanged {
 			if guardErr := s.guardOwnerWrite(txCtx, principal.TenantID, request.OwnerUserID); guardErr != nil {
@@ -533,8 +555,12 @@ func (s *Service) Update(ctx context.Context, id uint64, request UpdateRequest) 
 		if updateErr := s.repo.Update(txCtx, current, request.Version); updateErr != nil {
 			return updateErr
 		}
-		if updateErr := s.repo.ReplaceContacts(txCtx, current); updateErr != nil {
-			return updateErr
+		// 只有整表替换才软删除并重建联系人；保留路径不触碰联系人表，避免无意义的重建
+		// 造成联系人 ID 漂移和 is_registration 标记丢失。
+		if replaceContacts {
+			if updateErr := s.repo.ReplaceContacts(txCtx, current); updateErr != nil {
+				return updateErr
+			}
 		}
 		for _, log := range buildChangeLogs(principal, id, before, toResponse(current), request.Reason, requestctx.ID(txCtx), s.now()) {
 			if updateErr := s.repo.CreateChangeLog(txCtx, &log); updateErr != nil {
