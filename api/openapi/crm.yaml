@@ -207,6 +207,8 @@ paths:
     get: {$ref: '#/components/x-operations/notificationUnreadCount'}
   /api/v1/notifications/{id}/read:
     post: {$ref: '#/components/x-operations/readNotification'}
+  /api/v1/notifications/read/delete:
+    post: {$ref: '#/components/x-operations/deleteReadNotifications'}
   /api/v1/presale/execution-departments:
     get: {$ref: '#/components/x-operations/listPresaleExecutionDepartments'}
   /api/v1/presale/requests:
@@ -765,6 +767,7 @@ components:
     listNotifications: &notificationRead {<<: *crmRead, operationId: listNotifications, tags: [Notification], x-permission: opportunity.read or presale.read}
     notificationUnreadCount: {<<: *notificationRead, operationId: notificationUnreadCount}
     readNotification: {<<: *notificationRead, operationId: readNotification, parameters: [{$ref: '#/components/parameters/NumericID'}]}
+    deleteReadNotifications: {<<: *notificationRead, operationId: deleteReadNotifications}
     listPresaleExecutionDepartments: &presaleRead {<<: *crmRead, operationId: listPresaleExecutionDepartments, tags: [Presale], x-permission: presale.read}
     listPresaleRequests: {<<: *presaleRead, operationId: listPresaleRequests}
     createPresaleRequest: {<<: *presaleRead, operationId: createPresaleRequest, x-permission: presale.create, description: Creates a presale request only for an accessible opportunity whose status is FOLLOWING and stage is 初步接触、需求沟通、方案制定、报价 or 投标. The request never changes the opportunity stage., parameters: [{$ref: '#/components/parameters/IdempotencyKey'}], requestBody: {$ref: '#/components/requestBodies/PresaleCreate'}}
