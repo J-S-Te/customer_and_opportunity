@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/portal/localidentity"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/databasepool"
 	"time"
 
 	"gorm.io/driver/mysql"
@@ -15,9 +16,9 @@ type App struct {
 	worker *Worker
 }
 
-// New 构造既有CRM项目同步器，启动前拒绝本地目录或冲突权威。
-// 参数：ctx为生命周期，cfg为固定来源配置。
-// 返回值：真实同步器或来源、依赖错误。
+// New 构造既有CRM项目同步器，启动前拒绝本地目录或冲突权威，并配置独立连接池预算。
+// 参数：ctx 为进程装配上下文，cfg 为既有业务和外部依赖配置。
+// 返回值：应用实例；配置或依赖初始化失败返回错误。
 func New(ctx context.Context, cfg Config) (*App, error) {
 	if err := validateDirectoryMode(cfg.LocalDirectoryMode); err != nil {
 		return nil, err
@@ -26,7 +27,11 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 	if err != nil {
 		return nil, fmt.Errorf("configure Portal project source: %w", err)
 	}
-	db, err := gorm.Open(mysql.Open(cfg.MySQLDSN), &gorm.Config{DisableAutomaticPing: true})
+	db, err := databasepool.Open(
+		mysql.Open(cfg.MySQLDSN),
+		&gorm.Config{DisableAutomaticPing: true},
+		databasepool.Worker,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("open Portal project database: %w", err)
 	}

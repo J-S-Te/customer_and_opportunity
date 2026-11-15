@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	core "github.com/J-S-Te/license-core"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/databasepool"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/workerlicense"
 	"log"
 	"time"
@@ -24,8 +25,15 @@ type App struct {
 	now    func() time.Time
 }
 
+// New 装配当前模块的长期任务并配置独立连接池预算。
+// 参数：config 为既有业务和外部依赖配置。
+// 返回值：应用实例；配置或依赖初始化失败返回错误。
 func New(config Config) (*App, error) {
-	db, err := gorm.Open(mysql.Open(config.MySQLDSN), &gorm.Config{DisableAutomaticPing: true})
+	db, err := databasepool.Open(
+		mysql.Open(config.MySQLDSN),
+		&gorm.Config{DisableAutomaticPing: true},
+		databasepool.Worker,
+	)
 	if err != nil {
 		return nil, err
 	}

@@ -107,6 +107,9 @@ func (h *Handler) AttachmentCapabilities(c *gin.Context) {
 	response.OK(c, value)
 }
 
+// CreateAttachmentUpload 用途：处理现有业务请求并保留安全的参数诊断。
+// 参数：c 为已认证 HTTP 上下文，权限和业务校验保持原有规则。
+// 返回值：无；向客户端写入业务回执或字段、协议错误。
 func (h *Handler) CreateAttachmentUpload(c *gin.Context) {
 	id, err := attachmentOpportunityID(c)
 	if err != nil {
@@ -115,7 +118,7 @@ func (h *Handler) CreateAttachmentUpload(c *gin.Context) {
 	}
 	var input AttachmentCreateRequest
 	if err = requestbody.DecodeJSON(c, &input); err != nil {
-		response.Error(c, invalidJSON())
+		response.Error(c, requestbody.InvalidArgument(err, &input))
 		return
 	}
 	input.IdempotencyKey = c.GetHeader("Idempotency-Key")
@@ -127,6 +130,9 @@ func (h *Handler) CreateAttachmentUpload(c *gin.Context) {
 	response.Created(c, value)
 }
 
+// CompleteAttachmentUpload 用途：处理现有业务请求并保留安全的参数诊断。
+// 参数：c 为已认证 HTTP 上下文，权限和业务校验保持原有规则。
+// 返回值：无；向客户端写入业务回执或字段、协议错误。
 func (h *Handler) CompleteAttachmentUpload(c *gin.Context) {
 	id, err := attachmentOpportunityID(c)
 	if err != nil {
@@ -135,7 +141,7 @@ func (h *Handler) CompleteAttachmentUpload(c *gin.Context) {
 	}
 	var input AttachmentCompleteRequest
 	if err = requestbody.DecodeJSON(c, &input); err != nil {
-		response.Error(c, invalidJSON())
+		response.Error(c, requestbody.InvalidArgument(err, &input))
 		return
 	}
 	input.IdempotencyKey = c.GetHeader("Idempotency-Key")
@@ -202,10 +208,13 @@ func (h *Handler) DownloadAttachment(c *gin.Context) {
 	}
 }
 
+// ApplyAttachmentScan 用途：处理现有业务请求并保留安全的参数诊断。
+// 参数：c 为已认证 HTTP 上下文，权限和业务校验保持原有规则。
+// 返回值：无；向客户端写入业务回执或字段、协议错误。
 func (h *Handler) ApplyAttachmentScan(c *gin.Context) {
 	var input AttachmentScanEvent
 	if err := requestbody.DecodeJSON(c, &input); err != nil {
-		response.Error(c, invalidJSON())
+		response.Error(c, requestbody.InvalidArgument(err, &input))
 		return
 	}
 	value, err := h.attachments.ApplyScan(c.Request.Context(), input)
@@ -264,6 +273,9 @@ func (h *Handler) ListCatalogItems(c *gin.Context) {
 	response.OK(c, values)
 }
 
+// CreateCatalogItem 用途：处理现有业务请求并保留安全的参数诊断。
+// 参数：c 为已认证 HTTP 上下文，权限和业务校验保持原有规则。
+// 返回值：无；向客户端写入业务回执或字段、协议错误。
 func (h *Handler) CreateCatalogItem(c *gin.Context) {
 	if !validQueryKeys(c) {
 		response.Error(c, ErrInvalidQuery)
@@ -271,7 +283,7 @@ func (h *Handler) CreateCatalogItem(c *gin.Context) {
 	}
 	var input CatalogCreateRequest
 	if err := requestbody.DecodeJSON(c, &input); err != nil {
-		response.Error(c, invalidJSON())
+		response.Error(c, requestbody.InvalidArgument(err, &input))
 		return
 	}
 	input.IdempotencyKey = c.GetHeader("Idempotency-Key")
@@ -288,6 +300,9 @@ func (h *Handler) CreateCatalogItem(c *gin.Context) {
 	response.Created(c, value)
 }
 
+// UpdateCatalogItem 用途：处理现有业务请求并保留安全的参数诊断。
+// 参数：c 为已认证 HTTP 上下文，权限和业务校验保持原有规则。
+// 返回值：无；向客户端写入业务回执或字段、协议错误。
 func (h *Handler) UpdateCatalogItem(c *gin.Context) {
 	if !validQueryKeys(c) {
 		response.Error(c, ErrInvalidQuery)
@@ -300,7 +315,7 @@ func (h *Handler) UpdateCatalogItem(c *gin.Context) {
 	}
 	var input CatalogUpdateRequest
 	if err = requestbody.DecodeJSON(c, &input); err != nil {
-		response.Error(c, invalidJSON())
+		response.Error(c, requestbody.InvalidArgument(err, &input))
 		return
 	}
 	catalog, err := h.catalogService()
@@ -316,6 +331,9 @@ func (h *Handler) UpdateCatalogItem(c *gin.Context) {
 	response.OK(c, value)
 }
 
+// DeleteCatalogItem 用途：处理现有业务请求并保留安全的参数诊断。
+// 参数：c 为已认证 HTTP 上下文，权限和业务校验保持原有规则。
+// 返回值：无；向客户端写入业务回执或字段、协议错误。
 func (h *Handler) DeleteCatalogItem(c *gin.Context) {
 	if !validQueryKeys(c) {
 		response.Error(c, ErrInvalidQuery)
@@ -328,7 +346,7 @@ func (h *Handler) DeleteCatalogItem(c *gin.Context) {
 	}
 	var input CatalogDeleteRequest
 	if err = requestbody.DecodeJSON(c, &input); err != nil {
-		response.Error(c, invalidJSON())
+		response.Error(c, requestbody.InvalidArgument(err, &input))
 		return
 	}
 	input.IdempotencyKey = c.GetHeader("Idempotency-Key")
@@ -364,6 +382,9 @@ func (h *Handler) StageAlertRules(c *gin.Context) {
 	response.OK(c, values)
 }
 
+// UpdateStageAlertRule 用途：处理现有业务请求并保留安全的参数诊断。
+// 参数：c 为已认证 HTTP 上下文，权限和业务校验保持原有规则。
+// 返回值：无；向客户端写入业务回执或字段、协议错误。
 func (h *Handler) UpdateStageAlertRule(c *gin.Context) {
 	if !validQueryKeys(c) {
 		response.Error(c, ErrInvalidQuery)
@@ -371,7 +392,7 @@ func (h *Handler) UpdateStageAlertRule(c *gin.Context) {
 	}
 	var input UpdateStageAlertRuleRequest
 	if err := requestbody.DecodeJSON(c, &input); err != nil {
-		response.Error(c, invalidJSON())
+		response.Error(c, requestbody.InvalidArgument(err, &input))
 		return
 	}
 	value, err := h.alerts.UpdateRule(c.Request.Context(), c.Param("stage"), input)
@@ -425,6 +446,9 @@ func (h *Handler) ReadStageAlert(c *gin.Context) {
 	response.OK(c, gin.H{"read": true})
 }
 
+// Create 用途：处理现有业务请求并保留安全的参数诊断。
+// 参数：c 为已认证 HTTP 上下文，权限和业务校验保持原有规则。
+// 返回值：无；向客户端写入业务回执或字段、协议错误。
 func (h *Handler) Create(c *gin.Context) {
 	if !validQueryKeys(c) {
 		response.Error(c, ErrInvalidQuery)
@@ -432,7 +456,7 @@ func (h *Handler) Create(c *gin.Context) {
 	}
 	var input CreateRequest
 	if err := requestbody.DecodeJSON(c, &input); err != nil {
-		response.Error(c, invalidJSON())
+		response.Error(c, requestbody.InvalidArgument(err, &input))
 		return
 	}
 	input.IdempotencyKey = c.GetHeader("Idempotency-Key")
@@ -480,6 +504,9 @@ func (h *Handler) List(c *gin.Context) {
 	response.OK(c, result)
 }
 
+// Update 用途：处理现有业务请求并保留安全的参数诊断。
+// 参数：c 为已认证 HTTP 上下文，权限和业务校验保持原有规则。
+// 返回值：无；向客户端写入业务回执或字段、协议错误。
 func (h *Handler) Update(c *gin.Context) {
 	if !validQueryKeys(c) {
 		response.Error(c, ErrInvalidQuery)
@@ -492,7 +519,7 @@ func (h *Handler) Update(c *gin.Context) {
 	}
 	var input UpdateRequest
 	if err = requestbody.DecodeJSON(c, &input); err != nil {
-		response.Error(c, invalidJSON())
+		response.Error(c, requestbody.InvalidArgument(err, &input))
 		return
 	}
 	result, err := h.service.Update(c.Request.Context(), id, input)
@@ -503,6 +530,9 @@ func (h *Handler) Update(c *gin.Context) {
 	response.OK(c, result)
 }
 
+// ChangeOwner 用途：处理现有业务请求并保留安全的参数诊断。
+// 参数：c 为已认证 HTTP 上下文，权限和业务校验保持原有规则。
+// 返回值：无；向客户端写入业务回执或字段、协议错误。
 func (h *Handler) ChangeOwner(c *gin.Context) {
 	if !validQueryKeys(c) {
 		response.Error(c, ErrInvalidQuery)
@@ -515,7 +545,7 @@ func (h *Handler) ChangeOwner(c *gin.Context) {
 	}
 	var input ChangeOwnerRequest
 	if err = requestbody.DecodeJSON(c, &input); err != nil {
-		response.Error(c, invalidJSON())
+		response.Error(c, requestbody.InvalidArgument(err, &input))
 		return
 	}
 	input.IdempotencyKey = c.GetHeader("Idempotency-Key")
@@ -586,6 +616,9 @@ func (h *Handler) ListMemberTerms(c *gin.Context) {
 	response.OK(c, result)
 }
 
+// ReplaceMembers 用途：处理现有业务请求并保留安全的参数诊断。
+// 参数：c 为已认证 HTTP 上下文，权限和业务校验保持原有规则。
+// 返回值：无；向客户端写入业务回执或字段、协议错误。
 func (h *Handler) ReplaceMembers(c *gin.Context) {
 	if !validQueryKeys(c) {
 		response.Error(c, ErrInvalidQuery)
@@ -598,7 +631,7 @@ func (h *Handler) ReplaceMembers(c *gin.Context) {
 	}
 	var input ReplaceMembersRequest
 	if err = requestbody.DecodeJSON(c, &input); err != nil {
-		response.Error(c, invalidJSON())
+		response.Error(c, requestbody.InvalidArgument(err, &input))
 		return
 	}
 	result, err := h.service.ReplaceMembers(c.Request.Context(), id, input)
@@ -609,7 +642,11 @@ func (h *Handler) ReplaceMembers(c *gin.Context) {
 	response.OK(c, result)
 }
 
-func (h *Handler) Void(c *gin.Context)    { h.changeLifecycle(c, true) }
+func (h *Handler) Void(c *gin.Context) { h.changeLifecycle(c, true) }
+
+// Restore 用途：处理现有业务请求并保留安全的参数诊断。
+// 参数：c 为已认证 HTTP 上下文，权限和业务校验保持原有规则。
+// 返回值：无；向客户端写入业务回执或字段、协议错误。
 func (h *Handler) Restore(c *gin.Context) { h.changeLifecycle(c, false) }
 
 func (h *Handler) changeLifecycle(c *gin.Context, void bool) {
@@ -624,7 +661,7 @@ func (h *Handler) changeLifecycle(c *gin.Context, void bool) {
 	}
 	var input LifecycleRequest
 	if err = requestbody.DecodeJSON(c, &input); err != nil {
-		response.Error(c, invalidJSON())
+		response.Error(c, requestbody.InvalidArgument(err, &input))
 		return
 	}
 	var result *Response
@@ -640,6 +677,9 @@ func (h *Handler) changeLifecycle(c *gin.Context, void bool) {
 	response.OK(c, result)
 }
 
+// ChangeStage 用途：处理现有业务请求并保留安全的参数诊断。
+// 参数：c 为已认证 HTTP 上下文，权限和业务校验保持原有规则。
+// 返回值：无；向客户端写入业务回执或字段、协议错误。
 func (h *Handler) ChangeStage(c *gin.Context) {
 	if !validQueryKeys(c) {
 		response.Error(c, ErrInvalidQuery)
@@ -652,7 +692,7 @@ func (h *Handler) ChangeStage(c *gin.Context) {
 	}
 	var input StageChangeRequest
 	if err = requestbody.DecodeJSON(c, &input); err != nil {
-		response.Error(c, invalidJSON())
+		response.Error(c, requestbody.InvalidArgument(err, &input))
 		return
 	}
 	result, err := h.service.ChangeStage(c.Request.Context(), id, input)
@@ -663,6 +703,9 @@ func (h *Handler) ChangeStage(c *gin.Context) {
 	response.OK(c, result)
 }
 
+// ApplyExternalStatus 用途：处理现有业务请求并保留安全的参数诊断。
+// 参数：c 为已认证 HTTP 上下文，权限和业务校验保持原有规则。
+// 返回值：无；向客户端写入业务回执或字段、协议错误。
 func (h *Handler) ApplyExternalStatus(c *gin.Context) {
 	if !validQueryKeys(c) {
 		response.Error(c, ErrInvalidQuery)
@@ -670,7 +713,7 @@ func (h *Handler) ApplyExternalStatus(c *gin.Context) {
 	}
 	var input ExternalStatusRequest
 	if err := requestbody.DecodeJSON(c, &input); err != nil {
-		response.Error(c, invalidJSON())
+		response.Error(c, requestbody.InvalidArgument(err, &input))
 		return
 	}
 	result, err := h.service.ApplyExternalStatus(c.Request.Context(), input)
@@ -712,6 +755,9 @@ func (h *Handler) StageHistory(c *gin.Context) {
 	response.OK(c, result)
 }
 
+// CreateFollowup 用途：处理现有业务请求并保留安全的参数诊断。
+// 参数：c 为已认证 HTTP 上下文，权限和业务校验保持原有规则。
+// 返回值：无；向客户端写入业务回执或字段、协议错误。
 func (h *Handler) CreateFollowup(c *gin.Context) {
 	if !validQueryKeys(c) {
 		response.Error(c, ErrInvalidQuery)
@@ -724,7 +770,7 @@ func (h *Handler) CreateFollowup(c *gin.Context) {
 	}
 	var input FollowupCreateRequest
 	if err = requestbody.DecodeJSON(c, &input); err != nil {
-		response.Error(c, invalidJSON())
+		response.Error(c, requestbody.InvalidArgument(err, &input))
 		return
 	}
 	result, err := h.service.CreateFollowup(c.Request.Context(), id, input)
@@ -753,6 +799,9 @@ func (h *Handler) ListFollowups(c *gin.Context) {
 	response.OK(c, result)
 }
 
+// CompleteTerminalTodo 用途：处理现有业务请求并保留安全的参数诊断。
+// 参数：c 为已认证 HTTP 上下文，权限和业务校验保持原有规则。
+// 返回值：无；向客户端写入业务回执或字段、协议错误。
 func (h *Handler) CompleteTerminalTodo(c *gin.Context) {
 	if !validQueryKeys(c) {
 		response.Error(c, ErrInvalidQuery)
@@ -765,7 +814,7 @@ func (h *Handler) CompleteTerminalTodo(c *gin.Context) {
 	}
 	var input TerminalTodoRequest
 	if err = requestbody.DecodeJSON(c, &input); err != nil {
-		response.Error(c, invalidJSON())
+		response.Error(c, requestbody.InvalidArgument(err, &input))
 		return
 	}
 	result, err := h.service.CompleteTerminalTodo(c.Request.Context(), id, input)
@@ -816,6 +865,9 @@ func (h *Handler) launchExternal(c *gin.Context, launchType string) {
 	response.OK(c, result)
 }
 
+// ContractTransfer 用途：处理现有业务请求并保留安全的参数诊断。
+// 参数：c 为已认证 HTTP 上下文，权限和业务校验保持原有规则。
+// 返回值：无；向客户端写入业务回执或字段、协议错误。
 func (h *Handler) ContractTransfer(c *gin.Context) {
 	if !validQueryKeys(c) {
 		response.Error(c, ErrInvalidQuery)
@@ -828,7 +880,7 @@ func (h *Handler) ContractTransfer(c *gin.Context) {
 	}
 	var input ContractTransferRequest
 	if err = requestbody.DecodeJSON(c, &input); err != nil {
-		response.Error(c, invalidJSON())
+		response.Error(c, requestbody.InvalidArgument(err, &input))
 		return
 	}
 	input.IdempotencyKey = c.GetHeader("Idempotency-Key")
@@ -840,6 +892,9 @@ func (h *Handler) ContractTransfer(c *gin.Context) {
 	response.OK(c, result)
 }
 
+// ContractLinkCallback 用途：处理现有业务请求并保留安全的参数诊断。
+// 参数：c 为已认证 HTTP 上下文，权限和业务校验保持原有规则。
+// 返回值：无；向客户端写入业务回执或字段、协议错误。
 func (h *Handler) ContractLinkCallback(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil || id == 0 {
@@ -848,7 +903,7 @@ func (h *Handler) ContractLinkCallback(c *gin.Context) {
 	}
 	var input ContractLinkRequest
 	if err = requestbody.DecodeJSON(c, &input); err != nil {
-		response.Error(c, invalidJSON())
+		response.Error(c, requestbody.InvalidArgument(err, &input))
 		return
 	}
 	// 事件 ID 是持久业务幂等坐标。要求
@@ -920,8 +975,11 @@ func validQueryKeys(c *gin.Context, allowed ...string) bool {
 	return true
 }
 
-func invalid(err error) error {
-	return apperror.WithDetails(apperror.New(400, "COMMON_INVALID_ARGUMENT", "invalid request"), err.Error())
+// invalid 用途：将路径标识解析失败转换为原有通用拒绝，避免回显输入值。
+// 参数：原解析错误仅用于调用方判定失败，不下发其诊断文本。
+// 返回值：保持原 HTTP 400 与错误码的安全错误。
+func invalid(_ error) error {
+	return apperror.New(400, "COMMON_INVALID_ARGUMENT", "invalid request")
 }
 
 func invalidJSON() error {
