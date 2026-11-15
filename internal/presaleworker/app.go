@@ -3,6 +3,7 @@ package presaleworker
 import (
 	"context"
 	"crypto/tls"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/databasepool"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/workerlicense"
 	"log"
 
@@ -25,6 +26,9 @@ type App struct {
 	temporalConfig TemporalConfig
 }
 
+// New 装配当前模块的长期任务并配置独立连接池预算。
+// 参数：cfg 为既有业务和外部依赖配置。
+// 返回值：应用实例；配置或依赖初始化失败返回错误。
 func New(cfg Config) (*App, error) {
 	var approval presale.ApprovalCommandPort
 	var pms presale.PMSPublisher
@@ -38,7 +42,11 @@ func New(cfg Config) (*App, error) {
 			return nil, err
 		}
 	}
-	db, err := gorm.Open(mysql.Open(cfg.MySQLDSN), &gorm.Config{})
+	db, err := databasepool.Open(
+		mysql.Open(cfg.MySQLDSN),
+		&gorm.Config{},
+		databasepool.Worker,
+	)
 	if err != nil {
 		return nil, err
 	}

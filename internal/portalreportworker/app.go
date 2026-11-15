@@ -15,6 +15,7 @@ import (
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/portal/report"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/portal/workerruntime"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/reportsecurity"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/databasepool"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
 )
@@ -30,9 +31,9 @@ type App struct {
 	heartbeatType string
 }
 
-// New 装配真实投递与安全摄取，显式本地模式仅允许摄取现有LOCAL来源。
-// 参数：cfg为固定作业与来源配置。
-// 返回值：工作器或来源、依赖错误。
+// New 装配真实投递与安全摄取，显式本地模式仅允许摄取现有LOCAL来源，并配置独立连接池预算。
+// 参数：cfg 为既有业务和外部依赖配置。
+// 返回值：应用实例；配置或依赖初始化失败返回错误。
 func New(cfg Config) (*App, error) {
 	if cfg.LocalDirectoryMode != "" && cfg.LocalDirectoryMode != "crm" && cfg.LocalDirectoryMode != "local" {
 		return nil, fmt.Errorf("invalid PORTAL_CUSTOMER_DIRECTORY_MODE")
@@ -48,7 +49,11 @@ func New(cfg Config) (*App, error) {
 			return nil, err
 		}
 	}
-	db, err := gorm.Open(mysql.Open(cfg.MySQLDSN), &gorm.Config{DisableAutomaticPing: true})
+	db, err := databasepool.Open(
+		mysql.Open(cfg.MySQLDSN),
+		&gorm.Config{DisableAutomaticPing: true},
+		databasepool.Worker,
+	)
 	if err != nil {
 		return nil, err
 	}

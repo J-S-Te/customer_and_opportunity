@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/portalinvite"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/databasepool"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
 )
@@ -14,8 +15,15 @@ type App struct {
 	worker *Worker
 }
 
+// New 装配当前模块的长期任务并配置独立连接池预算。
+// 参数：ctx 为进程装配上下文，cfg 为既有业务和外部依赖配置。
+// 返回值：应用实例；配置或依赖初始化失败返回错误。
 func New(ctx context.Context, cfg Config) (*App, error) {
-	db, err := gorm.Open(mysql.Open(cfg.MySQLDSN), &gorm.Config{DisableAutomaticPing: true})
+	db, err := databasepool.Open(
+		mysql.Open(cfg.MySQLDSN),
+		&gorm.Config{DisableAutomaticPing: true},
+		databasepool.Worker,
+	)
 	if err != nil {
 		return nil, err
 	}

@@ -56,3 +56,13 @@ func (h *Handler) MarkRead(c *gin.Context) {
 	}
 	response.OK(c, gin.H{"read": true})
 }
+
+// DeleteRead 软删除当前主体全部已读通知；只影响本人收件箱，不删除共享业务数据。
+func (h *Handler) DeleteRead(c *gin.Context) {
+	count, err := h.service.DeleteRead(c.Request.Context())
+	if err != nil {
+		response.Error(c, err)
+		return
+	}
+	response.OK(c, gin.H{"deleted_count": count})
+}

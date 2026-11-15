@@ -8,4 +8,6 @@ func RegisterRoutes(router *gin.RouterGroup, handler *Handler) {
 	router.GET("/notifications", handler.ListMine)
 	router.GET("/notifications/unread-count", handler.UnreadCount)
 	router.POST("/notifications/:id/read", handler.MarkRead)
+	// 删除已读只作用于当前主体的本地收件箱；详情/列表仍按个人边界重新校验。
+	router.POST("/notifications/read/delete", handler.DeleteRead)
 }

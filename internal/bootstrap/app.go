@@ -29,6 +29,7 @@ import (
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/apperror"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/audit"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/auth"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/databasepool"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/requestaudit"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/response"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/security"
@@ -49,12 +50,9 @@ type App struct {
 	background *shutdown.Group
 }
 
-// New 装配当前应用的配置、存储、认证及服务入口。
-// 参数：config为当前应用运行配置。
-// 返回值：装配后的应用或认证实例；配置与依赖装配失败时返回错误。
-// New 按运行配置装配 CRM 身份、业务服务及显式集成能力。
-// 参数：config 为已校验的 CRM 配置。
-// 返回值：可运行应用；数据库、身份或适配器装配失败时返回错误。
+// New 按运行配置装配 CRM 身份、业务服务及显式集成能力，并配置独立连接池预算。
+// 参数：config 为既有业务和外部依赖配置。
+// 返回值：应用实例；配置或依赖初始化失败返回错误。
 func New(config Config) (*App, error) {
 	licenseCtx, licenseCancel := context.WithCancel(context.Background())
 	started := false
@@ -69,7 +67,11 @@ func New(config Config) (*App, error) {
 	}
 	// 这里仅完成连接池装配，健康检查再执行真实 Ping；这样依赖未就绪会体现在健康状态，
 	// 而配置、密钥或协议适配器错误仍会让进程在开放端口前失败。
-	db, err := gorm.Open(mysql.Open(config.MySQLDSN), &gorm.Config{DisableAutomaticPing: true})
+	db, err := databasepool.Open(
+		mysql.Open(config.MySQLDSN),
+		&gorm.Config{DisableAutomaticPing: true},
+		databasepool.API,
+	)
 	if err != nil {
 		return nil, err
 	}

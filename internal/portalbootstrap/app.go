@@ -27,6 +27,7 @@ import (
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/portal/workerruntime"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/projectexportworker"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/audit"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/databasepool"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/request"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/requestaudit"
 	central "github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/sessiongovernance"
@@ -46,8 +47,8 @@ type App struct {
 	reportProviders *reportDownloadProviders
 }
 
-// New 用途：装配 Portal 配置、存储、认证及限流治理日志。
-// 参数：ctx 为应用上下文；config 为已解析运行配置。
+// New 用途：装配 Portal 配置、存储、认证及限流治理日志，并配置独立连接池预算。
+// 参数：ctx 为进程装配上下文，config 为既有业务和外部依赖配置。
 // 返回值：应用实例；配置或依赖初始化失败返回错误。
 func New(ctx context.Context, config Config) (*App, error) {
 	if err := config.validate(); err != nil {
@@ -66,7 +67,11 @@ func New(ctx context.Context, config Config) (*App, error) {
 	}
 	// Portal 在开放端口前真实探测数据库并构造所有信任边界；认证、密钥或机器验签材料有误时
 	// 直接失败，避免部分路由在不完整安全配置下运行。
-	db, err := gorm.Open(mysql.Open(config.MySQLDSN), &gorm.Config{DisableAutomaticPing: true})
+	db, err := databasepool.Open(
+		mysql.Open(config.MySQLDSN),
+		&gorm.Config{DisableAutomaticPing: true},
+		databasepool.Portal,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("open Portal database: %w", err)
 	}

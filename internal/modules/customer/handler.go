@@ -28,10 +28,13 @@ type Handler struct{ service *Service }
 
 func NewHandler(service *Service) *Handler { return &Handler{service: service} }
 
+// Create 用途：处理现有业务请求并保留安全的参数诊断。
+// 参数：c 为已认证 HTTP 上下文，权限和业务校验保持原有规则。
+// 返回值：无；向客户端写入业务回执或字段、协议错误。
 func (h *Handler) Create(c *gin.Context) {
 	var input CreateRequest
 	if err := requestbody.DecodeJSON(c, &input); err != nil {
-		response.Error(c, invalidCustomerBody())
+		response.Error(c, requestbody.InvalidArgument(err, &input))
 		return
 	}
 	input.IdempotencyKey = c.GetHeader("Idempotency-Key")
@@ -43,10 +46,13 @@ func (h *Handler) Create(c *gin.Context) {
 	response.Created(c, result)
 }
 
+// CheckDuplicate 用途：处理现有业务请求并保留安全的参数诊断。
+// 参数：c 为已认证 HTTP 上下文，权限和业务校验保持原有规则。
+// 返回值：无；向客户端写入业务回执或字段、协议错误。
 func (h *Handler) CheckDuplicate(c *gin.Context) {
 	var input DuplicateCheckRequest
 	if err := requestbody.DecodeJSON(c, &input); err != nil {
-		response.Error(c, invalidCustomerBody())
+		response.Error(c, requestbody.InvalidArgument(err, &input))
 		return
 	}
 	result, err := h.service.CheckDuplicate(c.Request.Context(), input)
@@ -57,10 +63,13 @@ func (h *Handler) CheckDuplicate(c *gin.Context) {
 	response.OK(c, result)
 }
 
+// Merge 用途：处理现有业务请求并保留安全的参数诊断。
+// 参数：c 为已认证 HTTP 上下文，权限和业务校验保持原有规则。
+// 返回值：无；向客户端写入业务回执或字段、协议错误。
 func (h *Handler) Merge(c *gin.Context) {
 	var input MergeRequest
 	if err := requestbody.DecodeJSON(c, &input); err != nil {
-		response.Error(c, invalidCustomerBody())
+		response.Error(c, requestbody.InvalidArgument(err, &input))
 		return
 	}
 	input.IdempotencyKey = c.GetHeader("Idempotency-Key")
@@ -195,6 +204,9 @@ func (h *Handler) ListStakeholders(c *gin.Context) {
 	response.OK(c, result)
 }
 
+// ReplaceStakeholders 用途：处理现有业务请求并保留安全的参数诊断。
+// 参数：c 为已认证 HTTP 上下文，权限和业务校验保持原有规则。
+// 返回值：无；向客户端写入业务回执或字段、协议错误。
 func (h *Handler) ReplaceStakeholders(c *gin.Context) {
 	id, ok := customerID(c)
 	if !ok {
@@ -202,7 +214,7 @@ func (h *Handler) ReplaceStakeholders(c *gin.Context) {
 	}
 	var input ReplaceStakeholdersRequest
 	if err := requestbody.DecodeJSON(c, &input); err != nil {
-		response.Error(c, invalidCustomerBody())
+		response.Error(c, requestbody.InvalidArgument(err, &input))
 		return
 	}
 	result, err := h.service.ReplaceStakeholders(c.Request.Context(), id, input)
@@ -226,6 +238,9 @@ func (h *Handler) ListInformationSystems(c *gin.Context) {
 	response.OK(c, result)
 }
 
+// ReplaceInformationSystems 用途：处理现有业务请求并保留安全的参数诊断。
+// 参数：c 为已认证 HTTP 上下文，权限和业务校验保持原有规则。
+// 返回值：无；向客户端写入业务回执或字段、协议错误。
 func (h *Handler) ReplaceInformationSystems(c *gin.Context) {
 	id, ok := customerID(c)
 	if !ok {
@@ -233,7 +248,7 @@ func (h *Handler) ReplaceInformationSystems(c *gin.Context) {
 	}
 	var input ReplaceInformationSystemsRequest
 	if err := requestbody.DecodeJSON(c, &input); err != nil {
-		response.Error(c, invalidCustomerBody())
+		response.Error(c, requestbody.InvalidArgument(err, &input))
 		return
 	}
 	result, err := h.service.ReplaceInformationSystems(c.Request.Context(), id, input)
@@ -494,12 +509,15 @@ func (h *Handler) DownloadImportTemplate(c *gin.Context) {
 	c.Data(http.StatusOK, customerImportTemplateContentType, contents)
 }
 
+// CommitImport 用途：处理现有业务请求并保留安全的参数诊断。
+// 参数：c 为已认证 HTTP 上下文，权限和业务校验保持原有规则。
+// 返回值：无；向客户端写入业务回执或字段、协议错误。
 func (h *Handler) CommitImport(c *gin.Context) {
 	// 提交阶段不再次上传文件，而是引用预览生成的 jobNo，并用幂等键约束重复确认；
 	// 预览令牌、内容摘要和逐行写入规则由服务层复核，不能只信任前端预览结果。
 	var input ImportCommitRequest
 	if err := requestbody.DecodeJSON(c, &input); err != nil {
-		response.Error(c, invalidCustomerBody())
+		response.Error(c, requestbody.InvalidArgument(err, &input))
 		return
 	}
 	result, err := h.service.CommitImport(c.Request.Context(), c.Param("jobNo"), c.GetHeader("Idempotency-Key"), input)
@@ -540,6 +558,9 @@ func customerID(c *gin.Context) (uint64, bool) {
 	return id, true
 }
 
+// Update 用途：处理现有业务请求并保留安全的参数诊断。
+// 参数：c 为已认证 HTTP 上下文，权限和业务校验保持原有规则。
+// 返回值：无；向客户端写入业务回执或字段、协议错误。
 func (h *Handler) Update(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
@@ -548,7 +569,7 @@ func (h *Handler) Update(c *gin.Context) {
 	}
 	var input UpdateRequest
 	if err = requestbody.DecodeJSON(c, &input); err != nil {
-		response.Error(c, invalidCustomerBody())
+		response.Error(c, requestbody.InvalidArgument(err, &input))
 		return
 	}
 	result, err := h.service.Update(c.Request.Context(), id, input)
@@ -559,7 +580,11 @@ func (h *Handler) Update(c *gin.Context) {
 	response.OK(c, result)
 }
 
-func (h *Handler) Void(c *gin.Context)    { h.changeStatus(c, true) }
+func (h *Handler) Void(c *gin.Context) { h.changeStatus(c, true) }
+
+// Restore 用途：处理现有业务请求并保留安全的参数诊断。
+// 参数：c 为已认证 HTTP 上下文，权限和业务校验保持原有规则。
+// 返回值：无；向客户端写入业务回执或字段、协议错误。
 func (h *Handler) Restore(c *gin.Context) { h.changeStatus(c, false) }
 func (h *Handler) changeStatus(c *gin.Context, void bool) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
@@ -569,7 +594,7 @@ func (h *Handler) changeStatus(c *gin.Context, void bool) {
 	}
 	var input StatusChangeRequest
 	if err = requestbody.DecodeJSON(c, &input); err != nil {
-		response.Error(c, invalidCustomerBody())
+		response.Error(c, requestbody.InvalidArgument(err, &input))
 		return
 	}
 	var result *Response
@@ -585,6 +610,9 @@ func (h *Handler) changeStatus(c *gin.Context, void bool) {
 	response.OK(c, result)
 }
 
+// CreateFollowup 用途：处理现有业务请求并保留安全的参数诊断。
+// 参数：c 为已认证 HTTP 上下文，权限和业务校验保持原有规则。
+// 返回值：无；向客户端写入业务回执或字段、协议错误。
 func (h *Handler) CreateFollowup(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
@@ -593,7 +621,7 @@ func (h *Handler) CreateFollowup(c *gin.Context) {
 	}
 	var input FollowupCreateRequest
 	if err = requestbody.DecodeJSON(c, &input); err != nil {
-		response.Error(c, invalidCustomerBody())
+		response.Error(c, requestbody.InvalidArgument(err, &input))
 		return
 	}
 	result, err := h.service.CreateFollowup(c.Request.Context(), id, input)

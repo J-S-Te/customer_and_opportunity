@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	core "github.com/J-S-Te/license-core"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/databasepool"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/workerlicense"
 	"strconv"
 	"strings"
@@ -88,9 +89,9 @@ type gormTransferStore struct {
 	db *gorm.DB
 }
 
-// New 装配转合同消费者，停订阅时不构造合同网络客户端。
-// 参数：config 为已校验的消费者配置。
-// 返回值：保留自身数据库及许可消费者的应用；装配失败返回错误。
+// New 装配转合同消费者，停订阅时不构造合同网络客户端，并配置独立连接池预算。
+// 参数：config 为既有业务和外部依赖配置。
+// 返回值：应用实例；配置或依赖初始化失败返回错误。
 func New(config Config) (*App, error) {
 	var client deliveryClient
 	var err error
@@ -100,7 +101,11 @@ func New(config Config) (*App, error) {
 			return nil, err
 		}
 	}
-	db, err := gorm.Open(mysqlDialector(config.MySQLDSN), &gorm.Config{DisableAutomaticPing: true})
+	db, err := databasepool.Open(
+		mysqlDialector(config.MySQLDSN),
+		&gorm.Config{DisableAutomaticPing: true},
+		databasepool.Worker,
+	)
 	if err != nil {
 		return nil, err
 	}

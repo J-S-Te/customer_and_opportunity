@@ -110,6 +110,20 @@ func (s *Service) MarkRead(ctx context.Context, id uint64) error {
 	return ErrNotReadable
 }
 
+// DeleteRead 软删除当前主体全部已读通知，返回实际删除条数；未读、已取消和他人通知不受影响。
+// 本地 crm_notifications 是 CRM 的权威收件箱，删除只作用于当前主体的收件箱投影。
+func (s *Service) DeleteRead(ctx context.Context) (int64, error) {
+	principal, err := requirePrincipal(ctx)
+	if err != nil {
+		return 0, err
+	}
+	now := s.now().UTC()
+	result := personalInboxQuery(s.db.WithContext(ctx), principal).
+		Where("status=?", StatusRead).
+		Updates(map[string]any{"deleted_at": now, "updated_at": now, "updated_by": principal.UserID, "version": gorm.Expr("version+1")})
+	return result.RowsAffected, result.Error
+}
+
 func personalInboxQuery(db *gorm.DB, principal auth.Principal) *gorm.DB {
 	query := db.Model(&Notification{}).
 		Where("tenant_id=? AND status IN (?,?) AND deleted_at IS NULL", principal.TenantID, StatusUnread, StatusRead)
