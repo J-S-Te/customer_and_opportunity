@@ -191,6 +191,8 @@ func (s *Service) ListMemberTerms(ctx context.Context, id uint64, query MemberTe
 }
 
 // ReplaceMembers 原子替换当前成员集合：需要时重新激活历史行，并停用被移除成员而不物理删除。
+// 参数：ctx 为已认证请求，id 为可见商机，input 为成员、预期版本和变更原因。
+// 返回值：已保存团队；目录、范围、冻结、版本或持久化失败时返回错误。
 func (s *Service) ReplaceMembers(ctx context.Context, id uint64, input ReplaceMembersRequest) (*TeamResponse, error) {
 	principal, err := requirePrincipal(ctx)
 	if err != nil {
@@ -240,6 +242,7 @@ func (s *Service) ReplaceMembers(ctx context.Context, id uint64, input ReplaceMe
 		addedMembers = append(addedMembers, member)
 	}
 	before := memberResponses(current)
+	model.UpdatedBy = principal.UserID
 	now := s.now()
 	// 多个新增成员的门闩行按 user_id 排序后加锁，避免并发替换在同一事务里以不同顺序
 	// 抢多把门闩行锁而互相等待。
