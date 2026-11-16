@@ -150,6 +150,13 @@ paths:
     put: {$ref: '#/components/x-operations/replaceOpportunityMembers'}
   /api/v1/opportunities/{id}/member-terms:
     get: {$ref: '#/components/x-operations/listOpportunityMemberTerms'}
+  /api/v1/opportunities/{id}/commercial-records:
+    get: {$ref: '#/components/x-operations/listOpportunityCommercialRecords'}
+    post: {$ref: '#/components/x-operations/createOpportunityCommercialRecord'}
+  /api/v1/opportunities/{id}/commercial-records/{recordID}:
+    put: {$ref: '#/components/x-operations/updateOpportunityCommercialRecord'}
+  /api/v1/opportunities/{id}/commercial-records/{recordID}/void:
+    post: {$ref: '#/components/x-operations/voidOpportunityCommercialRecord'}
   /api/v1/opportunities/{id}/void:
     post: {$ref: '#/components/x-operations/voidOpportunity'}
   /api/v1/opportunities/{id}/restore:
@@ -311,6 +318,104 @@ components:
     NumericID: {name: id, in: path, required: true, schema: {type: integer, format: uint64, minimum: 1}}
     IdempotencyKey: {name: Idempotency-Key, in: header, required: true, schema: {type: string, minLength: 1, maxLength: 128}}
   schemas:
+    CommercialRecordInput:
+      type: object
+      additionalProperties: false
+      required: [type, title, record_date]
+      properties:
+        type: {type: string, enum: [QUOTATION, BID]}
+        title: {type: string, minLength: 1, maxLength: 200}
+        document_no: {type: string, maxLength: 64}
+        record_date: {type: string, format: date, description: Beijing business date; future dates are allowed.}
+        amount:
+          type: [string, 'null']
+          maxLength: 64
+          description: Non-negative yuan decimal with at most two fraction digits and decimal(18,2) range. Null or blank means unknown; stored values use two digits.
+        status:
+          type: string
+          enum: ['', DRAFT, PREPARING, SUBMITTED, APPROVED, REJECTED, WON, LOST, CANCELLED]
+          description: QUOTATION accepts DRAFT/SUBMITTED/APPROVED/REJECTED/CANCELLED; BID accepts PREPARING/SUBMITTED/WON/LOST/CANCELLED. Blank defaults to DRAFT or PREPARING. These are manual facts, not approval results.
+        notes: {type: string, maxLength: 2000}
+        attachment_ids:
+          type: array
+          maxItems: 20
+          uniqueItems: true
+          items: {type: string, minLength: 1, maxLength: 64}
+          description: >-
+            Existing CLEAN attachments of this tenant and opportunity; nonempty selections require
+            opportunity.attachment.read. Empty permits data-only registration. On correction,
+            empty clears links only for callers with attachment read permission; otherwise
+            hidden links are preserved and file metadata is omitted from the response.
+        version: {type: integer, format: uint64, minimum: 1, description: Required when correcting a record.}
+    CommercialRecordUpdate:
+      allOf:
+        - $ref: '#/components/schemas/CommercialRecordInput'
+        - type: object
+          required: [version]
+    CommercialRecordVoid:
+      type: object
+      additionalProperties: false
+      required: [version, reason]
+      properties:
+        version: {type: integer, format: uint64, minimum: 1}
+        reason: {type: string, minLength: 1, maxLength: 500}
+    CommercialRecord:
+      type: object
+      required: [id, opportunity_id, type, title, document_no, record_date, amount, status, notes, source_kind, is_void, void_reason, version, created_by, created_by_name, updated_by, updated_by_name, created_at, updated_at, attachments]
+      properties:
+        id: {type: string, minLength: 1, maxLength: 64}
+        opportunity_id: {type: integer, format: uint64, minimum: 1}
+        type: {type: string, enum: [QUOTATION, BID]}
+        title: {type: string}
+        document_no: {type: string}
+        record_date: {type: string, format: date}
+        amount: {type: [string, 'null'], description: Exact yuan amount with two fraction digits; null is unknown.}
+        status: {type: string}
+        notes: {type: string}
+        source_kind: {type: string, const: MANUAL}
+        is_void: {type: boolean, description: Invalidates this registration without replacing its recorded business status.}
+        void_reason: {type: string}
+        version: {type: integer, format: uint64, minimum: 1}
+        created_by: {type: string}
+        created_by_name: {type: string}
+        updated_by: {type: string}
+        updated_by_name: {type: string}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+        attachments:
+          type: array
+          description: Existing AttachmentResponse metadata; empty without opportunity.attachment.read. Binary download independently requires opportunity.attachment.download.
+          items:
+            type: object
+            required: [id, file_name, scan_status, sha256, version]
+            properties:
+              id: {type: string}
+              file_name: {type: string}
+              scan_status: {type: string}
+              file_status: {type: string}
+              sha256: {type: string}
+              version: {type: integer, format: uint64}
+    CommercialRecordEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/Envelope'
+        - type: object
+          required: [data]
+          properties:
+            data: {$ref: '#/components/schemas/CommercialRecord'}
+    CommercialRecordPageEnvelope:
+      allOf:
+        - $ref: '#/components/schemas/Envelope'
+        - type: object
+          required: [data]
+          properties:
+            data:
+              type: object
+              required: [items, page, page_size, total]
+              properties:
+                items: {type: array, items: {$ref: '#/components/schemas/CommercialRecord'}}
+                page: {type: integer, minimum: 1}
+                page_size: {type: integer, minimum: 1, maximum: 100}
+                total: {type: integer, minimum: 0}
     Envelope:
       type: object
       required: [code, message, request_id]
@@ -731,6 +836,74 @@ components:
     getOpportunityMembers: {<<: *opportunityIDRead, operationId: getOpportunityMembers}
     replaceOpportunityMembers: {<<: *opportunityIDRead, operationId: replaceOpportunityMembers, x-permission: opportunity.team.manage}
     listOpportunityMemberTerms: {<<: *opportunityIDRead, operationId: listOpportunityMemberTerms}
+    listOpportunityCommercialRecords:
+      <<: *opportunityIDRead
+      operationId: listOpportunityCommercialRecords
+      x-permission: opportunity.read
+      description: Tenant-scoped manual quotation/bid registrations, including invalidated history. Reading does not mutate the opportunity, trusted external snapshots or approval evidence.
+      parameters:
+        - {$ref: '#/components/parameters/OpportunityID'}
+        - {name: page, in: query, schema: {type: integer, minimum: 1, default: 1}}
+        - {name: page_size, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 20}}
+      responses:
+        '200': {description: Manual registration page, content: {application/json: {schema: {$ref: '#/components/schemas/CommercialRecordPageEnvelope'}}}}
+        '400': {$ref: '#/components/responses/Error'}
+        '401': {$ref: '#/components/responses/Error'}
+        '403': {$ref: '#/components/responses/Error'}
+        '404': {$ref: '#/components/responses/Error'}
+        '500': {$ref: '#/components/responses/Error'}
+    createOpportunityCommercialRecord:
+      <<: *opportunityIDRead
+      operationId: createOpportunityCommercialRecord
+      x-permission: opportunity.update
+      description: Creates one manual registration. The key binds tenant, opportunity, actor and payload; an exact replay returns the original receipt. Does not advance opportunity stages or write trusted external quotation facts.
+      parameters:
+        - {$ref: '#/components/parameters/OpportunityID'}
+        - {$ref: '#/components/parameters/IdempotencyKey'}
+        - {name: Origin, in: header, required: true, schema: {type: string, format: uri}}
+        - {name: X-CSRF-Token, in: header, required: true, schema: {type: string, const: '1'}}
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/CommercialRecordInput'}}}}
+      responses: &commercialRecordWriteResponses
+        '201': {description: Confirmed registration or exact replay, content: {application/json: {schema: {$ref: '#/components/schemas/CommercialRecordEnvelope'}}}}
+        '400': {$ref: '#/components/responses/Error'}
+        '401': {$ref: '#/components/responses/Error'}
+        '403': {$ref: '#/components/responses/Error'}
+        '404': {$ref: '#/components/responses/Error'}
+        '409': {$ref: '#/components/responses/Error'}
+        '422': {$ref: '#/components/responses/Error'}
+        '500': {$ref: '#/components/responses/Error'}
+    updateOpportunityCommercialRecord:
+      <<: *opportunityIDRead
+      operationId: updateOpportunityCommercialRecord
+      x-permission: opportunity.update
+      description: Corrects one visible active registration with its own version and before/after audit. The parent opportunity is not modified.
+      parameters:
+        - {$ref: '#/components/parameters/OpportunityID'}
+        - {name: recordID, in: path, required: true, schema: {type: string, minLength: 1, maxLength: 64}}
+        - {name: Origin, in: header, required: true, schema: {type: string, format: uri}}
+        - {name: X-CSRF-Token, in: header, required: true, schema: {type: string, const: '1'}}
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/CommercialRecordUpdate'}}}}
+      responses: &commercialRecordUpdateResponses
+        '200': {description: Confirmed correction or invalidation, content: {application/json: {schema: {$ref: '#/components/schemas/CommercialRecordEnvelope'}}}}
+        '400': {$ref: '#/components/responses/Error'}
+        '401': {$ref: '#/components/responses/Error'}
+        '403': {$ref: '#/components/responses/Error'}
+        '404': {$ref: '#/components/responses/Error'}
+        '409': {$ref: '#/components/responses/Error'}
+        '422': {$ref: '#/components/responses/Error'}
+        '500': {$ref: '#/components/responses/Error'}
+    voidOpportunityCommercialRecord:
+      <<: *opportunityIDRead
+      operationId: voidOpportunityCommercialRecord
+      x-permission: opportunity.update
+      description: Invalidates an erroneous registration with version and reason; retains its recorded offline status, attachments and audit history.
+      parameters:
+        - {$ref: '#/components/parameters/OpportunityID'}
+        - {name: recordID, in: path, required: true, schema: {type: string, minLength: 1, maxLength: 64}}
+        - {name: Origin, in: header, required: true, schema: {type: string, format: uri}}
+        - {name: X-CSRF-Token, in: header, required: true, schema: {type: string, const: '1'}}
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/CommercialRecordVoid'}}}}
+      responses: *commercialRecordUpdateResponses
     voidOpportunity: {<<: *opportunityIDRead, operationId: voidOpportunity, x-permission: opportunity.void, requestBody: {$ref: '#/components/requestBodies/VersionedReason'}}
     restoreOpportunity: {<<: *opportunityIDRead, operationId: restoreOpportunity, x-permission: opportunity.restore, requestBody: {$ref: '#/components/requestBodies/VersionedReason'}}
     changeOpportunityStage: {<<: *opportunityIDRead, operationId: changeOpportunityStage, x-permission: opportunity.stage.change, requestBody: {$ref: '#/components/requestBodies/StageChange'}}
