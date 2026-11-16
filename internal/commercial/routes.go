@@ -43,6 +43,7 @@ var historicalRoutes = map[string]map[string]bool{
 		"GET /api/v1/opportunities/:id":                                   true,
 		"GET /api/v1/opportunities/:id/members":                           true,
 		"GET /api/v1/opportunities/:id/member-terms":                      true,
+		"GET /api/v1/opportunities/:id/commercial-records":                true,
 		"GET /api/v1/opportunities/:id/stage-history":                     true,
 		"GET /api/v1/opportunities/:id/followups":                         true,
 		"GET /api/v1/opportunities/:id/external-status":                   true,

@@ -228,9 +228,13 @@ func (r *GORMAttachmentRepository) List(ctx context.Context, tenant string, oppo
 	err := database.FromContext(ctx, r.db).Where("tenant_id=? AND opportunity_id=? AND deleted_at IS NULL", tenant, opportunityID).Order("created_at DESC,id DESC").Limit(200).Find(&values).Error
 	return values, err
 }
+
+// Update 持久化附件变更并同步当前对象，使回执和审计反映实际状态。
+// 参数：ctx 为事务上下文，value 为已定位附件，expected 为版本，fields 为已校验变更。
+// 返回值：持久化或版本错误；成功后当前对象包含已更新字段及新版本。
 func (r *GORMAttachmentRepository) Update(ctx context.Context, value *Attachment, expected uint64, fields map[string]any) error {
 	fields["updated_at"], fields["updated_by"], fields["version"] = time.Now().UTC(), value.UpdatedBy, gorm.Expr("version+1")
-	result := database.FromContext(ctx, r.db).Model(&Attachment{}).Where("id=? AND tenant_id=? AND version=? AND deleted_at IS NULL", value.ID, value.TenantID, expected).Updates(fields)
+	result := database.FromContext(ctx, r.db).Model(value).Where("id=? AND tenant_id=? AND version=? AND deleted_at IS NULL", value.ID, value.TenantID, expected).Updates(fields)
 	if result.Error != nil {
 		return result.Error
 	}
