@@ -117,6 +117,7 @@ func (d *Dispatcher) Run(ctx context.Context) {
 	ticker := time.NewTicker(d.pollInterval)
 	defer ticker.Stop()
 	var lastFailureLog time.Time
+	var lastHealthReport time.Time
 	for {
 		if err := d.runOnce(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			// 故障期间限制失败日志量。禁止输出可能包含审计载荷或凭据的
@@ -126,6 +127,10 @@ func (d *Dispatcher) Run(ctx context.Context) {
 					"environment_code", d.environment, "worker_id", d.workerID, "error_code", deliveryErrorCode(err))
 				lastFailureLog = time.Now()
 			}
+		}
+		if time.Since(lastHealthReport) >= time.Minute {
+			d.reportOutboxHealth(ctx)
+			lastHealthReport = time.Now()
 		}
 		// DELIVERED 行周期清理（审计 P1）：仅在显式配置正数保留期时启用（缺省关闭），
 		// 删除的是已投递事件的本地审计证据。保留 deliveredRetention，单批最多 1000 行，
@@ -431,3 +436,37 @@ func deliveryErrorCode(err error) string {
 // 诊断分类。绝不返回可能包含敏感实现细节的
 // 远程响应体。
 func DeliveryErrorCode(err error) string { return deliveryErrorCode(err) }
+
+func (d *Dispatcher) reportOutboxHealth(ctx context.Context) {
+	store, ok := d.store.(*Store)
+	if !ok {
+		return
+	}
+	pending, err := store.PendingCount(ctx)
+	if err != nil {
+		return
+	}
+	held, err := store.HeldCount(ctx)
+	if err != nil {
+		held = 0
+	}
+	token, err := d.accessToken(ctx)
+	if err != nil {
+		return
+	}
+	body, _ := json.Marshal(map[string]any{"pending": pending, "dead": held})
+	reqCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	request, err := http.NewRequestWithContext(reqCtx, http.MethodPost, d.baseURL+"/api/v1/audit/outbox-health", bytes.NewReader(body))
+	if err != nil {
+		return
+	}
+	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set("Content-Type", "application/json")
+	resp, err := d.client.Do(request)
+	if err != nil {
+		return
+	}
+	defer resp.Body.Close()
+	io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+}
