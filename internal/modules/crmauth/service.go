@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/authorizationrefresh"
 	sharedauth "github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/auth"
 	sharedauthorization "github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/authorizationcontext"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/loginip"
@@ -302,53 +303,39 @@ func (s *Service) Authenticate(ctx context.Context, rawSession string) (sharedau
 	if err != nil {
 		return sharedauth.Principal{}, ErrUnauthenticated
 	}
-	checkedAt := time.Time{}
-	// 会话不是永久授权缓存。超过检查窗口后通过 UserInfo 重新取得完整授权快照；任一字段变化都撤销
-	// 该主体的全部 CRM 会话，使禁用账号、组织调整和权限降级在短窗口内统一生效。
-	if now.Sub(session.AuthorizationCheckedAt) >= authorizationCheckInterval {
-		accessToken, decryptErr := s.codec.decrypt(session.AccessTokenCipher)
-		if decryptErr != nil {
-			_ = s.repo.RevokeSession(ctx, session.SessionIDHash, now)
-			return sharedauth.Principal{}, ErrUnauthenticated
-		}
-		current, currentErr := s.oidc.UserInfo(ctx, accessToken)
+	forced := authorizationrefresh.Forced(ctx)
+	if forced || now.Sub(session.AuthorizationCheckedAt) >= authorizationCheckInterval {
+		updated, currentErr := s.revalidateAuthorization(ctx, session)
 		if s.options.CentralClient == nil && errors.Is(currentErr, sharedauthorization.ErrTokenRejected) {
-			// 访问令牌可能在两次重验之间过期：在会话行锁内确认未被其他请求刷新后再尝试一次。
-			if refreshed, refreshErr := s.refreshSessionTokens(ctx, session.SessionIDHash, now, accessToken); refreshErr == nil {
-				session = refreshed
-				if accessToken, decryptErr = s.codec.decrypt(session.AccessTokenCipher); decryptErr != nil {
-					_ = s.repo.RevokeSession(ctx, session.SessionIDHash, now)
-					return sharedauth.Principal{}, ErrUnauthenticated
-				}
-				current, currentErr = s.oidc.UserInfo(ctx, accessToken)
+			accessToken, _ := s.codec.decrypt(session.AccessTokenCipher)
+			refreshed, refreshErr := s.refreshSessionTokens(ctx, session.SessionIDHash, now, accessToken)
+			if refreshErr == nil {
+				updated, currentErr = s.revalidateAuthorization(ctx, refreshed)
 			} else {
-				// 与预刷新一致：提供方明确拒绝则撤销本地会话，平台暂时不可用则保留会话。
 				currentErr = s.refreshFailure(ctx, session.SessionIDHash, now, refreshErr)
 			}
 		}
-		if errors.Is(currentErr, sharedauthorization.ErrUnavailable) {
-			if s.options.CentralClient != nil || now.Sub(session.AuthorizationCheckedAt) > authorizationMaxStale {
-				return sharedauth.Principal{}, ErrAuthorizationUnavailable
-			}
-			if err := s.repo.TouchSession(ctx, session.SessionIDHash, now, time.Time{}, s.localIdleTTL()); err != nil {
-				return unavailablePrincipal(err)
-			}
-			return s.sessionPrincipal(stored, session), nil
-		}
 		if currentErr != nil {
-			if !errors.Is(currentErr, ErrUnauthenticated) {
-				_ = s.repo.RevokeSession(ctx, session.SessionIDHash, now)
+			if errors.Is(currentErr, ErrAuthorizationUnavailable) && !forced &&
+				s.options.CentralClient == nil && now.Sub(session.AuthorizationCheckedAt) <= authorizationMaxStale {
+				if err := s.repo.TouchSession(ctx, session.SessionIDHash, now, time.Time{}, s.localIdleTTL()); err != nil {
+					return unavailablePrincipal(err)
+				}
+				return s.sessionPrincipal(stored, session), nil
 			}
+			if errors.Is(currentErr, sharedauthorization.ErrTokenRejected) {
+				_ = s.repo.RevokeSession(ctx, session.SessionIDHash, now)
+				currentErr = ErrUnauthenticated
+			}
+			return sharedauth.Principal{}, currentErr
+		}
+		session = updated
+		stored, err = claimsFromSession(session)
+		if err != nil {
 			return sharedauth.Principal{}, ErrUnauthenticated
 		}
-		current, currentErr = normalizeAuthorization(current, s.options.TenantID, s.options.RoleConfigHash, s.options.EnvironmentCode, s.options.MaxRoles)
-		if currentErr != nil || !sameAuthorization(stored, current) {
-			_ = s.repo.RevokeSessionsForSubject(ctx, session.TenantID, session.PlatformUserID, now)
-			return sharedauth.Principal{}, ErrUnauthenticated
-		}
-		checkedAt = now
 	}
-	if err := s.repo.TouchSession(ctx, session.SessionIDHash, now, checkedAt, s.localIdleTTL()); err != nil {
+	if err := s.repo.TouchSession(ctx, session.SessionIDHash, now, time.Time{}, s.localIdleTTL()); err != nil {
 		return unavailablePrincipal(err)
 	}
 	return s.sessionPrincipal(stored, session), nil

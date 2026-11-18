@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/authorizationrefresh"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/portal/account"
 	sharedauthorization "github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/authorizationcontext"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/loginip"
@@ -268,6 +269,9 @@ func (a *OIDCAdapter) authorizationContext(ctx context.Context, accessToken stri
 		return account.Claims{}, a.dependencyError("create portal authorization context request", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+accessToken)
+	if authorizationrefresh.Forced(ctx) {
+		req.Header.Set(authorizationrefresh.Header, "1")
+	}
 	resp, err := a.httpClient.Do(req)
 	if err != nil {
 		return account.Claims{}, a.dependencyError("request portal authorization context", err)

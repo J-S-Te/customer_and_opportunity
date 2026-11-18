@@ -59,9 +59,9 @@ func (s *Service) AcceptSessionLink(ctx context.Context, state, ticket string) (
 }
 
 // centralState 只消费平台权威期限，不使用本地last_seen或刷新时间推算空闲窗口。
-// 参数：ctx为请求，session为已认证本地会话，interact为已通过同源保护的真实活动。
+// 参数：ctx为请求，session为已认证本地会话，interact为真实活动，revoke可禁止锁内重复撤销。
 // 返回值：权威生命周期；失效仅撤销当前会话，临时故障保留记录并返回依赖错误。
-func (s *Service) centralState(ctx context.Context, session *Session, interact bool) (central.Context, error) {
+func (s *Service) centralState(ctx context.Context, session *Session, interact bool, revoke ...bool) (central.Context, error) {
 	if s.options.CentralClient == nil {
 		return central.Context{}, ErrAuthorizationUnavailable
 	}
@@ -82,8 +82,10 @@ func (s *Service) centralState(ctx context.Context, session *Session, interact b
 		err = central.Validate(state, s.options.CentralExpectation, session.PlatformUserID)
 	}
 	if errors.Is(err, central.ErrInactive) || errors.Is(err, central.ErrBindingConflict) {
-		if revokeErr := s.repo.RevokeSession(ctx, session.SessionIDHash, s.now().UTC()); revokeErr != nil {
-			return central.Context{}, ErrAuthorizationUnavailable
+		if len(revoke) == 0 || revoke[0] {
+			if revokeErr := s.repo.RevokeSession(ctx, session.SessionIDHash, s.now().UTC()); revokeErr != nil {
+				return central.Context{}, ErrAuthorizationUnavailable
+			}
 		}
 		return central.Context{}, ErrUnauthenticated
 	}

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/authorizationrefresh"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/platformcatalog"
 	sharedauthorization "github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/authorizationcontext"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/database"
@@ -587,31 +588,22 @@ func isPortalSuperAdmin(roles []string) bool {
 	return ok && roleCode == portalSuperAdminRole
 }
 
-// AuthenticateSession 核验门户会话、中央期限和客户授权边界。
-//
-//	AuthenticateSession 校验本地会话并在线复核授权。allowStale 仅对只读请求为 true：
-//	授权服务不可用时可放行受控陈旧窗口；写请求必须在线复核（P1-3）。
-//
-// 参数：ctx为调用上下文与取消边界。
-//
-//	tenantID为可信租户标识。
-//	rawToken为浏览器提交的原始会话材料。
-//	allowStale为是否允许既有只读路径使用有界旧权限快照。
-//
-// 返回值：经过核验的主体或会话；明确失效与暂时依赖错误分别返回。
+// AuthenticateSession 核验门户周期并在同一可信身份上更新有效授权。
+// 参数：ctx为请求，tenantID为配置租户，rawToken为Cookie，allowStale仅允许旧模式安全读降级。
+// 返回值：原会话的最新投影；身份失效401、授权拒绝403、依赖故障503。
 func (s *Service) AuthenticateSession(ctx context.Context, tenantID, rawToken string, allowStale bool) (*Session, error) {
-	// Cookie 仅携带高熵令牌，数据库按摘要检索；租户、撤销和到期边界均由服务端重新验证。
 	now := s.clock.Now().UTC()
 	sessionHash := hash(rawToken)
 	session, err := s.repo.FindSession(ctx, tenantID, sessionHash, now)
 	if err != nil {
-		if s.centralClient != nil && !errors.Is(err, ErrInvalidLoginState) && !errors.Is(err, ErrSessionNotFound) {
+		if s.authorizationDependencyUnavailable(ctx, err) {
 			return nil, ErrAuthorizationUnavailable
 		}
 		return nil, ErrInvalidLoginState
 	}
-	// 服务层再次校验空闲边界，避免非 GORM 仓储实现或测试替身绕过会话策略。
-	// 临界时刻按已超时处理，必须重新登录后才能建立新会话。
+	if rawToken == "" || session == nil || session.TenantID != tenantID {
+		return nil, ErrInvalidLoginState
+	}
 	if s.centralClient != nil {
 		if _, err = s.readCentral(ctx, session, false); err != nil {
 			return nil, err
@@ -623,83 +615,39 @@ func (s *Service) AuthenticateSession(ctx context.Context, tenantID, rawToken st
 	} else if session.LastSeenAt.IsZero() || !session.LastSeenAt.Add(portalSessionIdleTimeout).After(now) {
 		return nil, ErrInvalidLoginState
 	}
-	var link *IdentityLink
-	if isPortalSuperAdmin(session.Roles) {
-		// 管理员主会话不绑定客户；实际跨客户访问必须通过专用客户上下文，而不是使用
-		// CustomerID=0 放宽现有客户查询。
-	} else if s.usePlatformBinding {
-		// 平台绑定路径：会话客户边界由登录时的 customer_ref 建立，本地映射不再是权威。
-		if session.CustomerID == 0 {
-			return nil, ErrIdentityDisabled
-		}
-	} else {
-		found, linkErr := s.repo.FindLink(ctx, tenantID, session.PlatformUserID)
-		if s.dependencyUnavailable(linkErr) {
-			return nil, ErrAuthorizationUnavailable
-		}
-		if linkErr != nil || found == nil || found.Status != IdentityActive || found.CustomerID != session.CustomerID {
-			return nil, ErrIdentityDisabled
-		}
-		link = found
-	}
-	if s.localAuthority != nil && !isPortalSuperAdmin(session.Roles) {
-		if err := s.localAuthority.ValidateCustomer(ctx, tenantID, session.CustomerID, session.PlatformUserID, false); err != nil {
-			return nil, ErrIdentityDisabled
+	if len(session.Roles) > 0 {
+		if err := s.validatePortalSessionBoundary(ctx, session, nil); err != nil {
+			return nil, err
 		}
 	}
-	checkedAt := time.Time{}
-	if now.Sub(session.AuthorizationCheckedAt) >= authorizationCheckInterval {
-		accessToken, decryptErr := s.protector.Decrypt(ctx, session.AccessTokenCipher)
-		if decryptErr != nil {
-			s.revokeAuthorization(ctx, tenantID, session.PlatformUserID, now, "ACCESS_TOKEN_INVALID")
-			return nil, ErrInvalidLoginState
+	forced := authorizationrefresh.Forced(ctx)
+	if forced || now.Sub(session.AuthorizationCheckedAt) >= authorizationCheckInterval {
+		updated, checkErr := s.revalidatePortalAuthorization(ctx, session)
+		if checkErr != nil {
+			if !errors.Is(checkErr, ErrAuthorizationUnavailable) || forced || s.centralClient != nil ||
+				!allowStale || now.Sub(session.AuthorizationCheckedAt) > authorizationMaxStale {
+				return nil, checkErr
+			}
+		} else {
+			session = updated
+			if err := s.markPortalAuthorizationVerified(ctx, session); err != nil {
+				return nil, err
+			}
 		}
-		current, currentErr := s.oidc.UserInfo(ctx, string(accessToken))
-		if errors.Is(currentErr, sharedauthorization.ErrUnavailable) {
-			// P1-3：陈旧授权只放行只读方法；写请求与超窗请求必须在线复核。
-			if s.centralClient != nil || !allowStale || now.Sub(session.AuthorizationCheckedAt) > authorizationMaxStale {
+	}
+	if err := s.validatePortalSessionBoundary(ctx, session, nil); err != nil {
+		return nil, err
+	}
+	// 旧模式last_seen兼任空闲基准；纯权限刷新不能把后台读取变成真实活动。
+	if !forced {
+		if err = s.repo.TouchSession(ctx, tenantID, sessionHash, now, time.Time{}); err != nil {
+			if s.authorizationDependencyUnavailable(ctx, err) {
 				return nil, ErrAuthorizationUnavailable
 			}
-			if err = s.repo.TouchSession(ctx, tenantID, sessionHash, now, time.Time{}); err != nil {
-				if s.dependencyUnavailable(err) {
-					return nil, ErrAuthorizationUnavailable
-				}
-				return nil, ErrInvalidLoginState
-			}
-			session.LastSeenAt = now
-			return session, nil
-		}
-		if currentErr != nil || !samePortalAuthorization(session, current, tenantID, s.roleConfigHash, s.environmentCode) {
-			s.revokeAuthorization(ctx, tenantID, session.PlatformUserID, now, "USERINFO_REJECTED")
 			return nil, ErrInvalidLoginState
 		}
-		if (s.usePlatformBinding || s.localAuthority != nil) && !isPortalSuperAdmin(session.Roles) {
-			// 客户重绑定必须即时生效：customer_ref 与登录时建立的边界不一致即撤销会话。
-			parsed, parseErr := s.resolveCustomerReference(ctx, tenantID, session.PlatformUserID, current.CustomerRef, false)
-			if parseErr != nil || parsed != session.CustomerID {
-				s.revokeAuthorization(ctx, tenantID, session.PlatformUserID, now, "CUSTOMER_REF_CHANGED")
-				return nil, ErrInvalidLoginState
-			}
-		}
-		checkedAt = now
-		if link != nil {
-			if err = s.repo.MarkLinkVerified(ctx, tenantID, link.ID, current.AuthzRevision, now); err != nil {
-				if s.dependencyUnavailable(err) {
-					return nil, ErrAuthorizationUnavailable
-				}
-				s.revokeAuthorization(ctx, tenantID, session.PlatformUserID, now, "IDENTITY_LINK_INVALID")
-				return nil, ErrInvalidLoginState
-			}
-		}
-		session.AuthorizationCheckedAt = now
+		session.LastSeenAt = now
 	}
-	if err = s.repo.TouchSession(ctx, tenantID, sessionHash, now, checkedAt); err != nil {
-		if s.dependencyUnavailable(err) {
-			return nil, ErrAuthorizationUnavailable
-		}
-		return nil, ErrInvalidLoginState
-	}
-	session.LastSeenAt = now
 	return session, nil
 }
 

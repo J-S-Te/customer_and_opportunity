@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/authorizationrefresh"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -100,21 +101,30 @@ type cacheEntry struct {
 // CachedReader 以短 TTL 缓存服务项，避免每次门户请求都查询数据库；
 // 配置变更最迟在 TTL 后生效，属于短期模型的预期延迟。
 type CachedReader struct {
-	store Reader
-	ttl   time.Duration
-	now   func() time.Time
-	mu    sync.Mutex
-	cache map[cacheKey]cacheEntry
+	store      Reader
+	ttl        time.Duration
+	now        func() time.Time
+	mu         sync.Mutex
+	cache      map[cacheKey]cacheEntry
+	generation uint64
 }
 
 func NewCachedReader(store Reader, ttl time.Duration) *CachedReader {
 	return &CachedReader{store: store, ttl: ttl, now: time.Now, cache: make(map[cacheKey]cacheEntry)}
 }
 
+// Get 读取客户商业能力，强制自描述读绕过缓存并隔离旧在途回填。
+// 参数：ctx携带可信刷新标记，tenantID与customerID来自已认证客户边界。
+// 返回值：当前能力或依赖错误，强制读取失败不回退旧能力。
 func (c *CachedReader) Get(ctx context.Context, tenantID string, customerID uint64) (Options, error) {
 	key := cacheKey{tenantID: tenantID, customerID: customerID}
 	now := c.now().UTC()
 	c.mu.Lock()
+	if authorizationrefresh.Forced(ctx) {
+		c.generation++
+		delete(c.cache, key)
+	}
+	generation := c.generation
 	if entry, ok := c.cache[key]; ok && entry.expiresAt.After(now) {
 		options := entry.options
 		c.mu.Unlock()
@@ -126,7 +136,9 @@ func (c *CachedReader) Get(ctx context.Context, tenantID string, customerID uint
 		return Options{}, err
 	}
 	c.mu.Lock()
-	c.cache[key] = cacheEntry{options: options, expiresAt: now.Add(c.ttl)}
+	if generation == c.generation {
+		c.cache[key] = cacheEntry{options: options, expiresAt: now.Add(c.ttl)}
+	}
 	c.mu.Unlock()
 	return options, nil
 }

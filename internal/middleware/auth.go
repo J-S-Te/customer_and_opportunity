@@ -7,16 +7,20 @@ import (
 	"net/url"
 
 	"github.com/gin-gonic/gin"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/authorizationrefresh"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/apperror"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/auth"
 	sharedauthorization "github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/authorizationcontext"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/response"
 )
 
-// 浏览器身份只来自不透明 Cookie 对应的服务端 CRM 会话；请求头里的用户、角色和权限声明
-// 不参与认证，避免客户端伪造授权上下文。
+// SessionAuth 只信任服务端会话，并将自描述读的刷新要求传入认证链。
+// 参数：authenticator为服务器认证器，cookieName为当前应用独立Cookie名称。
+// 返回值：填入可信主体的中间件；认证、授权和依赖失败分别返回401、403和503。
 func SessionAuth(authenticator auth.Authenticator, cookieName string) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		ctx := authorizationrefresh.FromRequest(c.Request.Context(), c.Request)
+		c.Request = c.Request.WithContext(ctx)
 		cookie, err := c.Request.Cookie(cookieName)
 		if err != nil || cookie.Value == "" {
 			response.Error(c, apperror.ErrUnauthenticated)
@@ -25,6 +29,11 @@ func SessionAuth(authenticator auth.Authenticator, cookieName string) gin.Handle
 		}
 		principal, err := authenticator.Authenticate(c.Request.Context(), cookie.Value)
 		if err != nil {
+			if errors.Is(err, sharedauthorization.ErrForbidden) {
+				response.Error(c, apperror.ErrForbidden)
+				c.Abort()
+				return
+			}
 			if errors.Is(err, sharedauthorization.ErrUnavailable) {
 				response.Error(c, apperror.Wrap(err, http.StatusServiceUnavailable, "COMMON_DEPENDENCY_UNAVAILABLE", "authorization service is temporarily unavailable"))
 				c.Abort()

@@ -218,6 +218,7 @@ func New(config Config) (*App, error) {
 			"tenant_id": principal.TenantID, "display_name": principal.DisplayName, "username": principal.Username,
 			"primary_org_id": principal.PrimaryOrgID, "organization_ids": append([]string{}, principal.OrganizationIDs...),
 			"roles": principal.Roles, "permissions": permissions, "scope_mode": principal.ScopeMode,
+			"data_scopes":      principal.DataScopes,
 			"role_config_hash": principal.RoleConfigHash, "authz_revision": principal.AuthzRevision,
 		}
 		// 追加可选会话空闲窗口字段，既有调用方可忽略；剩余时间取 min(最后活动+空闲, 绝对到期) 的非负毫秒。
