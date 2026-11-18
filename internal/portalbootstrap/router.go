@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/authorizationrefresh"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/commercial"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/middleware"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/portal/account"
@@ -576,9 +577,11 @@ func logout(deps RouterDependencies) gin.HandlerFunc {
 
 // authenticate 取得当前门户会话的可信客户上下文。
 // 参数：deps为既有应用装配依赖。
-// 返回值：经过核验的主体或会话；明确失效与暂时依赖错误分别返回。
+// 返回值：可信主体中间件；认证、授权和依赖故障分别返回401、403、503。
 func authenticate(deps RouterDependencies) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		ctx := authorizationrefresh.FromRequest(c.Request.Context(), c.Request)
+		c.Request = c.Request.WithContext(ctx)
 		cookie, err := c.Request.Cookie(deps.Config.SessionCookieName)
 		if err != nil || cookie.Value == "" {
 			response.Error(c, apperror.ErrUnauthenticated)
@@ -589,7 +592,7 @@ func authenticate(deps RouterDependencies) gin.HandlerFunc {
 		allowStale := c.Request.Method == http.MethodGet || c.Request.Method == http.MethodHead || c.Request.Method == http.MethodOptions
 		session, err := deps.Account.AuthenticateSession(c.Request.Context(), deps.Config.TenantID, cookie.Value, allowStale)
 		if err != nil {
-			if errors.Is(err, account.ErrAuthorizationUnavailable) {
+			if errors.Is(err, account.ErrAuthorizationUnavailable) || errors.Is(err, account.ErrPortalAuthorization) {
 				response.Error(c, err)
 				c.Abort()
 				return
@@ -607,7 +610,7 @@ func authenticate(deps RouterDependencies) gin.HandlerFunc {
 		if deps.CustomerCapabilities != nil && !managementMetadata(c, deps.Config, session) {
 			options, optionsErr := deps.CustomerCapabilities.Get(c.Request.Context(), session.TenantID, session.CustomerID)
 			if optionsErr != nil {
-				response.Error(c, apperror.ErrUnauthenticated)
+				response.Error(c, apperror.Wrap(optionsErr, http.StatusServiceUnavailable, "PORTAL_CAPABILITY_UNAVAILABLE", "客户服务能力暂不可用，请稍后重试"))
 				c.Abort()
 				return
 			}

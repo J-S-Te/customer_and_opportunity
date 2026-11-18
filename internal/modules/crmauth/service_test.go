@@ -304,7 +304,10 @@ func TestLoginStateIsSingleUseAndPKCESecretsAreEncrypted(t *testing.T) {
 	}
 }
 
-func TestAuthenticateMapsVerifiedClaimsAndRejectsAuthorizationChange(t *testing.T) {
+// TestAuthenticateMapsVerifiedClaimsAndUpdatesAuthorization 验证合法授权版本变化保持原会话。
+// 参数：t为可信声明的服务层测试上下文。
+// 返回值：无；新版本未持久化或错误注销时失败。
+func TestAuthenticateMapsVerifiedClaimsAndUpdatesAuthorization(t *testing.T) {
 	now := time.Date(2026, 7, 31, 1, 2, 3, 0, time.UTC)
 	repo := newMemoryRepo()
 	claims := validClaims(now)
@@ -318,11 +321,11 @@ func TestAuthenticateMapsVerifiedClaimsAndRejectsAuthorizationChange(t *testing.
 	}
 	service.now = func() time.Time { return now.Add(16 * time.Second) }
 	oidc.current.AuthzRevision++
-	if _, err := service.Authenticate(context.Background(), result.SessionToken); !errors.Is(err, ErrUnauthenticated) {
-		t.Fatalf("changed authorization error = %v", err)
+	if principal, err := service.Authenticate(context.Background(), result.SessionToken); err != nil || principal.AuthzRevision != 9 {
+		t.Fatalf("changed authorization principal=%#v error=%v", principal, err)
 	}
-	if _, err := service.Authenticate(context.Background(), result.SessionToken); !errors.Is(err, ErrUnauthenticated) {
-		t.Fatalf("revoked session error = %v", err)
+	if _, err := service.Authenticate(context.Background(), result.SessionToken); err != nil {
+		t.Fatalf("updated session error = %v", err)
 	}
 }
 
@@ -410,7 +413,10 @@ func TestNormalizeAuthorizationAcceptsPlatformEffectivePermissionsWithoutRoleReD
 	}
 }
 
-func TestOrganizationChangeRevokesCRMServerSession(t *testing.T) {
+// TestOrganizationChangeUpdatesCRMServerSession 验证范围缩小更新会话而不保留宽权限。
+// 参数：t为组织范围授权测试上下文。
+// 返回值：无；新组织范围未生效或会话被注销时失败。
+func TestOrganizationChangeUpdatesCRMServerSession(t *testing.T) {
 	now := time.Date(2026, 8, 1, 1, 2, 3, 0, time.UTC)
 	repo := newMemoryRepo()
 	claims := validClaims(now)
@@ -420,8 +426,8 @@ func TestOrganizationChangeRevokesCRMServerSession(t *testing.T) {
 	result, _ := service.CompleteLogin(context.Background(), strings.Split(start.AuthorizationURL, "state=")[1], "code")
 	service.now = func() time.Time { return now.Add(16 * time.Second) }
 	oidc.current.DataScopes = []sharedauth.DataScope{{RoleCode: "sales", ScopeType: "ORG", ScopeID: "org-c", EnvironmentCode: "dev"}}
-	if _, err := service.Authenticate(context.Background(), result.SessionToken); !errors.Is(err, ErrUnauthenticated) {
-		t.Fatalf("organization change error = %v", err)
+	if principal, err := service.Authenticate(context.Background(), result.SessionToken); err != nil || principal.ScopeMode != sharedauth.ScopeOrg || !reflect.DeepEqual(principal.OrganizationIDs, []string{"org-c"}) {
+		t.Fatalf("organization change principal=%#v error=%v", principal, err)
 	}
 }
 

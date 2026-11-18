@@ -59,8 +59,15 @@ func (r *revalidationRepository) RevokeSessionsForSubject(context.Context, strin
 	r.revoked = true
 	return nil
 }
+
+// TouchSession 记录普通请求观测时间，不覆盖已原子保存的授权时间。
+// 参数：上下文与会话标识为测试边界，checkedAt仅非零时推进授权时间。
+// 返回值：无错误。
 func (r *revalidationRepository) TouchSession(_ context.Context, _, _ string, _ time.Time, checkedAt time.Time) error {
-	r.touched, r.authorizationAt = true, checkedAt
+	r.touched = true
+	if !checkedAt.IsZero() {
+		r.authorizationAt = checkedAt
+	}
 	return nil
 }
 func (r *revalidationRepository) MarkLinkVerified(context.Context, string, uint64, uint64, time.Time) error {
@@ -166,19 +173,25 @@ func TestAuthenticateSessionRevalidatesCurrentAuthorization(t *testing.T) {
 	}
 }
 
-func TestAuthenticateSessionRevokesAllSubjectSessionsWhenAuthorizationChanges(t *testing.T) {
+// TestAuthenticateSessionUpdatesAuthorizationWithoutRevocation 验证新版本持久化且保持原会话。
+// 参数：t为门户服务层测试上下文。
+// 返回值：无；新授权版本未生效或错误撤销时失败。
+func TestAuthenticateSessionUpdatesAuthorizationWithoutRevocation(t *testing.T) {
 	now := time.Date(2026, 8, 1, 1, 2, 3, 0, time.UTC)
 	service, repo, oidc := revalidationFixture(now)
 	oidc.claims.AuthzRevision = 4
-	if _, err := service.AuthenticateSession(context.Background(), "tenant-a", "session-token", true); !errors.Is(err, ErrInvalidLoginState) {
-		t.Fatalf("changed authorization error=%v", err)
+	if session, err := service.AuthenticateSession(context.Background(), "tenant-a", "session-token", true); err != nil || session.AuthzRevision != 4 {
+		t.Fatalf("changed authorization session=%#v error=%v", session, err)
 	}
-	if !repo.revoked || repo.touched || repo.linkVerified {
-		t.Fatalf("changed authorization was not fail-closed: %#v", repo)
+	if repo.revoked || !repo.touched || !repo.linkVerified {
+		t.Fatalf("changed authorization was not saved: %#v", repo)
 	}
 }
 
-func TestAuthenticateSessionRevokesAllSubjectSessionsWhenDataScopesChange(t *testing.T) {
+// TestAuthenticateSessionUpdatesChangedDataScopes 验证合法新范围替换旧范围。
+// 参数：t为固定客户与环境的服务层测试上下文。
+// 返回值：无；旧范围残留或错误撤销时失败。
+func TestAuthenticateSessionUpdatesChangedDataScopes(t *testing.T) {
 	now := time.Date(2026, 8, 1, 1, 2, 3, 0, time.UTC)
 	service, repo, oidc := revalidationFixture(now)
 	service.environmentCode = "prod"
@@ -194,11 +207,11 @@ func TestAuthenticateSessionRevokesAllSubjectSessionsWhenDataScopesChange(t *tes
 	// 不得静默保留已变更的范围。
 	oidc.claims.DataScopes[0].ScopeID = "customer-8"
 	repo.session.AuthorizationCheckedAt = now.Add(-authorizationCheckInterval - time.Second)
-	if _, err := service.AuthenticateSession(context.Background(), "tenant-a", "session-token", true); !errors.Is(err, ErrInvalidLoginState) {
-		t.Fatalf("changed data scope error=%v", err)
+	if session, err := service.AuthenticateSession(context.Background(), "tenant-a", "session-token", true); err != nil || len(session.DataScopes) != 1 || session.DataScopes[0].ScopeID != "customer-8" || session.CustomerID != 7 {
+		t.Fatalf("changed data scope session=%#v error=%v", session, err)
 	}
-	if !repo.revoked {
-		t.Fatal("changed data scope did not revoke sessions")
+	if repo.revoked {
+		t.Fatal("valid changed data scope revoked the session")
 	}
 }
 

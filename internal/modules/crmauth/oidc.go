@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/authorizationrefresh"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/platformcatalog"
 	sharedauth "github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/auth"
 	sharedauthorization "github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/authorizationcontext"
@@ -344,6 +345,9 @@ func (c *platformOIDCClient) AuthorizationContext(ctx context.Context, accessTok
 		return verifiedClaims{}, c.dependencyError("create CRM authorization context request", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+accessToken)
+	if authorizationrefresh.Forced(ctx) {
+		req.Header.Set(authorizationrefresh.Header, "1")
+	}
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return verifiedClaims{}, c.dependencyError("request CRM authorization context", err)
