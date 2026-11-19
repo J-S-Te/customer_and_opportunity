@@ -122,6 +122,17 @@ Portal 调 CRM 校验/消费邀请使用独立的基础平台 `client_credential
 
 ## 客户档案子记录
 
+### 客户项目历史数据源
+
+启用 `CRM_PROJECT_HISTORY_ENABLED` 后，客户详情通过 `GET /api/v1/customers/{id}/projects`
+直连项目管理的客户摘要。CRM 先验证当前用户可以读取该客户，随后使用
+`crm.project_history.read` 专用机器凭据请求项目管理，并核对返回的租户和客户。
+项目管理只返回合同来源且记录了该 CRM 客户主键的项目。原生项目的独立交易对手标识不参与关联。
+直连响应包含 `source: project_management`，页签显示项目状态、进度、期限和源数据更新时间。
+
+受控部署先完成项目管理的索引迁移和 API 更新，再由平台接入流程向 CRM 下发专用客户端并启用直连。
+保留旧门户适配器作为直连关闭时的显式配置。启用直连后依赖故障返回 503，门户同步无需参与。
+
 ## 商机可信附件
 
 `000049` 和 `internal/modules/opportunity/attachment.go` 实现只存对象引用的附件纵切面。浏览器先读取商机范围内的 capability；只有对象存储与扫描器同时可用才创建上传会话。服务端固定校验文件名、扩展名、MIME、20 MiB 大小和 SHA-256，并在上传完成时重新核对不可变 object version、真实大小、MIME 和摘要。状态固定为 `PENDING_UPLOAD → FINALIZING → SCANNING → CLEAN/REJECTED/SCAN_FAILED`；`FINALIZING` 是并发外部送检抢占状态，扫描器必须以附件 public ID 作为稳定业务幂等键。只有 `CLEAN` 可进入受控下载，下载前后分别写不可变审计；列表、capability、完成和下载都复用父商机 tenant 与 SELF/ORG/ALL 数据范围。

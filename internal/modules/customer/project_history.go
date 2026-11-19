@@ -27,8 +27,7 @@ const (
 	maxProjectHistoryPage          = 1_000_000
 )
 
-// ProjectHistoryItem 是 CRM 对门户项目快照的防腐层投影。门户账号、项目经理身份和团队字段
-// 不属于该合同，避免 CRM 把门户内部授权模型复制为自己的权威数据。
+// ProjectHistoryItem 是 CRM 对项目数据源的最小投影，不包含门户账号、项目经理身份或团队。
 type ProjectHistoryItem struct {
 	ProjectID         string     `json:"project_id"`
 	ProjectName       string     `json:"project_name"`
@@ -38,6 +37,7 @@ type ProjectHistoryItem struct {
 	CurrentStage      string     `json:"current_stage"`
 	ExpectedEndDate   *time.Time `json:"expected_end_date,omitempty"`
 	Delayed           bool       `json:"delayed"`
+	Due               string     `json:"due,omitempty"`
 	SourceUpdatedAt   time.Time  `json:"source_updated_at"`
 	SyncedAt          time.Time  `json:"synced_at"`
 	SyncLastSuccessAt *time.Time `json:"sync_last_success_at"`
@@ -47,6 +47,7 @@ type ProjectHistoryItem struct {
 
 type ProjectHistoryPage struct {
 	Items    []ProjectHistoryItem `json:"items"`
+	Source   string               `json:"source,omitempty"`
 	Page     int                  `json:"page"`
 	PageSize int                  `json:"page_size"`
 	Total    int64                `json:"total"`
@@ -171,14 +172,12 @@ func decodeProjectHistoryJSON(raw []byte, target any) error {
 	return nil
 }
 
+// validProjectHistoryPage 核对旧门户投影的分页、摘要及同步状态。
+// 参数：page 为门户响应，expectedPage 和 expectedPageSize 为请求页码、页大小。
+// 返回值：全部符合门户契约时为 true。
 func validProjectHistoryPage(page ProjectHistoryPage, expectedPage, expectedPageSize int) bool {
-	if page.Items == nil || page.Page != expectedPage || page.PageSize != expectedPageSize || page.Total < int64(len(page.Items)) || len(page.Items) > page.PageSize {
-		return false
-	}
-	// 非空页的起始位置必须落在依赖声明的总数内；空页只能是首个空页或位于最后一条之后。
-	// 这样能拒绝“总数为 1 却在第 2 页返回数据”等矛盾响应，又不假设门户仓储的计数实现。
-	offset := int64(page.Page-1) * int64(page.PageSize)
-	if len(page.Items) > 0 && (offset >= page.Total || offset+int64(len(page.Items)) > page.Total) {
+	if page.Source != "" || !validProjectHistoryPagination(len(page.Items), page.Items != nil,
+		page.Page, page.PageSize, page.Total, expectedPage, expectedPageSize) {
 		return false
 	}
 	seen := make(map[string]struct{}, len(page.Items))
@@ -192,6 +191,19 @@ func validProjectHistoryPage(page ProjectHistoryPage, expectedPage, expectedPage
 		seen[item.ProjectID] = struct{}{}
 	}
 	return true
+}
+
+// validProjectHistoryPagination 校验下游分页形状、页码和总数。
+// 参数：size/hasItems 为数组长度与存在性，page/pageSize/total 为源端声明，expected* 为请求值。
+// 返回值：分页自洽时为 true。
+func validProjectHistoryPagination(
+	size int, hasItems bool, page, pageSize int, total int64, expectedPage, expectedPageSize int,
+) bool {
+	if !hasItems || page != expectedPage || pageSize != expectedPageSize || total < int64(size) || size > pageSize {
+		return false
+	}
+	offset := int64(page-1) * int64(pageSize)
+	return size == 0 || offset+int64(size) <= total
 }
 
 func validProjectHistoryFreshness(item ProjectHistoryItem) bool {

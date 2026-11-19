@@ -289,6 +289,9 @@ func (h *Handler) OpportunityHistory(c *gin.Context) {
 	response.OK(c, result)
 }
 
+// ProjectHistory 返回当前用户可见客户的项目历史分页。
+// 参数：c 为包含客户主键、分页和登录主体的请求上下文。
+// 返回值：无，分页或受控错误通过 HTTP 输出。
 func (h *Handler) ProjectHistory(c *gin.Context) {
 	id, ok := customerID(c)
 	if !ok {
@@ -313,7 +316,8 @@ func (h *Handler) ProjectHistory(c *gin.Context) {
 		response.Error(c, err)
 		return
 	}
-	response.OK(c, result)
+	c.Header("Cache-Control", "private, no-store")
+	response.OK(c, projectHistoryHTTPData(result))
 }
 
 func validProjectHistoryKeys(c *gin.Context) bool {
