@@ -781,7 +781,7 @@ components:
     listCustomerSystems: {<<: *customerIDRead, operationId: listCustomerSystems}
     replaceCustomerSystems: {<<: *customerIDRead, operationId: replaceCustomerSystems, x-permission: customer.update}
     listCustomerOpportunities: {<<: *customerIDRead, operationId: listCustomerOpportunities}
-    listCustomerProjects: {<<: *customerIDRead, operationId: listCustomerProjects, description: External project-history Provider remains pending; unavailable configuration fails closed.}
+    listCustomerProjects: {<<: *customerIDRead, operationId: listCustomerProjects, description: Reads authorized customer project summaries. Direct Project Management responses identify their source; dependency failures return 503.}
     listCustomerAuditLogs: {<<: *customerIDRead, operationId: listCustomerAuditLogs, x-permission: customer.audit.read}
     getAuditOutboxStatus: {<<: *crmRead, operationId: getAuditOutboxStatus, tags: [Customer], x-permission: customer.audit.read, description: Returns tenant-scoped aggregate audit delivery backlog and error categories only. It never exposes audit payloads, access tokens, secrets, or request bodies.}
     voidCustomer: {<<: *customerIDRead, operationId: voidCustomer, x-permission: customer.void, requestBody: {$ref: '#/components/requestBodies/VersionedReason'}}

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/modules/customer"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/integrationhttp"
 	"github.com/unified-identity-auth-platform/customer-and-opportunity/internal/shared/loginip"
 )
@@ -102,6 +103,8 @@ type Config struct {
 	PortalProvisionTLS               integrationhttp.TLSOptions
 	PortalInvitePepper               []byte
 	PortalProjectHistoryEnabled      bool
+	CRMProjectHistoryEnabled         bool
+	CRMProjectHistory                customer.ProjectHistoryReaderOptions
 	PortalProjectHistoryURL          string
 	PortalProjectHistoryTokenURL     string
 	PortalProjectHistoryClientID     string
@@ -484,6 +487,9 @@ func LoadConfig() (Config, error) {
 		CatalogApplicationID:             os.Getenv("PLATFORM_AUTHORIZATION_CATALOG_APPLICATION_ID"), CatalogClientID: os.Getenv("PLATFORM_AUTHORIZATION_CATALOG_CLIENT_ID"),
 		CatalogClientSecret:          os.Getenv("PLATFORM_AUTHORIZATION_CATALOG_CLIENT_SECRET"),
 		PresaleWorkerHeartbeatMaxAge: presaleWorkerHeartbeatMaxAge,
+	}
+	if err := config.loadCRMProjectHistory(); err != nil {
+		return Config{}, err
 	}
 	if config.MySQLDSN == "" {
 		return Config{}, fmt.Errorf("MYSQL_DSN is required")

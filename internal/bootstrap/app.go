@@ -263,7 +263,13 @@ func New(config Config) (*App, error) {
 	if config.OwnerDirectoryEnabled {
 		customerService.UseOwnerDirectory(ownerCatalog)
 	}
-	if config.PortalProjectHistoryEnabled {
+	if config.CRMProjectHistoryEnabled {
+		reader, readerErr := customer.NewProjectManagementHistoryReader(context.Background(), config.CRMProjectHistory)
+		if readerErr != nil {
+			return nil, readerErr
+		}
+		customerService.UseProjectHistoryReader(reader)
+	} else if config.PortalProjectHistoryEnabled {
 		projectHistoryReader, readerErr := customer.NewHTTPProjectHistoryReader(context.Background(), customer.ProjectHistoryReaderOptions{
 			Endpoint: config.PortalProjectHistoryURL, TokenURL: config.PortalProjectHistoryTokenURL,
 			ClientID: config.PortalProjectHistoryClientID, ClientSecret: config.PortalProjectHistoryClientSecret,

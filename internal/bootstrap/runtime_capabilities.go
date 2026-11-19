@@ -56,7 +56,7 @@ func runtimeCapabilities(config Config) RuntimeCapabilities {
 		"customer_import_scan":            configuredCapability(true, ""),
 		"opportunity_attachment_upload":   configuredCapability(config.AttachmentLocalEnabled, "ATTACHMENT_STORAGE_OR_SCANNER_NOT_CONFIGURED"),
 		"opportunity_attachment_download": configuredCapability(config.AttachmentLocalEnabled, "ATTACHMENT_STORAGE_NOT_CONFIGURED"),
-		"customer_project_history":        configuredCapability(config.PortalProjectHistoryEnabled, "PROJECT_HISTORY_PROVIDER_NOT_CONFIGURED"),
+		"customer_project_history":        configuredCapability(config.CRMProjectHistoryEnabled || config.PortalProjectHistoryEnabled, "PROJECT_HISTORY_PROVIDER_NOT_CONFIGURED"),
 		"customer_export":                 configuredCapability(true, ""),
 		"presale_report_export":           configuredCapability(true, ""),
 		"presale_request_submission":      configuredCapability(true, ""),
