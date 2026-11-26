@@ -143,6 +143,7 @@ type PendingApplication struct {
 	CustomerNo         string    `json:"customer_no,omitempty"`
 	CustomerName       string    `json:"customer_name,omitempty"`
 	ApplicantID        string    `json:"applicant_id"`
+	ApplicantName      string    `gorm:"-" json:"applicant_name,omitempty"`
 	FromLevel          string    `json:"from_level"`
 	TargetLevel        string    `json:"target_level"`
 	Reason             string    `json:"reason"`

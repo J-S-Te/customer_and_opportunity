@@ -876,8 +876,38 @@ func (s *Service) Pending(ctx context.Context) ([]PendingApplication, error) {
 		Where("application.customer_id IN (?)", visibleCustomers).
 		Order("application.created_at ASC").
 		Scan(&items).Error
-	return items, err
+	if err != nil {
+		return nil, err
+	}
+	s.resolvePendingApplicantNames(ctx, items)
+	return items, nil
 }
+
+// resolvePendingApplicantNames 从平台目录补齐已通过客户范围过滤的申请人姓名。
+// 参数：ctx 为有界请求上下文，items 为已获授权的信用待办。
+// 返回值：无；目录不可用时保留原始待办及申请人标识。
+func (s *Service) resolvePendingApplicantNames(ctx context.Context, items []PendingApplication) {
+	if s.owners == nil || len(items) == 0 {
+		return
+	}
+	ids := make([]string, 0, len(items))
+	for _, item := range items {
+		ids = append(ids, item.ApplicantID)
+	}
+	lookup, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	names, err := s.owners.Resolve(lookup, ids)
+	if err != nil {
+		return
+	}
+	for index := range items {
+		id := items[index].ApplicantID
+		if owner := names[id]; owner.ID == id {
+			items[index].ApplicantName = strings.TrimSpace(owner.DisplayName)
+		}
+	}
+}
+
 func (s *Service) History(ctx context.Context, customerID uint64, page, pageSize int) (pagination.Page[CreditLog], error) {
 	p, ok := auth.FromContext(ctx)
 	if !ok {
