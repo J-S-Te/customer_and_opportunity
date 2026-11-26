@@ -60,7 +60,7 @@ jobs:
           # Squash 合并时显式声明单组件发布。出现门户或共享代码改动时拒绝降级。
           if grep -Fxq 'Release-Scope: crm-only' <<<"$message"; then
             changed="$(git diff --no-renames --name-only HEAD^ HEAD)"
-            crm_paths='^(\.github/workflows/ci-cd\.yml|\.env\.example|DEVELOPMENT\.md|api/openapi/crm\.yaml|internal/bootstrap/.+|internal/modules/customer/.+)$'
+            crm_paths='^(\.github/workflows/ci-cd\.yml|\.env\.example|DEVELOPMENT\.md|api/openapi/crm\.yaml|internal/bootstrap/.+|internal/modules/customer/.+|internal/modules/credit/(model\.go|service\.go|pending_applicant_test\.go))$'
             if [[ -z "$changed" ]] || grep -Ev "$crm_paths" <<<"$changed"; then
               echo '::error::CRM 单组件发布包含门户或共享代码改动'
               exit 1
